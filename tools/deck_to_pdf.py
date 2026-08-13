@@ -153,13 +153,20 @@ def run_browser(command, timeout):
         return process.returncode, stderr
     except subprocess.TimeoutExpired:
         _kill_tree(process)
+        tail = ""
         try:
-            process.communicate(timeout=10)
+            _, stderr = process.communicate(timeout=10)
+            # Последние строки лога браузера — единственная улика о том, на чём
+            # он встал. Без них зависание чинится перебором флагов вслепую, по
+            # минуте на попытку.
+            lines = stderr.decode("utf-8", "replace").strip().splitlines()
+            if lines:
+                tail = "\nПоследнее, что сказал браузер:\n  " + "\n  ".join(lines[-6:])
         except subprocess.TimeoutExpired:
             # Пайпы всё ещё кем-то держатся. Дальше ждать нечего: процесс
             # группы убит, а висящие дескрипторы закроет выход из программы.
-            pass
-        raise RenderError("браузер не уложился в %d с и был снят" % timeout)
+            tail = "\nВывод браузера получить не удалось: пайпы держит кто-то из потомков."
+        raise RenderError("браузер не уложился в %d с и был снят.%s" % (timeout, tail))
 
 
 def render(html_path, pdf_path, browser=None, timeout=RENDER_TIMEOUT):
@@ -183,8 +190,19 @@ def render(html_path, pdf_path, browser=None, timeout=RENDER_TIMEOUT):
             "--no-sandbox",              # контейнеры почти всегда без user namespaces
             "--disable-dev-shm-usage",   # /dev/shm в контейнерах мал, браузер падает
             "--no-first-run",
+            "--no-default-browser-check",
             "--disable-extensions",
             "--disable-background-networking",  # без походов в сеть за обновлениями
+            "--disable-component-update",
+            "--disable-sync",
+            "--disable-crash-reporter",
+            # Хранилище паролей и связка ключей: на машине без графической
+            # сессии Chrome лезет за ними в gnome-keyring через dbus и, не
+            # дождавшись ответа, встаёт молча. Отвечаем ему заглушками.
+            "--password-store=basic",
+            "--use-mock-keychain",
+            # Пусть говорит в stderr: при зависании это единственная улика.
+            "--enable-logging=stderr",
             "--no-pdf-header-footer",    # без колонтитулов с URL и датой
             # Здесь намеренно нет двух флагов, каждый из которых вешает печать
             # намертво, и оба — молча:
