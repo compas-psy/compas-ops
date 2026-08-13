@@ -24,6 +24,9 @@ on:
 jobs:
   doctor:
     runs-on: ubuntu-latest
+    # Страховка на случай, если браузер снова зависнет: без неё раннер молотит
+    # до общего лимита в шесть часов, а мы узнаём об этом по счёту за минуты.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 

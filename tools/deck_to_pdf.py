@@ -28,6 +28,7 @@ import argparse
 import glob
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -110,6 +111,54 @@ def page_count(pdf_bytes):
     return count
 
 
+def _kill_tree(process):
+    """
+    Убить браузер вместе со всем выводком.
+
+    Chrome — это не один процесс, а дерево: zygote, gpu, renderer. Убийство
+    только головного оставляет детей жить, а вместе с ними — открытые концы
+    наших пайпов. Поэтому запускаем браузер в собственной группе процессов
+    (start_new_session) и здесь бьём по всей группе.
+    """
+    try:
+        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+
+def run_browser(command, timeout):
+    """
+    Запустить браузер и дождаться его, не рискуя повиснуть навсегда.
+
+    Почему не subprocess.run(timeout=...): по таймауту он убивает только
+    головной процесс, а затем снова ждёт закрытия пайпов — которые держат
+    выжившие потомки Chrome. Ожидание не кончается никогда, и таймаут,
+    написанный ради защиты от зависания, сам зависает. Проверено на раннере
+    GitHub: шаг сборки PDF шёл больше четырёх минут при таймауте в три.
+    """
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        _, stderr = process.communicate(timeout=timeout)
+        return process.returncode, stderr
+    except subprocess.TimeoutExpired:
+        _kill_tree(process)
+        try:
+            process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            # Пайпы всё ещё кем-то держатся. Дальше ждать нечего: процесс
+            # группы убит, а висящие дескрипторы закроет выход из программы.
+            pass
+        raise RenderError("браузер не уложился в %d с и был снят" % timeout)
+
+
 def render(html_path, pdf_path, browser=None, timeout=RENDER_TIMEOUT):
     """Гоним HTML через headless-браузер и кладём рядом PDF."""
     html_path = os.path.abspath(html_path)
@@ -130,29 +179,26 @@ def render(html_path, pdf_path, browser=None, timeout=RENDER_TIMEOUT):
             "--disable-gpu",
             "--no-sandbox",              # контейнеры почти всегда без user namespaces
             "--disable-dev-shm-usage",   # /dev/shm в контейнерах мал, браузер падает
+            "--no-first-run",
+            "--disable-extensions",
+            "--disable-background-networking",  # без походов в сеть за обновлениями
             "--no-pdf-header-footer",    # без колонтитулов с URL и датой
-            "--run-all-compositor-stages-before-draw",
-            "--virtual-time-budget=5000",  # дать сработать подгонке масштаба
+            # Флага --run-all-compositor-stages-before-draw здесь намеренно нет:
+            # без настоящего композитора он ждёт стадии отрисовки, которая не
+            # наступает, и печать не заканчивается никогда. Времени на подгонку
+            # масштаба хватает и одного бюджета виртуального времени.
+            "--virtual-time-budget=5000",
             "--user-data-dir=%s" % profile,
             "--print-to-pdf=%s" % pdf_path,
             "file://%s?print=1" % url,
         ]
-        try:
-            result = subprocess.run(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired:
-            raise RenderError("браузер не уложился в %d с при сборке %s"
-                              % (timeout, os.path.basename(html_path)))
+        returncode, stderr = run_browser(command, timeout)
 
         if not os.path.isfile(pdf_path) or os.path.getsize(pdf_path) == 0:
             # У Chromium болтливый stderr (dbus, gpu) — в ошибку тащим только хвост.
-            tail = result.stderr.decode("utf-8", "replace").strip().splitlines()[-4:]
+            tail = stderr.decode("utf-8", "replace").strip().splitlines()[-4:]
             raise RenderError("браузер не создал PDF (код %s).\n%s"
-                              % (result.returncode, "\n".join(tail)))
+                              % (returncode, "\n".join(tail)))
     finally:
         shutil.rmtree(profile, ignore_errors=True)
 

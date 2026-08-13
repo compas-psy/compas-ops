@@ -53,6 +53,9 @@ concurrency:
 jobs:
   send:
     runs-on: ubuntu-latest
+    # Страховка от зависшего браузера: доставка либо укладывается в эти минуты,
+    # либо это поломка, которую надо чинить, а не ждать.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
