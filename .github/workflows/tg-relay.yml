@@ -75,18 +75,23 @@ jobs:
           fi
           echo "Секреты на месте."
 
-      - name: Проверить браузер для сборки PDF
-        # На раннерах GitHub Chrome предустановлен. Ставим chromium только если
-        # его почему-то нет: лишняя установка — это полторы минуты на каждый запуск.
+      - name: Поставить Chromium для сборки PDF
+        # Именно Chromium, а не предустановленный google-chrome: тот на раннере
+        # запускается, но PDF не печатает и молча висит до таймаута. Ставим
+        # сборку Playwright — ту же, что работает в средах агентов.
         run: |
-          if command -v google-chrome >/dev/null || command -v chromium >/dev/null \
-             || command -v chromium-browser >/dev/null; then
-            echo "Браузер найден, установка не нужна."
-          else
-            echo "Браузера нет, ставим chromium."
-            sudo apt-get update -qq && sudo apt-get install -y -qq chromium-browser || \
-            sudo apt-get install -y -qq chromium
+          set -euo pipefail
+          if command -v chromium >/dev/null || command -v chromium-browser >/dev/null; then
+            echo "Chromium уже есть."
+            exit 0
           fi
+          if ls ~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome >/dev/null 2>&1; then
+            echo "Chromium от Playwright уже установлен."
+            exit 0
+          fi
+          python3 -m pip install --quiet --disable-pip-version-check playwright
+          python3 -m playwright install chromium
+          ls ~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome
 
       - name: Доставить по указанным путям
         if: github.event_name == 'workflow_dispatch' && (inputs.text != '' || inputs.deck != '')

@@ -35,12 +35,22 @@ import tempfile
 import time
 import urllib.request
 
-# Кандидаты на роль браузера, в порядке предпочтения. Список закрывает три
-# среды, в которых это реально запускается: контейнер Claude Code (Playwright),
-# раннер GitHub Actions (google-chrome предустановлен) и обычный Linux.
-BROWSER_CANDIDATES = [
+# Порядок поиска браузера продиктован опытом, а не вкусом.
+#
+# Сначала чистый Chromium, потом сборки Playwright, и только в последнюю
+# очередь google-chrome. Причина: предустановленный на раннерах GitHub
+# google-chrome печатать PDF отказывается. Он запускается, отчитывается в лог
+# про отсутствие dbus и попытки регистрации в GCM, после чего замолкает и не
+# создаёт файл — ни за 60 секунд, ни за 90. Тот же дек тот же код печатает
+# Chromium за секунду. Перебор флагов (виртуальное время, композитор, keyring,
+# краш-репортер, отключение фоновой сети) ничего не изменил, поэтому вместо
+# борьбы с чужой сборкой берём ту, которая работает.
+BROWSER_CANDIDATES_PREFERRED = [
     "chromium",
     "chromium-browser",
+]
+
+BROWSER_CANDIDATES_FALLBACK = [
     "google-chrome",
     "google-chrome-stable",
     "chrome",
@@ -50,7 +60,9 @@ BROWSER_CANDIDATES = [
 BROWSER_GLOBS = [
     "/opt/pw-browsers/chromium-*/chrome-linux/chrome",
     "/opt/pw-browsers/chromium_headless_shell-*/chrome-linux/headless_shell",
-    "/root/.cache/ms-playwright/chromium-*/chrome-linux/chrome",
+    os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome"),
+    os.path.expanduser("~/.cache/ms-playwright/chromium_headless_shell-*/chrome-linux*/headless_shell"),
+    "/root/.cache/ms-playwright/chromium-*/chrome-linux*/chrome",
     "/usr/lib/chromium/chromium",
 ]
 
@@ -76,7 +88,7 @@ def find_browser(explicit=None):
             return explicit
         raise RenderError("указанный браузер не найден или не исполняем: %s" % explicit)
 
-    for name in BROWSER_CANDIDATES:
+    for name in BROWSER_CANDIDATES_PREFERRED:
         found = shutil.which(name)
         if found:
             return found
@@ -85,6 +97,13 @@ def find_browser(explicit=None):
         matches = sorted(glob.glob(pattern))
         if matches:
             return matches[-1]  # свежая версия, если их несколько
+
+    for name in BROWSER_CANDIDATES_FALLBACK:
+        found = shutil.which(name)
+        if found:
+            log("Chromium не найден, берём %s. На раннерах GitHub эта сборка "
+                "PDF не печатает — если сборка встанет, поставьте chromium." % name)
+            return found
 
     raise RenderError(
         "не найден браузер для сборки PDF.\n"

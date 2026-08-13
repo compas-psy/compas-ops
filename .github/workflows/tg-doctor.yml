@@ -41,16 +41,24 @@ jobs:
             python3 tools/tg_doctor.py
           fi
 
-      - name: Проверить браузер для сборки PDF
+      - name: Поставить Chromium для сборки PDF
         if: inputs.send_test
+        # Именно Chromium, а не предустановленный google-chrome: тот на раннере
+        # запускается, но PDF не печатает и молча висит до таймаута. Ставим
+        # сборку Playwright — ту же, что работает в средах агентов.
         run: |
-          if command -v google-chrome >/dev/null || command -v chromium >/dev/null \
-             || command -v chromium-browser >/dev/null; then
-            echo "Браузер найден."
-          else
-            sudo apt-get update -qq && sudo apt-get install -y -qq chromium-browser || \
-            sudo apt-get install -y -qq chromium
+          set -euo pipefail
+          if command -v chromium >/dev/null || command -v chromium-browser >/dev/null; then
+            echo "Chromium уже есть."
+            exit 0
           fi
+          if ls ~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome >/dev/null 2>&1; then
+            echo "Chromium от Playwright уже установлен."
+            exit 0
+          fi
+          python3 -m pip install --quiet --disable-pip-version-check playwright
+          python3 -m playwright install chromium
+          ls ~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome
 
       - name: Собрать и отправить тестовую презентацию
         if: inputs.send_test
