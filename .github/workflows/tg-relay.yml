@@ -1,0 +1,114 @@
+name: Доставка в Telegram
+
+# Кладётся в репозиторий compas-ops по пути .github/workflows/tg-relay.yml
+#
+# Зачем. Песочница, в которой работают агенты, не имеет выхода в интернет —
+# открыты только реестры пакетов и GitHub. Поэтому агент кладёт сводку и дек
+# в этот репозиторий, а отправляет их в Telegram уже GitHub Actions:
+# у раннера интернет открыт.
+#
+# Секреты. В настройках репозитория: Settings → Secrets and variables → Actions
+# → New repository secret. Нужны два:
+#   TG_BOT_TOKEN  — токен @cmpas_board_bot из @BotFather
+#   TG_CHAT_ID    — ваш chat_id (см. ниже, как получить)
+# Секреты хранятся зашифрованными, в логи не попадают и в коде не лежат.
+#
+# Как получить chat_id: напишите боту в личку любое сообщение, затем откройте
+# https://api.telegram.org/bot<ТОКЕН>/getUpdates и возьмите message.chat.id
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'outbox/**'
+  workflow_dispatch:
+    inputs:
+      text:
+        description: 'Текст для проверки связи'
+        required: false
+        default: 'Проверка связи. Если вы это читаете, канал доставки работает.'
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Проверка секретов
+        env:
+          TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          CHAT: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          if [ -z "$TOKEN" ] || [ -z "$CHAT" ]; then
+            echo "Не заданы секреты TG_BOT_TOKEN и/или TG_CHAT_ID." >&2
+            echo "Settings -> Secrets and variables -> Actions -> New repository secret" >&2
+            exit 1
+          fi
+
+      - name: Ручная проверка связи
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          CHAT: ${{ secrets.TG_CHAT_ID }}
+          TEXT: ${{ inputs.text }}
+        run: |
+          curl -sS -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${CHAT}" \
+            --data-urlencode "text=${TEXT}" \
+            -o /tmp/resp.json
+          python3 -c "import json;d=json.load(open('/tmp/resp.json'));print('ok' if d.get('ok') else d);exit(0 if d.get('ok') else 1)"
+
+      - name: Отправка новых файлов из outbox
+        if: github.event_name == 'push'
+        env:
+          TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          CHAT: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          # Файлы, добавленные или изменённые этим пушем внутри outbox/
+          FILES=$(git diff --name-only --diff-filter=AM ${{ github.event.before }} ${{ github.sha }} -- outbox/ || true)
+          if [ -z "$FILES" ]; then echo "Нечего отправлять."; exit 0; fi
+
+          send_text() {
+            # Телеграм режет сообщения длиннее 4096 символов — бьём по строкам
+            python3 - "$1" <<'PY'
+          import os, sys, json, urllib.parse, urllib.request
+          token, chat = os.environ['TOKEN'], os.environ['CHAT']
+          text = open(sys.argv[1], encoding='utf-8').read()
+          parts, cur = [], ''
+          for line in text.splitlines(keepends=True):
+              if len(cur) + len(line) > 3900:
+                  parts.append(cur); cur = ''
+              cur += line
+          if cur.strip(): parts.append(cur)
+          for p in parts:
+              data = urllib.parse.urlencode({'chat_id': chat, 'text': p,
+                                             'disable_web_page_preview': 'true'}).encode()
+              with urllib.request.urlopen(
+                      f'https://api.telegram.org/bot{token}/sendMessage', data, timeout=30) as r:
+                  res = json.load(r)
+              if not res.get('ok'):
+                  print(res, file=sys.stderr); sys.exit(1)
+          print(f'отправлено частей: {len(parts)}')
+          PY
+          }
+
+          for f in $FILES; do
+            [ -f "$f" ] || continue
+            case "$f" in
+              *.txt|*.md)
+                echo "текстом: $f"
+                send_text "$f"
+                ;;
+              *)
+                echo "файлом: $f"
+                curl -sS -X POST "https://api.telegram.org/bot${TOKEN}/sendDocument" \
+                  -F "chat_id=${CHAT}" \
+                  -F "caption=$(basename "$f")" \
+                  -F "document=@${f}" -o /tmp/resp.json
+                python3 -c "import json;d=json.load(open('/tmp/resp.json'));print('ok' if d.get('ok') else d);exit(0 if d.get('ok') else 1)"
+                ;;
+            esac
+          done
