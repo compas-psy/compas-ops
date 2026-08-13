@@ -1,0 +1,63 @@
+name: Распоряжения из Telegram
+
+# Забирает распоряжения, написанные боту, и кладёт их в state/15_ORDERS.md.
+# Дальше их исполняют агенты: очередь распоряжений — первое, что читает
+# и ночной цикл, и борд.
+#
+# Почему опрос по расписанию, а не вебхук: вебхук требует постоянного адреса,
+# который кто-то держит. Такого адреса у системы нет, и заводить его ради
+# нескольких сообщений в день — лишний узел, который сломается молча.
+#
+# Раз в десять минут — компромисс между «распоряжение не залёживается» и
+# «не жжём минуты раннера на пустые проверки». Срочное можно не ждать:
+# Actions → этот воркфлоу → Run workflow.
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+# Два одновременных приёма могут разъехаться при записи журнала и потерять
+# распоряжение: очередь, без отмены уже идущего.
+concurrency:
+  group: tg-orders
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Забрать распоряжения
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: python3 tools/tg_orders.py
+
+      - name: Зафиксировать в репозитории
+        run: |
+          set -euo pipefail
+          if [ -z "$(git status --porcelain state/)" ]; then
+            echo "Изменений нет."
+            exit 0
+          fi
+          git config user.name "ОКОЁМ · бот распоряжений"
+          git config user.email "noreply@github.com"
+          git add state/15_ORDERS.md state/.tg_offset
+          git commit -m "Принять распоряжения учредителя из Telegram"
+          # Между checkout и push сюда мог прилететь ночной цикл: подбираем
+          # его изменения ребейзом, иначе push отвергается и распоряжение
+          # теряется до следующего запуска.
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then exit 0; fi
+            echo "push отвергнут, подбираем чужие изменения (попытка $attempt)"
+            git pull --rebase origin main
+          done
+          echo "::error::Не удалось записать распоряжения в main за три попытки."
+          exit 1

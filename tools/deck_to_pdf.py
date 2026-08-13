@@ -32,6 +32,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 
 # Кандидаты на роль браузера, в порядке предпочтения. Список закрывает три
@@ -132,15 +133,20 @@ def _kill_tree(process):
             pass
 
 
-def run_browser(command, timeout):
+def run_browser(command, pdf_path, timeout):
     """
-    Запустить браузер и дождаться его, не рискуя повиснуть навсегда.
+    Запустить браузер и дождаться готового PDF — не дожидаясь выхода браузера.
 
-    Почему не subprocess.run(timeout=...): по таймауту он убивает только
-    головной процесс, а затем снова ждёт закрытия пайпов — которые держат
-    выжившие потомки Chrome. Ожидание не кончается никогда, и таймаут,
-    написанный ради защиты от зависания, сам зависает. Проверено на раннере
-    GitHub: шаг сборки PDF шёл больше четырёх минут при таймауте в три.
+    Ждать выхода нельзя. На раннере GitHub Chrome печатает файл и остаётся
+    жить: фоновые службы уходят в бесконечные попытки регистрации в GCM
+    (PHONE_REGISTRATION_ERROR, DEPRECATED_ENDPOINT) и держат процесс. Печать
+    к этому моменту давно закончена, но ожидание выхода упирается в таймаут,
+    и готовый PDF выбрасывается как несостоявшийся.
+
+    Поэтому признак успеха здесь — не код возврата, а файл: дождались, пока
+    он появится и перестанет расти, забрали и сняли браузер. Заодно уходит
+    и вторая ловушка: subprocess.run по таймауту убивает головной процесс, а
+    затем ждёт закрытия пайпов, которые держат потомки Chrome.
     """
     process = subprocess.Popen(
         command,
@@ -148,25 +154,56 @@ def run_browser(command, timeout):
         stderr=subprocess.PIPE,
         start_new_session=True,
     )
+
+    deadline = time.time() + timeout
+    last_size, stable_since = -1, None
+    while time.time() < deadline:
+        finished = process.poll() is not None
+        size = os.path.getsize(pdf_path) if os.path.isfile(pdf_path) else 0
+
+        if size > 0 and size == last_size:
+            # Размер не меняется — файл дописан. Полсекунды покоя достаточно:
+            # Chrome пишет PDF одним куском в конце печати.
+            if stable_since is None:
+                stable_since = time.time()
+            elif time.time() - stable_since >= 0.5:
+                _kill_tree(process)
+                return 0, _drain(process)
+        else:
+            stable_since = None
+            last_size = size
+
+        if finished:
+            # Браузер вышел сам — как это происходит локально. Дальше решает
+            # проверка файла в render().
+            return process.returncode, _drain(process)
+
+        time.sleep(0.2)
+
+    # Время вышло, а файла так и нет.
+    _kill_tree(process)
+    raise RenderError("браузер не уложился в %d с и был снят.%s"
+                      % (timeout, _drain_as_hint(process)))
+
+
+def _drain(process):
+    """Забрать вывод уже снятого браузера, не рискуя застрять на пайпах."""
     try:
-        _, stderr = process.communicate(timeout=timeout)
-        return process.returncode, stderr
+        _, stderr = process.communicate(timeout=10)
+        return stderr or b""
     except subprocess.TimeoutExpired:
-        _kill_tree(process)
-        tail = ""
-        try:
-            _, stderr = process.communicate(timeout=10)
-            # Последние строки лога браузера — единственная улика о том, на чём
-            # он встал. Без них зависание чинится перебором флагов вслепую, по
-            # минуте на попытку.
-            lines = stderr.decode("utf-8", "replace").strip().splitlines()
-            if lines:
-                tail = "\nПоследнее, что сказал браузер:\n  " + "\n  ".join(lines[-6:])
-        except subprocess.TimeoutExpired:
-            # Пайпы всё ещё кем-то держатся. Дальше ждать нечего: процесс
-            # группы убит, а висящие дескрипторы закроет выход из программы.
-            tail = "\nВывод браузера получить не удалось: пайпы держит кто-то из потомков."
-        raise RenderError("браузер не уложился в %d с и был снят.%s" % (timeout, tail))
+        return b""
+
+
+def _drain_as_hint(process):
+    """
+    Последние строки лога браузера — единственная улика о том, на чём он встал.
+    Без них такое чинится перебором флагов вслепую, по минуте на попытку.
+    """
+    lines = _drain(process).decode("utf-8", "replace").strip().splitlines()
+    if not lines:
+        return "\nВывод браузера получить не удалось: пайпы держит кто-то из потомков."
+    return "\nПоследнее, что сказал браузер:\n  " + "\n  ".join(lines[-6:])
 
 
 def render(html_path, pdf_path, browser=None, timeout=RENDER_TIMEOUT):
@@ -218,7 +255,11 @@ def render(html_path, pdf_path, browser=None, timeout=RENDER_TIMEOUT):
             "--print-to-pdf=%s" % pdf_path,
             "file://%s?print=1" % url,
         ]
-        returncode, stderr = run_browser(command, timeout)
+        # Файл мог остаться от прошлой сборки: снимаем, иначе ожидание
+        # «файл появился и перестал расти» закончится на чужом PDF мгновенно.
+        if os.path.exists(pdf_path):
+            os.remove(pdf_path)
+        returncode, stderr = run_browser(command, pdf_path, timeout)
 
         if not os.path.isfile(pdf_path) or os.path.getsize(pdf_path) == 0:
             # У Chromium болтливый stderr (dbus, gpu) — в ошибку тащим только хвост.
