@@ -1,0 +1,67 @@
+name: Telegram · диагностика
+
+# Проверка канала доставки: жив ли токен, известен ли чат, доходит ли
+# сообщение и собирается ли презентация. Запускается руками — когда бот
+# молчит и когда меняли токен.
+#
+# Вся логика в tools/tg_doctor.py, здесь только запуск: скрипт должен быть
+# один и тот же в Actions, в облачной среде агента и на машине учредителя,
+# иначе диагностика в одном месте расходится с диагностикой в другом.
+#
+# Токен в лог не попадает ни при каком исходе.
+#
+# Actions → «Telegram · диагностика» → Run workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      send_test:
+        description: 'Отправить проверочное сообщение и тестовую презентацию'
+        type: boolean
+        required: false
+        default: true
+
+jobs:
+  doctor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Проверить токен, чат и отправку
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          if [ "${{ inputs.send_test }}" = "true" ]; then
+            python3 tools/tg_doctor.py --send
+          else
+            python3 tools/tg_doctor.py
+          fi
+
+      - name: Проверить браузер для сборки PDF
+        if: inputs.send_test
+        run: |
+          if command -v google-chrome >/dev/null || command -v chromium >/dev/null \
+             || command -v chromium-browser >/dev/null; then
+            echo "Браузер найден."
+          else
+            sudo apt-get update -qq && sudo apt-get install -y -qq chromium-browser || \
+            sudo apt-get install -y -qq chromium
+          fi
+
+      - name: Собрать и отправить тестовую презентацию
+        if: inputs.send_test
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          printf '%s\n%s\n' \
+            '<b>Проверка презентации</b>' \
+            'Следом придёт PDF — так же будут приходить деки ночного цикла и борда.' \
+            > /tmp/doctor_note.html
+          # Собираем из демо-исходника: проверяем всю цепочку
+          # исходник → HTML → PDF → отправка, а не только доступ к API.
+          cp tools/demo_deck.md /tmp/demo_deck.md
+          python3 tools/deliver.py --text /tmp/doctor_note.html --deck /tmp/demo_deck.md
+          echo "Готово. Если в Telegram пришли сообщения и PDF — канал исправен."

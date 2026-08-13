@@ -1,32 +1,54 @@
 name: Доставка в Telegram
 
-# Кладётся в репозиторий compas-ops по пути .github/workflows/tg-relay.yml
+# Мост в Telegram для агентских циклов.
 #
-# Зачем. Песочница, в которой работают агенты, не имеет выхода в интернет —
-# открыты только реестры пакетов и GitHub. Поэтому агент кладёт сводку и дек
-# в этот репозиторий, а отправляет их в Telegram уже GitHub Actions:
-# у раннера интернет открыт.
+# Зачем он существует. Песочница, в которой идут ночной цикл и борд, может не
+# иметь выхода в интернет: в облачных средах Claude сеть ограничена списком
+# доменов, и api.telegram.org в него по умолчанию не входит. Тогда агент
+# коммитит артефакты в репозиторий и запускает этот воркфлоу — у раннера
+# GitHub интернет открыт, и отправляет он.
 #
-# Секреты. В настройках репозитория: Settings → Secrets and variables → Actions
-# → New repository secret. Нужны два:
-#   TG_BOT_TOKEN  — токен @cmpas_board_bot из @BotFather
-#   TG_CHAT_ID    — ваш chat_id (см. ниже, как получить)
-# Секреты хранятся зашифрованными, в логи не попадают и в коде не лежат.
+# Если среде агента разрешён api.telegram.org, воркфлоу не нужен: агент
+# вызывает tools/deliver.py сам. Подробности — в charter/09_COWORK.md.
 #
-# Как получить chat_id: напишите боту в личку любое сообщение, затем откройте
-# https://api.telegram.org/bot<ТОКЕН>/getUpdates и возьмите message.chat.id
+# Секреты (Settings → Secrets and variables → Actions → New repository secret):
+#   TG_BOT_TOKEN — токен бота из @BotFather
+#   TG_CHAT_ID   — chat_id учредителя; узнать — воркфлоу «Telegram: диагностика»
+#
+# Два способа запуска:
+#   1. Actions → «Доставка в Telegram» → Run workflow: указать ветку и пути.
+#   2. Пуш в main файлов в outbox/ — уходят автоматически.
 
 on:
+  workflow_dispatch:
+    inputs:
+      text:
+        description: 'Путь к файлу с текстом сообщения (например outbox/2026-08-14_daily.txt)'
+        required: false
+        default: ''
+      deck:
+        description: 'Путь к исходнику дека .md — будет собран в PDF и отправлен презентацией'
+        required: false
+        default: ''
+      with_html:
+        description: 'Дослать HTML-версию дека'
+        type: boolean
+        required: false
+        default: false
+      message:
+        description: 'Или просто текст — для проверки связи, если пути не указаны'
+        required: false
+        default: 'Проверка связи. Если вы это читаете, канал доставки работает.'
   push:
     branches: [main]
     paths:
       - 'outbox/**'
-  workflow_dispatch:
-    inputs:
-      text:
-        description: 'Текст для проверки связи'
-        required: false
-        default: 'Проверка связи. Если вы это читаете, канал доставки работает.'
+
+# Две доставки разом могут перемешать сообщения в ленте: очередь, без отмены
+# уже идущей отправки.
+concurrency:
+  group: tg-delivery
+  cancel-in-progress: false
 
 jobs:
   send:
@@ -36,79 +58,115 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: Проверка секретов
+      - name: Проверить секреты
         env:
-          TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          CHAT: ${{ secrets.TG_CHAT_ID }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |
-          if [ -z "$TOKEN" ] || [ -z "$CHAT" ]; then
-            echo "Не заданы секреты TG_BOT_TOKEN и/или TG_CHAT_ID." >&2
-            echo "Settings -> Secrets and variables -> Actions -> New repository secret" >&2
+          missing=""
+          [ -z "$TG_BOT_TOKEN" ] && missing="$missing TG_BOT_TOKEN"
+          [ -z "$TG_CHAT_ID" ] && missing="$missing TG_CHAT_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Не заданы секреты:$missing. Settings → Secrets and variables → Actions → New repository secret. Как получить chat_id — воркфлоу «Telegram: диагностика»."
             exit 1
           fi
+          echo "Секреты на месте."
 
-      - name: Ручная проверка связи
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          CHAT: ${{ secrets.TG_CHAT_ID }}
-          TEXT: ${{ inputs.text }}
+      - name: Проверить браузер для сборки PDF
+        # На раннерах GitHub Chrome предустановлен. Ставим chromium только если
+        # его почему-то нет: лишняя установка — это полторы минуты на каждый запуск.
         run: |
-          curl -sS -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${CHAT}" \
-            --data-urlencode "text=${TEXT}" \
-            -o /tmp/resp.json
-          python3 -c "import json;d=json.load(open('/tmp/resp.json'));print('ok' if d.get('ok') else d);exit(0 if d.get('ok') else 1)"
+          if command -v google-chrome >/dev/null || command -v chromium >/dev/null \
+             || command -v chromium-browser >/dev/null; then
+            echo "Браузер найден, установка не нужна."
+          else
+            echo "Браузера нет, ставим chromium."
+            sudo apt-get update -qq && sudo apt-get install -y -qq chromium-browser || \
+            sudo apt-get install -y -qq chromium
+          fi
 
-      - name: Отправка новых файлов из outbox
-        if: github.event_name == 'push'
+      - name: Доставить по указанным путям
+        if: github.event_name == 'workflow_dispatch' && (inputs.text != '' || inputs.deck != '')
         env:
-          TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          CHAT: ${{ secrets.TG_CHAT_ID }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TEXT_PATH: ${{ inputs.text }}
+          DECK_PATH: ${{ inputs.deck }}
+          WITH_HTML: ${{ inputs.with_html }}
         run: |
           set -euo pipefail
-          # Файлы, добавленные или изменённые этим пушем внутри outbox/
-          FILES=$(git diff --name-only --diff-filter=AM ${{ github.event.before }} ${{ github.sha }} -- outbox/ || true)
+          args=""
+          if [ -n "$TEXT_PATH" ]; then
+            [ -f "$TEXT_PATH" ] || { echo "::error::Файл текста не найден: $TEXT_PATH"; exit 1; }
+            args="$args --text $TEXT_PATH"
+          fi
+          if [ -n "$DECK_PATH" ]; then
+            [ -f "$DECK_PATH" ] || { echo "::error::Исходник дека не найден: $DECK_PATH"; exit 1; }
+            args="$args --deck $DECK_PATH"
+          fi
+          [ "$WITH_HTML" = "true" ] && args="$args --with-html"
+
+          if [ -z "$TEXT_PATH" ]; then
+            # Дек без сопроводительного текста: deliver.py требует текст, поэтому
+            # собираем минимальный — вложение без единой строки читается как мусор.
+            echo "<b>Дек по запросу</b>" > /tmp/deck_note.html
+            args="--text /tmp/deck_note.html $args"
+          fi
+
+          python3 tools/deliver.py $args
+
+      - name: Отправить проверочное сообщение
+        if: github.event_name == 'workflow_dispatch' && inputs.text == '' && inputs.deck == ''
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          MESSAGE: ${{ inputs.message }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$MESSAGE" > /tmp/message.txt
+          python3 tools/tg_send.py text --from-file /tmp/message.txt --no-preview
+
+      - name: Отправить новые файлы из outbox
+        if: github.event_name == 'push'
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Первый пуш в ветку приходит с нулевым before — сравнивать не с чем,
+          # берём файлы последнего коммита.
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            FILES=$(git show --name-only --diff-filter=AM --pretty=format: "$AFTER" -- outbox/ | sed '/^$/d')
+          else
+            FILES=$(git diff --name-only --diff-filter=AM "$BEFORE" "$AFTER" -- outbox/ || true)
+          fi
           if [ -z "$FILES" ]; then echo "Нечего отправлять."; exit 0; fi
 
-          send_text() {
-            # Телеграм режет сообщения длиннее 4096 символов — бьём по строкам
-            python3 - "$1" <<'PY'
-          import os, sys, json, urllib.parse, urllib.request
-          token, chat = os.environ['TOKEN'], os.environ['CHAT']
-          text = open(sys.argv[1], encoding='utf-8').read()
-          parts, cur = [], ''
-          for line in text.splitlines(keepends=True):
-              if len(cur) + len(line) > 3900:
-                  parts.append(cur); cur = ''
-              cur += line
-          if cur.strip(): parts.append(cur)
-          for p in parts:
-              data = urllib.parse.urlencode({'chat_id': chat, 'text': p,
-                                             'disable_web_page_preview': 'true'}).encode()
-              with urllib.request.urlopen(
-                      f'https://api.telegram.org/bot{token}/sendMessage', data, timeout=30) as r:
-                  res = json.load(r)
-              if not res.get('ok'):
-                  print(res, file=sys.stderr); sys.exit(1)
-          print(f'отправлено частей: {len(parts)}')
-          PY
-          }
+          # Порядок фиксированный: сначала весь текст, потом вложения. Иначе в
+          # ленте учредителя дек приходит раньше объяснения, зачем его открывать.
+          echo "$FILES" | grep -E '\.deck\.md$' > /tmp/decks.txt || true
+          echo "$FILES" | grep -Ev '\.deck\.md$' | grep -E '\.(txt|md)$' > /tmp/texts.txt || true
+          echo "$FILES" | grep -Ev '\.deck\.md$|\.(txt|md)$' > /tmp/files.txt || true
 
-          for f in $FILES; do
-            [ -f "$f" ] || continue
-            case "$f" in
-              *.txt|*.md)
-                echo "текстом: $f"
-                send_text "$f"
-                ;;
-              *)
-                echo "файлом: $f"
-                curl -sS -X POST "https://api.telegram.org/bot${TOKEN}/sendDocument" \
-                  -F "chat_id=${CHAT}" \
-                  -F "caption=$(basename "$f")" \
-                  -F "document=@${f}" -o /tmp/resp.json
-                python3 -c "import json;d=json.load(open('/tmp/resp.json'));print('ok' if d.get('ok') else d);exit(0 if d.get('ok') else 1)"
-                ;;
-            esac
-          done
+          while read -r f; do
+            [ -n "$f" ] && [ -f "$f" ] || continue
+            echo "текстом: $f"
+            # README и служебные заметки не рассылаем.
+            case "$(basename "$f")" in README.md) echo "  пропуск"; continue;; esac
+            python3 tools/tg_send.py text --from-file "$f" --no-preview
+          done < /tmp/texts.txt
+
+          while read -r f; do
+            [ -n "$f" ] && [ -f "$f" ] || continue
+            echo "презентацией: $f"
+            printf '<b>Дек из outbox</b>\n%s' "$(basename "$f")" > /tmp/deck_note.html
+            python3 tools/deliver.py --text /tmp/deck_note.html --deck "$f"
+          done < /tmp/decks.txt
+
+          while read -r f; do
+            [ -n "$f" ] && [ -f "$f" ] || continue
+            echo "файлом: $f"
+            python3 tools/tg_send.py file "$f" --caption "$(basename "$f")"
+          done < /tmp/files.txt

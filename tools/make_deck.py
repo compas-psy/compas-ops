@@ -367,6 +367,11 @@ h1{
   margin:0 0 clamp(12px,1.6vw,20px);color:var(--ink);
   max-width:22ch;
 }
+/* Обёртка содержимого слайда. Существует ради печати: при сборке PDF скрипт
+   масштабирует именно её, чтобы слайд не перетекал на вторую страницу, а сам
+   слайд-бокс остался ровно в размер страницы. */
+.fit{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;width:100%;
+     transform-origin:top center}
 .slide-body{flex:1 1 auto;min-width:0}
 .slide-body > * + *{margin-top:clamp(14px,1.7vw,22px)}
 p{margin:0;color:var(--ink-soft);max-width:68ch;font-size:clamp(16px,1.25vw,20px)}
@@ -552,22 +557,68 @@ td:first-child{color:var(--ink);font-weight:520}
   .nav button{width:34px;height:34px}
 }
 
-/* --- печать: один слайд на страницу --- */
-@media print{
-  @page{size:A4 landscape;margin:12mm}
-  body{background:#fff;color:#000;font-size:12pt}
-  .nav,.progress{display:none !important}
-  .slide{
-    display:flex !important;min-height:auto;height:auto;
-    page-break-after:always;break-after:page;
-    padding:0 0 8mm;max-width:none;
-  }
-  .slide:last-child{page-break-after:auto;break-after:auto}
-  .metric,table,.status,.human{break-inside:avoid;box-shadow:none}
-  h1{font-size:22pt}
-  .m-value{font-size:20pt}
-}
+/* --- печать: один слайд — ровно одна страница 16:9 --- */
+__SLIDE_BOX__
 """
+
+# Габариты страницы печати. 16:9 — потому что дек смотрят с телефона в Telegram
+# и с ноутбука, а не читают с бумаги. Держим в одном месте: этими же числами
+# оперирует подгонка масштаба в JS.
+PAGE_W_MM = 280.0
+PAGE_H_MM = 157.5
+
+# Правила слайд-бокса нужны дважды: в @media print (собственно печать) и в
+# screen-режиме под классом .print-fit (предпросмотр, в котором JS замеряет
+# высоту содержимого). Пишем их один раз с меткой __P__ перед каждым селектором,
+# затем подставляем пустую строку для печати и «.print-fit » для предпросмотра —
+# так две копии не могут разъехаться.
+SLIDE_BOX_RULES = """
+  __P__.nav,__P__.progress{display:none !important}
+  __P__.slide{
+    display:flex !important;
+    width:%(w)smm;height:%(h)smm;
+    min-height:0;max-width:none;margin:0 auto;
+    padding:11mm 13mm 8mm;
+    overflow:hidden;
+    page-break-after:always;break-after:page;
+    page-break-inside:avoid;break-inside:avoid;
+  }
+  __P__.slide:last-child{page-break-after:auto;break-after:auto}
+  __P__.slide-foot .foot-num{display:inline}
+  __P__.metric,__P__ table,__P__.status,__P__.human{break-inside:avoid;box-shadow:none}
+""" % {"w": PAGE_W_MM, "h": PAGE_H_MM}
+
+# Печать всегда идёт в светлой палитре: PDF уходит файлом и не должен зависеть
+# от того, в какой теме был браузер, который его собрал.
+PRINT_LIGHT_TOKENS = """
+    --bg:#faf8f5;--surface:#ffffff;--surface-2:#f4f0e9;
+    --ink:#23211d;--ink-soft:#4d4841;--muted:#7b746a;--line:#e4ddd1;
+    --green:#1a4d3a;--gold:#c9a961;--up:#2f6b4f;--down:#a4483c;--amber:#b8862f;
+    --human-bg:#f6f1e4;--shadow:none;
+"""
+
+SLIDE_BOX_CSS = """
+@page{size:%(w)smm %(h)smm;margin:0}
+@media print{
+  :root{%(tokens)s}
+  *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  html,body{background:#fff}
+%(print_rules)s
+}
+/* Экранный предпросмотр печати: включается только сборщиком PDF (?print=1).
+   Нужен, чтобы JS замерил высоту содержимого в том же боксе, в котором оно
+   потом будет напечатано, и подогнал масштаб. */
+.print-fit,.print-fit body{%(tokens)s background:#fff}
+%(fit_rules)s
+""" % {
+    "w": PAGE_W_MM,
+    "h": PAGE_H_MM,
+    "tokens": PRINT_LIGHT_TOKENS,
+    "print_rules": SLIDE_BOX_RULES.replace("__P__", ""),
+    "fit_rules": SLIDE_BOX_RULES.replace("__P__", ".print-fit "),
+}
+
+CSS = CSS.replace("__SLIDE_BOX__", SLIDE_BOX_CSS)
 
 JS = """
 (function(){
@@ -623,6 +674,51 @@ JS = """
 
   window.addEventListener('hashchange', function(){ show(fromHash(), false); });
   show(fromHash(), false);
+
+  // --- подгонка слайда под страницу ---
+  // Слайд при печати обязан занимать ровно одну страницу: дек уходит в Telegram
+  // файлом, и слайд, перетёкший на вторую страницу, читается как брак вёрстки.
+  // Содержимое, которое не помещается, ужимаем масштабом — обрезать нельзя.
+  function fitSlides(){
+    slides.forEach(function(s){
+      var fit = s.querySelector('.fit');
+      if (!fit) return;
+      fit.style.transform = '';
+      var cs = window.getComputedStyle(s);
+      var avail = s.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+      var need = fit.scrollHeight;
+      if (need > avail && avail > 0) {
+        // 0.99 — запас на округление подпикселей, ниже 0.5 не опускаемся:
+        // такой слайд надо не ужимать, а разбивать на два.
+        fit.style.transform = 'scale(' + Math.max(0.5, (avail / need) * 0.99) + ')';
+      }
+    });
+  }
+
+  function enterPrintLayout(){
+    document.documentElement.classList.add('print-fit');
+    fitSlides();
+  }
+
+  // Режим сборки PDF: страницу открывает tools/deck_to_pdf.py с ?print=1.
+  if (/[?&]print=1/.test(location.search)) {
+    enterPrintLayout();
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(function(){ fitSlides(); window.deckPrintReady = true; });
+    } else {
+      window.deckPrintReady = true;
+    }
+  }
+
+  // Печать из браузера вручную (Ctrl+P) — тот же расчёт.
+  window.addEventListener('beforeprint', enterPrintLayout);
+  window.addEventListener('afterprint', function(){
+    document.documentElement.classList.remove('print-fit');
+    slides.forEach(function(s){
+      var fit = s.querySelector('.fit');
+      if (fit) fit.style.transform = '';
+    });
+  });
 })();
 """
 
@@ -650,7 +746,8 @@ def build_html(meta, slides):
                 '<span class="foot-num">%d / %d</span></footer>'
                 % (html.escape(title, quote=False), number, len(slides)))
         sections.append(
-            '<section class="slide" id="s%d">%s%s<div class="slide-body">%s</div>%s</section>'
+            '<section class="slide" id="s%d"><div class="fit">%s%s'
+            '<div class="slide-body">%s</div>%s</div></section>'
             % (number, head, heading, body, foot)
         )
 

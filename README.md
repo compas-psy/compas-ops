@@ -21,22 +21,37 @@
 
 ## Ритм
 
-- Ночной цикл — ежедневно 05:00 МСК: три PO, merge CPO, план дня, сводка учредителю.
-- Борд C-1 — понедельник и четверг 10:00 МСК: девять C-ролей, решения, дек 5–9 слайдов.
+- Ночной цикл — ежедневно 05:00 МСК: три PO, merge CPO, план дня. Учредителю уходят сводка и дек 4–6 слайдов.
+- Борд C-1 — понедельник и четверг 10:00 МСК: девять C-ролей, решения. Учредителю уходят сообщение и дек 5–9 слайдов.
+
+Промпты обоих запусков — `charter/08_SCHEDULES.md`. Память системы — этот репозиторий: `charter/` (правила), `state/` (живое состояние), `log/` (журналы).
 
 ## Доставка
 
-Файл, попавший в `outbox/` на ветке `main`, уходит учредителю в Telegram: `.md` и `.txt` — текстом, остальное — документом. Секреты `TG_BOT_TOKEN` и `TG_CHAT_ID` — в Settings → Secrets and variables → Actions. Ручная проверка связи: вкладка Actions → «Доставка в Telegram» → Run workflow.
+Оба ритма присылают **текст и готовую презентацию** — PDF, который Telegram листает прямо в переписке. Порядок: сначала текст, потом файл.
+
+```bash
+python3 tools/deliver.py --text outbox/2026-08-14_daily.txt --deck daily/daily_2026-08-14.md
+```
+
+Два маршрута, потому что `api.telegram.org` доступен не из всякой среды:
+
+- **напрямую** — если домен разрешён в сетевых настройках среды;
+- **через GitHub Actions** — всегда: агент коммитит артефакты и запускает воркфлоу «Доставка в Telegram», у раннера интернет открыт.
+
+Секреты `TG_BOT_TOKEN` и `TG_CHAT_ID` — в Settings → Secrets and variables → Actions. Проверка канала: Actions → «Telegram · диагностика» → Run workflow, либо `python3 tools/tg_doctor.py --send`. Настройка обоих маршрутов и разбор типовых поломок — `charter/09_COWORK.md`.
 
 ## Инструменты
 
 ```bash
-python3 tools/make_deck.py board/исходник.md -o board/board_2026-08-17_N1.html
-python3 tools/tg_send.py text "сводка"          # нужны TG_BOT_TOKEN и TG_CHAT_ID
-python3 tools/tg_send.py file board/деку.html --caption "Борд N1"
+python3 tools/deliver.py --text текст.txt --deck исходник.md   # собрать и доставить всё
+python3 tools/make_deck.py исходник.md -o дек.html             # только HTML
+python3 tools/deck_to_pdf.py дек.html                          # только PDF
+python3 tools/tg_doctor.py --send                              # проверить канал
+python3 tools/tg_send.py text "сводка"                         # отправить строку
 ```
 
-Исходники обоих скриптов продублированы в `charter/06_DELIVERY.md` — правя скрипт, правьте и копию.
+Носитель кода один — каталог `tools/`. Копий исходников в документах больше нет: две копии одного скрипта расходятся всегда.
 
 ## Граница
 
