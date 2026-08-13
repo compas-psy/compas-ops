@@ -75,31 +75,14 @@ jobs:
           fi
           echo "Секреты на месте."
 
-      - name: Поставить Chromium для сборки PDF
-        # Именно Chromium, а не предустановленный google-chrome: тот на раннере
-        # запускается, но PDF не печатает и молча висит до таймаута. Ставим
-        # сборку Playwright — ту же, что работает в средах агентов.
-        run: |
-          set -euo pipefail
-          if command -v chromium >/dev/null || command -v chromium-browser >/dev/null; then
-            echo "Chromium уже есть."
-            exit 0
-          fi
-          if ls ~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome >/dev/null 2>&1; then
-            echo "Chromium от Playwright уже установлен."
-            exit 0
-          fi
-          python3 -m pip install --quiet --disable-pip-version-check playwright
-          python3 -m playwright install chromium
-          ls ~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome
-
       - name: Доставить по указанным путям
-        if: github.event_name == 'workflow_dispatch' && (inputs.text != '' || inputs.deck != '')
+        if: github.event_name == 'workflow_dispatch' && (inputs.text != '' || inputs.deck != '' || inputs.pdf != '')
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           TEXT_PATH: ${{ inputs.text }}
           DECK_PATH: ${{ inputs.deck }}
+          PDF_PATH: ${{ inputs.pdf }}
           WITH_HTML: ${{ inputs.with_html }}
         run: |
           set -euo pipefail
@@ -107,6 +90,10 @@ jobs:
           if [ -n "$TEXT_PATH" ]; then
             [ -f "$TEXT_PATH" ] || { echo "::error::Файл текста не найден: $TEXT_PATH"; exit 1; }
             args="$args --text $TEXT_PATH"
+          fi
+          if [ -n "$PDF_PATH" ]; then
+            [ -f "$PDF_PATH" ] || { echo "::error::Презентация не найдена: $PDF_PATH"; exit 1; }
+            args="$args --pdf $PDF_PATH"
           fi
           if [ -n "$DECK_PATH" ]; then
             [ -f "$DECK_PATH" ] || { echo "::error::Исходник дека не найден: $DECK_PATH"; exit 1; }
@@ -124,7 +111,7 @@ jobs:
           python3 tools/deliver.py $args
 
       - name: Отправить проверочное сообщение
-        if: github.event_name == 'workflow_dispatch' && inputs.text == '' && inputs.deck == ''
+        if: github.event_name == 'workflow_dispatch' && inputs.text == '' && inputs.deck == '' && inputs.pdf == ''
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}

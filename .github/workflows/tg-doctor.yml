@@ -41,26 +41,7 @@ jobs:
             python3 tools/tg_doctor.py
           fi
 
-      - name: Поставить Chromium для сборки PDF
-        if: inputs.send_test
-        # Именно Chromium, а не предустановленный google-chrome: тот на раннере
-        # запускается, но PDF не печатает и молча висит до таймаута. Ставим
-        # сборку Playwright — ту же, что работает в средах агентов.
-        run: |
-          set -euo pipefail
-          if command -v chromium >/dev/null || command -v chromium-browser >/dev/null; then
-            echo "Chromium уже есть."
-            exit 0
-          fi
-          if ls ~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome >/dev/null 2>&1; then
-            echo "Chromium от Playwright уже установлен."
-            exit 0
-          fi
-          python3 -m pip install --quiet --disable-pip-version-check playwright
-          python3 -m playwright install chromium
-          ls ~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome
-
-      - name: Собрать и отправить тестовую презентацию
+      - name: Отправить тестовую презентацию
         if: inputs.send_test
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
@@ -71,8 +52,9 @@ jobs:
             '<b>Проверка презентации</b>' \
             'Следом придёт PDF — так же будут приходить деки ночного цикла и борда.' \
             > /tmp/doctor_note.html
-          # Собираем из демо-исходника: проверяем всю цепочку
-          # исходник → HTML → PDF → отправка, а не только доступ к API.
-          cp tools/demo_deck.md /tmp/demo_deck.md
-          python3 tools/deliver.py --text /tmp/doctor_note.html --deck /tmp/demo_deck.md
+          # Отправляем заранее собранный образец, а не собираем на месте.
+          # Браузер раннера GitHub PDF не печатает: запускается, жалуется на
+          # отсутствие dbus, замолкает и файла не создаёт. Деки собирает агент
+          # у себя и кладёт готовый PDF в outbox — раннер только отправляет.
+          python3 tools/deliver.py --text /tmp/doctor_note.html --pdf outbox/sample_deck.pdf
           echo "Готово. Если в Telegram пришли сообщения и PDF — канал исправен."

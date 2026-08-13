@@ -142,6 +142,9 @@ def main(argv=None):
                         help="файл с текстом сообщения (разметка HTML по шаблону 06_DELIVERY)")
     parser.add_argument("--deck", default=None,
                         help="исходник дека (.md); без него уйдёт только текст")
+    parser.add_argument("--pdf", default=None,
+                        help="готовая презентация: отправить как есть, не собирая. "
+                             "Так доставляют, когда рендерить негде — например с раннера GitHub")
     parser.add_argument("--with-html", action="store_true",
                         help="дослать HTML-версию дека (интерактивная, для большого экрана)")
     parser.add_argument("--caption", default=None,
@@ -163,7 +166,15 @@ def main(argv=None):
         return 1
 
     html_path = pdf_path = caption = None
-    if args.deck:
+    if args.pdf:
+        # Готовый PDF: собирать нечего, проверять стандарт поздно — дек уже
+        # собран там, где есть браузер.
+        if not os.path.isfile(args.pdf):
+            log("ОШИБКА: презентация не найдена: %s" % args.pdf)
+            return 1
+        pdf_path = args.pdf
+        caption = os.path.splitext(os.path.basename(args.pdf))[0]
+    elif args.deck:
         html_path, pdf_path, _, caption = build_deck(args.deck, browser=args.browser,
                                                       strict=args.strict)
     caption = args.caption or caption
