@@ -35,6 +35,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import deck_lint    # noqa: E402
 import deck_to_pdf  # noqa: E402
 import make_deck    # noqa: E402
 import tg_send      # noqa: E402
@@ -77,7 +78,7 @@ def plural_slides(n):
     return "%d %s" % (n, word)
 
 
-def build_deck(source, browser=None):
+def build_deck(source, browser=None, strict=False):
     """
     Исходник дека → (html, pdf, число слайдов, подпись).
 
@@ -93,6 +94,19 @@ def build_deck(source, browser=None):
     meta, slides = make_deck.parse_deck(text)
     if not slides:
         raise SystemExit("ОШИБКА: в исходнике дека нет ни одного слайда: %s" % source)
+
+    # Проверка стандарта идёт до сборки: замечания видно, пока дек ещё можно
+    # переписать, а не после того, как он ушёл учредителю.
+    findings = deck_lint.lint(source)
+    errors = [f for f in findings if f.level == "ошибка"]
+    if findings:
+        log("Проверка по 10_DECK_STYLE — ошибок %d, замечаний %d:"
+            % (len(errors), len(findings) - len(errors)))
+        for finding in findings:
+            log(finding.render())
+    if errors and strict:
+        raise SystemExit("ОШИБКА: дек не проходит проверку стандарта, доставка "
+                         "остановлена (--strict). Исправьте ошибки выше.")
 
     stem = os.path.splitext(source)[0]
     html_path = stem + ".html"
@@ -133,6 +147,8 @@ def main(argv=None):
     parser.add_argument("--caption", default=None,
                         help="перебить подпись к презентации")
     parser.add_argument("--browser", default=None, help="путь к chromium/chrome")
+    parser.add_argument("--strict", action="store_true",
+                        help="не отправлять дек, пока он не пройдёт проверку 10_DECK_STYLE")
     parser.add_argument("--chat-id", default=None, help="перебить TG_CHAT_ID")
     parser.add_argument("--silent", action="store_true", help="доставить без звука")
     parser.add_argument("--dry-run", action="store_true",
@@ -148,7 +164,8 @@ def main(argv=None):
 
     html_path = pdf_path = caption = None
     if args.deck:
-        html_path, pdf_path, _, caption = build_deck(args.deck, browser=args.browser)
+        html_path, pdf_path, _, caption = build_deck(args.deck, browser=args.browser,
+                                                      strict=args.strict)
     caption = args.caption or caption
 
     common = []
