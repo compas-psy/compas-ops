@@ -1,7 +1,7 @@
 name: Ночной цикл
 
 # Ежедневно в 02:00 UTC = 05:00 МСК.
-# Секреты: CLAUDE_CODE_OAUTH_TOKEN (подписка) или ANTHROPIC_API_KEY, плюс TG_BOT_TOKEN и TG_CHAT_ID для доставки.
+# Секреты: CLAUDE_CODE_OAUTH_TOKEN, TG_BOT_TOKEN, TG_CHAT_ID.
 on:
   schedule:
     - cron: '0 2 * * *'
@@ -25,12 +25,19 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Инструменты агента
+      - name: Браузер для сборки PDF
         run: |
-          pip install --quiet 'markitdown[all]' || echo "markitdown не установился, продолжаем без него"
+          pip install --quiet playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Конвертер документов
+        run: pip install --quiet 'markitdown[all]' || echo "markitdown не установился, продолжаем без него"
 
       - name: Ночной цикл
         uses: anthropics/claude-code-action@v1
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
@@ -38,9 +45,15 @@ jobs:
             Читай по порядку: CLAUDE.md, charter/00_ORG_CHARTER.md, charter/08_SCHEDULES.md.
             Выполни протокол ночного цикла из charter/08_SCHEDULES.md §1 целиком и без сокращений.
             Промпт ритма живёт в этом документе — он единственный источник правды, здесь он не дублируется.
+
+            Три поправки к тексту протокола, они сильнее его:
+            1. Репозиторий уже склонирован и ты в нём — ШАГ 0 считай выполненным.
+            2. Доставку ШАГА 7 выполняй прямо здесь: Telegram с этого раннера доступен,
+               токен и чат уже в переменных окружения, команда tools/deliver.py работает как есть.
+               Обходных каналов не ищи: не удалось — действуй по charter/06_DELIVERY §7.
+            3. ШАГ 8 «ветка и pull request» не выполняй: коммит в main делает следующий шаг воркфлоу.
+
             Результат обязан быть записан в файлы репозитория до завершения работы.
-            ШАГ «ветка и pull request» не выполняй: коммит в main делает следующий шаг воркфлоу.
-            Доставку в Telegram тоже не выполняй — её делает последний шаг воркфлоу по файлам из outbox/.
 
       - name: Зафиксировать результат
         run: |
@@ -55,16 +68,11 @@ jobs:
           git pull --rebase --autostash origin main
           git push origin HEAD:main
 
-      - name: Доставка учредителю
-        env:
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      - name: Проверить, что сводка существует
         run: |
-          text=$(ls -1 outbox/*_daily.txt 2>/dev/null | tail -1)
-          if [ -z "$text" ]; then
-            echo "::error::Нет текста сводки в outbox/ — доставлять нечего"
+          today=$(date -u +%Y-%m-%d)
+          if [ ! -f "outbox/${today}_daily.txt" ]; then
+            echo "::error::Нет outbox/${today}_daily.txt — цикл отработал, но сводка учредителю не написана"
             exit 1
           fi
-          pdf=$(ls -1 outbox/*_daily.pdf 2>/dev/null | tail -1)
-          python3 tools/tg_send.py text --from-file "$text" --html
-          [ -n "$pdf" ] && python3 tools/tg_send.py file "$pdf" --caption "План дня" || true
+          echo "Сводка на месте: outbox/${today}_daily.txt"
