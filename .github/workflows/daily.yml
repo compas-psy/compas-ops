@@ -1,0 +1,70 @@
+name: Ночной цикл
+
+# Ежедневно в 02:00 UTC = 05:00 МСК.
+# Секреты: CLAUDE_CODE_OAUTH_TOKEN (подписка) или ANTHROPIC_API_KEY, плюс TG_BOT_TOKEN и TG_CHAT_ID для доставки.
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rhythm
+  cancel-in-progress: false
+
+jobs:
+  daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Инструменты агента
+        run: |
+          pip install --quiet 'markitdown[all]' || echo "markitdown не установился, продолжаем без него"
+
+      - name: Ночной цикл
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Ты запущен как ночной цикл операционной системы СИМПАС в репозитории compas-ops.
+            Читай по порядку: CLAUDE.md, charter/00_ORG_CHARTER.md, charter/08_SCHEDULES.md.
+            Выполни протокол ночного цикла из charter/08_SCHEDULES.md §1 целиком и без сокращений.
+            Промпт ритма живёт в этом документе — он единственный источник правды, здесь он не дублируется.
+            Результат обязан быть записан в файлы репозитория до завершения работы.
+            ШАГ «ветка и pull request» не выполняй: коммит в main делает следующий шаг воркфлоу.
+            Доставку в Telegram тоже не выполняй — её делает последний шаг воркфлоу по файлам из outbox/.
+
+      - name: Зафиксировать результат
+        run: |
+          git config user.name  "simpas-night"
+          git config user.email "bot@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "::error::Ночной цикл не изменил ни одного файла — считаем прогон неуспешным"
+            exit 1
+          fi
+          git commit -m "Ночной цикл $(date -u +%Y-%m-%d)"
+          git pull --rebase --autostash origin main
+          git push origin HEAD:main
+
+      - name: Доставка учредителю
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          text=$(ls -1 outbox/*_daily.txt 2>/dev/null | tail -1)
+          if [ -z "$text" ]; then
+            echo "::error::Нет текста сводки в outbox/ — доставлять нечего"
+            exit 1
+          fi
+          pdf=$(ls -1 outbox/*_daily.pdf 2>/dev/null | tail -1)
+          python3 tools/tg_send.py text --from-file "$text" --html
+          [ -n "$pdf" ] && python3 tools/tg_send.py file "$pdf" --caption "План дня" || true
