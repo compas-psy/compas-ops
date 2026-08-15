@@ -33,6 +33,21 @@ jobs:
           pip install --quiet playwright
           python -m playwright install --with-deps chromium
 
+      - name: Репозитории продуктов
+        env:
+          PRODUCTS_READ_TOKEN: ${{ secrets.PRODUCTS_READ_TOKEN }}
+        run: |
+          mkdir -p products
+          git clone -q --depth 20 https://github.com/compas-psy/zapiski.git products/zapiski || echo "zapiski не склонировался"
+          if [ -n "$PRODUCTS_READ_TOKEN" ]; then
+            for r in cmpas.ru compas-voice; do
+              git clone -q --depth 20 "https://x-access-token:${PRODUCTS_READ_TOKEN}@github.com/compas-psy/$r" "products/$r" || echo "$r не склонировался"
+            done
+          else
+            echo "PRODUCTS_READ_TOKEN не задан — ПРАКТИКА и МОМЕНТЫ работают вслепую"
+          fi
+          ls -1 products/ | sed 's/^/склонирован: /'
+
       - name: Claude Code и конвертер документов
         run: |
           npm install -g @anthropic-ai/claude-code
@@ -43,6 +58,7 @@ jobs:
         id: cycle
         continue-on-error: true
         env:
+          DBUS_SESSION_BUS_ADDRESS: /dev/null
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
