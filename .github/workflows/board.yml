@@ -1,6 +1,6 @@
 name: Борд C-1
 
-# Понедельник и четверг, 07:00 UTC = 10:00 МСК.
+# Понедельник и четверг 07:00 UTC = 10:00 МСК. Запуск вручную — кнопкой или пушем в .runner/board.
 # Секреты: CLAUDE_CODE_OAUTH_TOKEN, TG_BOT_TOKEN, TG_CHAT_ID.
 on:
   schedule:
@@ -12,7 +12,6 @@ on:
 
 permissions:
   contents: write
-  id-token: write
 
 concurrency:
   group: rhythm
@@ -34,49 +33,58 @@ jobs:
           pip install --quiet playwright
           python -m playwright install --with-deps chromium
 
-      - name: Конвертер документов
-        run: pip install --quiet 'markitdown[all]' || echo "markitdown не установился, продолжаем без него"
+      - name: Claude Code и конвертер документов
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+          pip install --quiet 'markitdown[all]' || echo "markitdown не установился, продолжаем без него"
 
       - name: Заседание борда
-        uses: anthropics/claude-code-action@v1
+        id: cycle
+        continue-on-error: true
         env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt: |
-            Ты запущен как заседание борда C-1 операционной системы СИМПАС в репозитории compas-ops.
-            Читай по порядку: CLAUDE.md, charter/00_ORG_CHARTER.md, charter/08_SCHEDULES.md.
-            Выполни протокол борда из charter/08_SCHEDULES.md §2 целиком и без сокращений.
-            Промпт ритма живёт в этом документе — он единственный источник правды, здесь он не дублируется.
-
-            Три поправки к тексту протокола, они сильнее его:
-            1. Репозиторий уже склонирован и ты в нём — ШАГ 0 считай выполненным.
-            2. Доставку ШАГА 7 выполняй прямо здесь: Telegram с этого раннера доступен,
-               токен и чат уже в переменных окружения, команда tools/deliver.py работает как есть.
-               Обходных каналов не ищи: не удалось — действуй по charter/06_DELIVERY §7.
-            3. ШАГ 8 «ветка и pull request» не выполняй: коммит в main делает следующий шаг воркфлоу.
-
-            Результат обязан быть записан в файлы репозитория до завершения работы.
-
-      - name: Зафиксировать результат
         run: |
-          git config user.name  "simpas-night"
+          set -o pipefail
+          claude -p "$(cat .runner/prompt-board.md)" \
+            --allowedTools "Bash,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebFetch" \
+            --permission-mode acceptEdits \
+            2>&1 | tee /tmp/cycle.log
+
+      - name: Сохранить лог и зафиксировать результат
+        if: always()
+        run: |
+          mkdir -p log/runner
+          day=$(date -u +%Y-%m-%d)
+          {
+            echo "# Прогон борда $day"
+            echo "статус шага агента: ${{ steps.cycle.outcome }}"
+            echo "run id: ${{ github.run_id }}"
+            echo
+            tail -c 60000 /tmp/cycle.log 2>/dev/null || echo "лог пуст — агент не стартовал"
+          } > "log/runner/${day}_board.log"
+          git config user.name  "simpas-board"
           git config user.email "bot@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then
-            echo "::error::Борд не изменил ни одного файла — заседание считается несостоявшимся"
-            exit 1
+            echo "изменений нет, коммит не нужен"
+          else
+            git commit -m "Борд C-1 ${day}"
+            git pull --rebase --autostash origin main
+            git push origin HEAD:main
           fi
-          git commit -m "Борд C-1 $(date -u +%Y-%m-%d)"
-          git pull --rebase --autostash origin main
-          git push origin HEAD:main
 
-      - name: Проверить, что сводка существует
+      - name: Проверить результат
         run: |
-          today=$(date -u +%Y-%m-%d)
-          if [ ! -f "outbox/${today}_board.txt" ]; then
-            echo "::error::Нет outbox/${today}_board.txt — борд прошёл, но сообщение учредителю не написано"
+          day=$(date -u +%Y-%m-%d)
+          if [ "${{ steps.cycle.outcome }}" != "success" ]; then
+            echo "::error::Агент борда завершился с ошибкой — разбор в log/runner/${day}_board.log"
             exit 1
           fi
-          echo "Сообщение борда на месте: outbox/${today}_board.txt"
+          if [ ! -f "outbox/${day}_board.txt" ]; then
+            echo "::error::Нет outbox/${day}_board.txt — борд прошёл, но сообщение учредителю не написано"
+            exit 1
+          fi
+          echo "Сообщение борда на месте: outbox/${day}_board.txt"
