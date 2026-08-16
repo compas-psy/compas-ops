@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ПРАКТИКА · запись на сессию · прототип</title>
+<style>
+  :root{
+    --paper:#F7F5F1; --ink:#1B1F1D; --muted:#6B7370; --line:#E2DDD4;
+    --accent:#2F5D50; --accent-soft:#EAF0ED; --warn:#8A6A3B; --card:#FFFFFF;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--paper); color:var(--ink);
+    font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1120px;margin:0 auto;padding:40px 24px 72px}
+  header h1{font-size:26px;font-weight:600;letter-spacing:-.01em;margin:0 0 6px}
+  header p{margin:0;color:var(--muted);max-width:70ch}
+  .layout{display:grid;grid-template-columns:390px 1fr;gap:44px;margin-top:36px;align-items:start}
+  @media(max-width:900px){.layout{grid-template-columns:1fr;gap:28px}}
+
+  /* телефон */
+  .phone{
+    background:var(--card);border:1px solid var(--line);border-radius:28px;
+    padding:26px 22px 24px;box-shadow:0 1px 2px rgba(27,31,29,.04),0 12px 32px rgba(27,31,29,.06);
+    min-height:560px;display:flex;flex-direction:column;
+  }
+  .brand{display:flex;align-items:center;gap:9px;color:var(--muted);font-size:13px;margin-bottom:18px}
+  .brand span.dot{width:7px;height:7px;border-radius:50%;background:var(--accent);display:inline-block}
+  .screen{flex:1;display:none;animation:in .28s ease both}
+  .screen.on{display:block}
+  @keyframes in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  h2.s{font-size:20px;font-weight:600;margin:0 0 6px;letter-spacing:-.01em}
+  p.s{margin:0 0 18px;color:var(--muted);font-size:14.5px}
+
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px}
+  .chip{
+    border:1px solid var(--line);background:#fff;border-radius:999px;padding:8px 14px;
+    font-size:14px;cursor:pointer;transition:.16s;color:var(--ink)
+  }
+  .chip:hover{border-color:var(--accent)}
+  .chip[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+
+  .slot{
+    width:100%;text-align:left;border:1px solid var(--line);background:#fff;border-radius:14px;
+    padding:14px 16px;margin-bottom:10px;cursor:pointer;transition:.16s;display:flex;justify-content:space-between;align-items:center;gap:12px
+  }
+  .slot:hover{border-color:var(--accent);transform:translateY(-1px)}
+  .slot b{font-weight:600;font-size:15.5px}
+  .slot small{color:var(--muted);display:block;font-size:13px;margin-top:2px}
+  .slot .tag{font-size:12px;color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:4px 9px;white-space:nowrap}
+
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
+  .field input,.field select{
+    width:100%;border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:15px;
+    background:#fff;color:var(--ink);font-family:inherit
+  }
+  .field input:focus,.field select:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+
+  .rule{
+    background:#FBF9F5;border:1px solid var(--line);border-left:3px solid var(--warn);
+    border-radius:10px;padding:12px 14px;font-size:13.5px;color:#4A4F4C;margin:16px 0 18px
+  }
+  .rule b{color:var(--ink);font-weight:600}
+
+  .btn{
+    width:100%;border:0;border-radius:14px;background:var(--accent);color:#fff;
+    padding:14px 18px;font-size:15.5px;font-weight:500;cursor:pointer;font-family:inherit;transition:.16s
+  }
+  .btn:hover{background:#26493F}
+  .btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--line);margin-top:9px}
+  .btn.ghost:hover{border-color:var(--accent);color:var(--accent);background:#fff}
+
+  .done{text-align:center;padding:16px 0 4px}
+  .done .mark{
+    width:52px;height:52px;border-radius:50%;background:var(--accent-soft);color:var(--accent);
+    display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:24px
+  }
+  .card{border:1px solid var(--line);border-radius:14px;padding:14px 16px;background:#fff;margin-bottom:12px;text-align:left}
+  .card .k{font-size:12.5px;color:var(--muted)}
+  .card .v{font-size:15px;margin-top:2px}
+
+  .notif{
+    border:1px solid var(--line);border-radius:14px;padding:13px 15px;background:#fff;
+    font-size:14px;margin-bottom:12px;text-align:left
+  }
+  .notif .from{font-size:12px;color:var(--muted);margin-bottom:5px}
+  .row{display:flex;gap:8px;margin-top:11px}
+  .row .btn{padding:10px 12px;font-size:14px}
+
+  /* правая колонка */
+  .note{border-left:2px solid var(--line);padding-left:22px}
+  .step{display:none}
+  .step.on{display:block;animation:in .28s ease both}
+  .step .eyebrow{font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--accent);font-weight:600;margin-bottom:8px}
+  .step h3{margin:0 0 10px;font-size:20px;font-weight:600;letter-spacing:-.01em}
+  .step p{margin:0 0 12px;color:#414744;max-width:62ch}
+  .step ul{margin:0 0 12px;padding-left:18px;color:#414744;max-width:62ch}
+  .step li{margin-bottom:6px}
+  .market{background:#fff;border:1px solid var(--line);border-radius:12px;padding:13px 15px;font-size:14px;color:#414744;max-width:62ch}
+  .market b{color:var(--ink)}
+
+  .nav{display:flex;align-items:center;gap:10px;margin-top:26px}
+  .nav button{
+    border:1px solid var(--line);background:#fff;border-radius:10px;padding:9px 15px;font-size:14px;
+    cursor:pointer;font-family:inherit;color:var(--ink);transition:.16s
+  }
+  .nav button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+  .nav button:disabled{opacity:.4;cursor:default}
+  .dots{display:flex;gap:6px;margin-left:6px}
+  .dots i{width:6px;height:6px;border-radius:50%;background:var(--line);display:block;transition:.2s}
+  .dots i.on{background:var(--accent);width:18px;border-radius:3px}
+  footer{margin-top:44px;color:var(--muted);font-size:13px;border-top:1px solid var(--line);padding-top:16px;max-width:80ch}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Запись на сессию — как это должно работать</h1>
+    <p>Кликабельный прототип клиентского пути ПРАКТИКИ. Слева — то, что видит клиент, справа — что именно здесь сделано иначе, чем у всех остальных.</p>
+  </header>
+
+  <div class="layout">
+    <!-- ЭКРАНЫ -->
+    <div class="phone">
+      <div class="brand"><span class="dot"></span> Анна Ковалёва · психолог</div>
+
+      <!-- 1 -->
+      <div class="screen on" data-s="0">
+        <h2 class="s">Когда вам удобнее?</h2>
+        <p class="s">Отметьте, а я подберу ближайшее время. Это ни к чему не обязывает.</p>
+        <div class="chips">
+          <button class="chip" aria-pressed="false">Будни, вечер</button>
+          <button class="chip" aria-pressed="true">Будни, день</button>
+          <button class="chip" aria-pressed="false">Выходные, утро</button>
+          <button class="chip" aria-pressed="false">Мне всё равно</button>
+        </div>
+        <button class="slot" onclick="go(1)">
+          <span><b>Вторник, 19 августа · 19:00</b><small>Онлайн · 50 минут · 3 000 ₽</small></span>
+          <span class="tag">ближайшее</span>
+        </button>
+        <button class="slot" onclick="go(1)">
+          <span><b>Четверг, 21 августа · 19:00</b><small>Онлайн · 50 минут · 3 000 ₽</small></span>
+        </button>
+        <button class="slot" onclick="go(1)">
+          <span><b>Вторник, 26 августа · 18:00</b><small>Онлайн · 50 минут · 3 000 ₽</small></span>
+        </button>
+        <button class="btn ghost" onclick="go(1)">Показать все свободные времена</button>
+      </div>
+
+      <!-- 2 -->
+      <div class="screen" data-s="1">
+        <h2 class="s">Вторник, 19 августа, 19:00</h2>
+        <p class="s">Осталось два поля. Аккаунт заводить не нужно.</p>
+        <div class="field">
+          <label>Как к вам обращаться</label>
+          <input value="Мария" spellcheck="false">
+        </div>
+        <div class="field">
+          <label>Куда прислать напоминание</label>
+          <select>
+            <option>Telegram</option>
+            <option>Электронная почта</option>
+            <option>СМС — только если вы согласны</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Как назвать встречу в вашем календаре</label>
+          <select>
+            <option>Личная встреча</option>
+            <option>Занято</option>
+            <option>Сессия с Анной</option>
+          </select>
+        </div>
+        <div class="rule">
+          <b>Если планы изменятся.</b> Перенести или отменить можно до 19:00 понедельника. Позже — час останется за вами, но если его займёт кто-то другой, оплата вернётся полностью.
+        </div>
+        <button class="btn" onclick="go(2)">Записаться</button>
+      </div>
+
+      <!-- 3 -->
+      <div class="screen" data-s="2">
+        <div class="done">
+          <div class="mark">✓</div>
+          <h2 class="s">Вы записаны</h2>
+          <p class="s">Напоминание придёт за сутки и за час.</p>
+        </div>
+        <div class="card"><div class="k">Когда</div><div class="v">Вторник, 19 августа, 19:00</div></div>
+        <div class="card"><div class="k">В вашем календаре</div><div class="v">Личная встреча · 50 минут</div></div>
+        <div class="notif">
+          <div class="from">Telegram · за 24 часа</div>
+          Напоминаю о встрече завтра в 19:00. Ссылка придёт за час.
+          <div class="row">
+            <button class="btn">Буду</button>
+            <button class="btn ghost" style="margin-top:0" onclick="go(4)">Не смогу</button>
+          </div>
+        </div>
+        <button class="btn ghost" onclick="go(3)">Дальше: после первой сессии</button>
+      </div>
+
+      <!-- 4 -->
+      <div class="screen" data-s="3">
+        <h2 class="s">Оставить за собой вторник, 19:00?</h2>
+        <p class="s">Одно и то же время каждую неделю. Пропустить любую неделю можно в один тап, место сохранится.</p>
+        <button class="slot" onclick="go(4)"><span><b>На 4 недели</b><small>до 16 сентября</small></span></button>
+        <button class="slot" onclick="go(4)"><span><b>На 8 недель</b><small>до 14 октября</small></span><span class="tag">чаще всего</span></button>
+        <button class="slot" onclick="go(4)"><span><b>На 12 недель</b><small>до 11 ноября</small></span></button>
+        <button class="btn ghost" onclick="go(4)">Пока записываться разово</button>
+      </div>
+
+      <!-- 5 -->
+      <div class="screen" data-s="4">
+        <h2 class="s">Не сможете во вторник?</h2>
+        <p class="s">Объяснять ничего не нужно. Выберите, что удобнее.</p>
+        <button class="slot" onclick="go(5)"><span><b>Перенести на четверг, 19:00</b><small>эта же неделя</small></span></button>
+        <button class="slot" onclick="go(5)"><span><b>Перенести на пятницу, 12:00</b><small>эта же неделя</small></span></button>
+        <button class="slot" onclick="go(5)"><span><b>Пропустить неделю</b><small>вторник 19:00 останется за вами</small></span></button>
+        <div class="rule">
+          <b>Про оплату.</b> До 19:00 понедельника — без удержания. Позже — час останется за вами, но мы предложим его тем, кто ждёт это время. Займут — вернём всё.
+        </div>
+      </div>
+
+      <!-- 6 -->
+      <div class="screen" data-s="5">
+        <div class="done">
+          <div class="mark">✓</div>
+          <h2 class="s">Готово</h2>
+          <p class="s">Встреча перенесена на четверг, 19:00.</p>
+        </div>
+        <div class="notif">
+          <div class="from">Telegram · через 40 минут</div>
+          Ваш вторник, 19:00 занял другой человек из листа ожидания. Оплата вернулась на карту полностью.
+        </div>
+        <div class="notif">
+          <div class="from">Что видит Анна</div>
+          Мария перенесла вторник на четверг. Освободившийся час занят. Ничего делать не нужно.
+        </div>
+        <button class="btn ghost" onclick="go(0)">Пройти путь заново</button>
+      </div>
+    </div>
+
+    <!-- КОММЕНТАРИЙ -->
+    <div class="note">
+      <div class="step on" data-n="0">
+        <div class="eyebrow">Шаг 1 · Первое касание</div>
+        <h3>Не сетка на месяц, а три времени</h3>
+        <p>Человек, который месяц не решался написать психологу, открывает ссылку — и видит тридцать слотов. Пустое расписание читается как «к нему никто не ходит», плотное — как «мне не достанется».</p>
+        <ul>
+          <li>Один вопрос вместо таблицы выбора.</li>
+          <li>Три предложения, подобранных под ответ.</li>
+          <li>Полный календарь доступен, но не первым экраном.</li>
+        </ul>
+        <div class="market"><b>На рынке:</b> Ясно, Alter, YouTalk, YCLIENTS — везде сетка слотов. Подбора под предпочтение нет ни у кого.</div>
+      </div>
+
+      <div class="step" data-n="1">
+        <div class="eyebrow">Шаг 2 · Бронь</div>
+        <h3>Без регистрации и без анкеты о себе</h3>
+        <p>Два поля и выбор канала. На этапе записи мы не спрашиваем ничего о запросе и состоянии — это спецкатегория персональных данных, и собирать её до первой сессии незачем.</p>
+        <ul>
+          <li>Заголовок события в календаре выбирает клиент: по умолчанию «Личная встреча».</li>
+          <li>СМС — только с явного согласия, без слова «психолог» в тексте.</li>
+          <li>Правило отмены показано <b>до</b> записи, человеческим языком.</li>
+        </ul>
+        <div class="market"><b>На рынке:</b> у маркетплейсов сначала анкета и аккаунт, потом слот. Приватного режима записи нет ни у российских, ни у SimplePractice.</div>
+      </div>
+
+      <div class="step" data-n="2">
+        <div class="eyebrow">Шаг 3 · Ожидание</div>
+        <h3>Подтверждение одним касанием</h3>
+        <p>Напоминание за сутки и за час с двумя кнопками. «Буду» — вежливое подтверждение, а не давление. «Не смогу» ведёт в механику, где не нужно оправдываться.</p>
+        <div class="market"><b>Контекст:</b> неявки в психотерапии — 18–22 %, вдвое выше первичного звена, и это худшая специальность по шансам пропуска среди всех.</div>
+      </div>
+
+      <div class="step" data-n="3">
+        <div class="eyebrow">Шаг 4 · Ритм — ядро механики</div>
+        <h3>«Своё время»: постоянный слот, который клиент бронирует сам</h3>
+        <p>Терапия и так идёт по одному дню и часу неделями. Сегодня этот ритм держится на памяти специалиста и переписке. Мы делаем его предметом самозаписи — с паузой на любую неделю без потери места.</p>
+        <div class="market"><b>Чего нет ни у кого:</b> самозаписи на серию. У Ясно, Alter, YouTalk — поштучная запись. У SimplePractice повторяющуюся серию создаёт только специалист, клиент — никогда. Маркетплейсу невыгодно замораживать час под одного человека; нам выгодно, мы не продаём часы.</div>
+      </div>
+
+      <div class="step" data-n="4">
+        <div class="eyebrow">Шаг 5 · Отмена</div>
+        <h3>Отмена без вины</h3>
+        <p>Самый тяжёлый разговор в частной практике: клиент оправдывается, специалист выбирает между деньгами и отношениями. Здесь разговора нет вообще — есть правило, согласованное заранее, и три кнопки.</p>
+        <ul>
+          <li>Освободившийся час сразу уходит в тихий лист ожидания.</li>
+          <li>Занял другой — удержание снимается полностью.</li>
+          <li>Никакого дефицита и обратных отсчётов: устав §10.</li>
+        </ul>
+        <div class="market"><b>На рынке:</b> в Alter отмена возможна только через поддержку. Лист ожидания в РФ не делает никто; из профильных он есть только у Jane App.</div>
+      </div>
+
+      <div class="step" data-n="5">
+        <div class="eyebrow">Шаг 6 · Итог</div>
+        <h3>Время не пропадает — и это не штраф</h3>
+        <p>Удержание, которое снимается при перепродаже часа, — это про фактические расходы, а не про штраф за неявку. В РФ это принципиально: потребитель вправе отказаться от услуги, оплатив только фактически понесённые расходы. Формулировку до выката подтверждает Legal.</p>
+        <p>Специалист не теряет час. Клиент не покупает право отменить чувством вины. Никто никому не пишет.</p>
+        <div class="market"><b>Что меряем:</b> доля переносов, закрытых листом ожидания · доля клиентов с закреплённым слотом · время от открытия ссылки до брони · неявки с предоплатой и без.</div>
+      </div>
+
+      <div class="nav">
+        <button id="prev" onclick="go(cur-1)">Назад</button>
+        <button id="next" onclick="go(cur+1)">Дальше</button>
+        <div class="dots" id="dots"></div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Прототип клиентского пути, не финальный интерфейс: показывает механику и порядок решений, а не вёрстку. Экономика механики отмены требует визы Legal, состав полей — визы InfoSec, события воронки входят в Ф1 разметки аналитики.
+  </footer>
+</div>
+
+<script>
+  var cur = 0, total = 6;
+  var dots = document.getElementById('dots');
+  for (var i = 0; i < total; i++) { var d = document.createElement('i'); dots.appendChild(d); }
+  function go(n){
+    if (n < 0 || n >= total) return;
+    cur = n;
+    document.querySelectorAll('.screen').forEach(function(el){ el.classList.toggle('on', +el.dataset.s === n); });
+    document.querySelectorAll('.step').forEach(function(el){ el.classList.toggle('on', +el.dataset.n === n); });
+    dots.querySelectorAll('i').forEach(function(el, i){ el.classList.toggle('on', i === n); });
+    document.getElementById('prev').disabled = n === 0;
+    document.getElementById('next').disabled = n === total - 1;
+  }
+  document.querySelectorAll('.chip').forEach(function(c){
+    c.addEventListener('click', function(){
+      document.querySelectorAll('.chip').forEach(function(x){ x.setAttribute('aria-pressed','false'); });
+      c.setAttribute('aria-pressed','true');
+    });
+  });
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'ArrowRight') go(cur + 1);
+    if (e.key === 'ArrowLeft') go(cur - 1);
+  });
+  go(0);
+</script>
+</body>
+</html>
