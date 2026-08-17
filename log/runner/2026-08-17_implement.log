@@ -1,15 +1,20 @@
 # Прогон реализации 2026-08-17
 статус шага агента: success
-run id: 32016150688
+run id: 32017557068
 
-Order O-260817-04 is fully executed and pushed. Summary:
+Both orders are now fully implemented, tested, and documented. Summary of this session's work:
 
-**O-260817-04** (P0, срочно, приватность) — [PR #1](https://github.com/compas-psy/compas-voice/pull/1) на ветке `feature/checkin-touch-only`:
+**O-260817-07 (ПРАКТИКА — S1-R return-by-link state)**
+- PR: [compas-psy/cmpas.ru#77](https://github.com/compas-psy/cmpas.ru/pull/77), branch `feature/booking-s1r`, not merged
+- Pure `return-state.ts` module (30-day TTL, stores only preference + last-visit timestamp, structurally excludes name/contact), wired into the booking page behind the existing `timeSuggestEnabled` flag, with "start over" and immediate "forget this device" controls
+- 9 new tests, zero regressions, `next build`/`lint`/`tsc` clean
+- Flagged and documented a real conflict in the order text (branch from "main" vs. depending on the still-unmerged `timeSuggestEnabled` flag) rather than resolving it silently
 
-- Восстановил `touched`-состояние в `AftercareScreen.kt` и `StartSheet.kt` — регрессия из коммита `fc068b6` заставляла писать чек-ин напряжения по умолчанию (5), а не только по касанию слайдера, как требуют `docs/PRODUCT.md`, `docs/QA-TESTPLAN.md` и `docs/PRIVACY-DPO.md` (данные потенциально о здоровье).
-- Логика вынесена в чистую функцию `checkInToRecord()` и покрыта юнит-тестом (Compose UI test-инфраструктуры в репозитории нет — не стал добавлять её ради одной проверки).
-- `gradle testDebugUnitTest` — 10/10 зелёных, `gradle assembleDebug` — чисто.
-- В описании PR — два варианта по уже собранным за месяц значениям (данные никогда не покидали устройство — у продукта нет бэкенда), с рекомендацией ничего не делать; решение за учредителем.
-- Не мержил. Отметил распоряжение исполненным в `state/15_ORDERS.md`, записал в `log/runner/2026-08-17_implement.log`.
+**O-260817-05 (ЗАПИСКИ — Ф3 analytics metadata)**
+- PR: [compas-psy/zapiski#2](https://github.com/compas-psy/zapiski/pull/2), branch `feature/analytics-metadata`, not merged
+- Client-side offline event queue (mirrors the existing `ChangeQueue` pattern), a whitelist-based event builder that structurally can't leak note content, opt-in consent toggle wired end-to-end (client + server, off by default), server route double-gated by feature flag and per-user consent checked on every request, additive migration
+- 35 new tests across three packages, including a real HTTP-body redaction test and a live-Postgres integration suite; zero regressions across the whole monorepo (`pnpm -r test`/`typecheck` both clean)
 
-Взял этот приказ первым не по порядку в файле, а по приоритету (P0/срочно/приватность, разблокирует `O-260817-06`). Согласно правилу «один законченный PR лучше двух наполовину» — на этом остановился. В очереди на следующий цикл: `O-260817-07` (S1-R, ПРАКТИКА), `O-260817-05` (аналитика ЗАПИСОК), `O-260817-06` (аналитика МОМЕНТОВ, теперь разблокирован).
+Both `state/15_ORDERS.md` entries are marked исполнено with honest gap disclosures, pushed to `compas-ops` main. Neither PR was merged — that stays with you.
+
+The next eligible order is **O-260817-06** (МОМЕНТЫ install/first-practice/retention analytics), now unblocked since O-260817-04 closed. It's a separate Kotlin/Android codebase requiring fresh exploration — a comparable-sized task to what I just did twice. I'm stopping here rather than starting a third large piece of work without room to see it through cleanly; let me know if you'd like me to continue with it now or in a follow-up session.
