@@ -1,5 +1,20 @@
 # Прогон реализации 2026-08-17
-статус шага агента: failure
-run id: 32031036133
+статус шага агента: success
+run id: 32037612081
 
-You've hit your session limit · resets 12:50pm (UTC)
+Working tree is clean. Given the guidance to finish one order fully rather than start several, I'll stop here.
+
+## Итог
+
+Исполнено **O-260817-10**: свёл конфликт между `cmpas.ru#79` (единый `ShareButton`) и `cmpas.ru#83` (подписанный `getClientBookingLink`).
+
+- PR [`compas-psy/cmpas.ru#90`](https://github.com/compas-psy/cmpas.ru/pull/90), ветка `feature/share-signed-link`, не смёржен.
+- `ShareButton` принимает `url: string | (() => Promise<string>)` — функция резолвится лениво по клику, без лишних обращений к серверу.
+- Обе кнопки в `diary/clients/page.tsx` берут адрес только через `getClientBookingLink`; поиском по репозиторию подтверждено — ручной сборки `?c=${clientId}` нигде не осталось.
+- Побочная находка: `vitest.config.mts` молча не запускал co-located тесты (`client-workflow.test.ts` из #83, `buildShareUrls.test.ts` из #79) — 8+ тестов тихо не исполнялись при зелёном CI. Расширил `include`, иначе обязательный по распоряжению тест было бы нечем гарантированно проверять.
+- Тесты: 56/56 vitest (было 40), eslint/tsc/`next build` — 0 новых ошибок относительно `main`.
+- #83 закрыт со ссылкой на #90. `state/15_ORDERS.md` обновлён, статус — «исполнено».
+
+Не мержил, деплой не делал — несмотря на то, что `products/cmpas.ru/CLAUDE.md` требует авто-мёржа после задачи (это прямое противоречие с границами compas-ops, уже отслеживаемое как `B-260817-04`).
+
+Остальные открытые распоряжения (`O-260817-09` и другие) не начаты в этом прогоне — по инструкции лучше один законченный PR, чем несколько наполовину.
