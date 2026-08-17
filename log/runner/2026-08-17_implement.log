@@ -11,3 +11,13 @@ Both qualifying orders are now fully executed:
 Both PRs are unmerged, untested-in-prod, flags off by default — merge/deploy is yours.
 
 Three more orders in `state/15_ORDERS.md` are also "принято" with feature-branch instructions but I didn't start them this session (already a very long run): `O-260817-04` (МОМЕНТЫ checkin fix, `compas-voice`), `O-260817-05` (ЗАПИСКИ metadata analytics, `zapiski`), `O-260817-06` (МОМЕНТЫ analytics, blocked on 04). Next cycle should pick those up in that order.
+
+---
+
+# Прогон реализации 2026-08-17 (продолжение)
+статус шага агента: success
+run id: 32016150688
+
+**O-260817-04** (чек-ин МОМЕНТОВ только по касанию, P0/приватность) — [PR #1](https://github.com/compas-psy/compas-voice/pull/1), ветка `feature/checkin-touch-only`: вернул `touched`-состояние в `StartSheet.kt` и `AftercareScreen.kt` (регрессия `fc068b6`), логика вынесена в чистую `checkInToRecord()` и покрыта юнит-тестом (в репозитории нет Compose UI test — не стал добавлять инфраструктуру ради одной проверки). `gradle testDebugUnitTest` 10/10 зелёных, `gradle assembleDebug` чист. Документы (`PRODUCT.md`/`QA-TESTPLAN.md`/`PRIVACY-DPO.md`) уже верны, не трогал. В PR два варианта по уже собранным за месяц значениям с рекомендацией — решение за учредителем. Отмечено **исполнено** в `state/15_ORDERS.md`. Не мержил.
+
+Взял этот приказ первым (не по порядку в файле, а по приоритету P0/срочно/приватность + он разблокирует `O-260817-06`). Один законченный PR за цикл, как и предписано — `O-260817-07` (S1-R), `O-260817-05` (аналитика ЗАПИСОК) и `O-260817-06` остаются в очереди для следующего цикла.
