@@ -1,0 +1,13 @@
+# Прогон реализации 2026-08-17
+статус шага агента: success
+run id: 32013836600
+
+Both qualifying orders are now fully executed:
+
+**O-260817-02** (analytics F0/F1, CDO) — [PR #75](https://github.com/compas-psy/cmpas.ru/pull/75): Tinkoff webhook now resolves site/app terminal and verifies per-terminal, `Payment.terminal` + `Subscription` (MRR) tables, T-API reconciliation + one-time registry import as manual scripts, `POST /ingest` + `events`/`events_rejected` tables with consent-gated `device_id`. Added vitest (none existed), 40 green tests, migration verified via `prisma migrate diff` against a throwaway Postgres. Marked **исполнено** in `state/15_ORDERS.md`.
+
+**O-260817-03** (booking mechanics A/B, ПРАКТИКА) — [PR #76](https://github.com/compas-psy/cmpas.ru/pull/76): unconditional neutral reminder text (closes `B-260816-02`), expiring confirm/cancel links behind `privateRemindersEnabled`, preference-based time suggestions behind `timeSuggestEnabled` with a minimal waitlist capture. 19 green tests, migration verified the same way. Marked **в работе**, not исполнено — one piece of the order (**S1-R**, 30-day return-visit memory) isn't specified anywhere in `CJM_booking_v1.md` or the backlog, only in the order's own text, so I flagged it rather than inventing the UX.
+
+Both PRs are unmerged, untested-in-prod, flags off by default — merge/deploy is yours.
+
+Three more orders in `state/15_ORDERS.md` are also "принято" with feature-branch instructions but I didn't start them this session (already a very long run): `O-260817-04` (МОМЕНТЫ checkin fix, `compas-voice`), `O-260817-05` (ЗАПИСКИ metadata analytics, `zapiski`), `O-260817-06` (МОМЕНТЫ analytics, blocked on 04). Next cycle should pick those up in that order.
