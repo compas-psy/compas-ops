@@ -1,0 +1,103 @@
+name: Реализация
+
+# Реализация конкретного распоряжения. Запуск только вручную или пушем в .runner/implement.
+# Секреты: CLAUDE_CODE_OAUTH_TOKEN, TG_BOT_TOKEN, TG_CHAT_ID.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.runner/implement'
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: rhythm
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Браузер для сборки PDF
+        run: |
+          pip install --quiet playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Репозитории продуктов
+        env:
+          PRODUCTS_READ_TOKEN: ${{ secrets.PRODUCTS_READ_TOKEN }}
+        run: |
+          mkdir -p products
+          git clone -q --depth 20 https://github.com/compas-psy/zapiski.git products/zapiski || echo "zapiski не склонировался"
+          if [ -n "$PRODUCTS_READ_TOKEN" ]; then
+            for r in cmpas.ru compas-voice; do
+              git clone -q --depth 20 "https://x-access-token:${PRODUCTS_READ_TOKEN}@github.com/compas-psy/$r" "products/$r" || echo "$r не склонировался"
+            done
+          else
+            echo "PRODUCTS_READ_TOKEN не задан — ПРАКТИКА и МОМЕНТЫ работают вслепую"
+          fi
+          ls -1 products/ | sed 's/^/склонирован: /'
+
+      - name: Claude Code и конвертер документов
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+          pip install --quiet 'markitdown[all]' || echo "markitdown не установился, продолжаем без него"
+
+      - name: Реализация
+        id: cycle
+        continue-on-error: true
+        env:
+          DBUS_SESSION_BUS_ADDRESS: /dev/null
+          GH_TOKEN: ${{ secrets.PRODUCTS_READ_TOKEN }}
+          PRODUCTS_READ_TOKEN: ${{ secrets.PRODUCTS_READ_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          set -o pipefail
+          claude -p "$(cat .runner/prompt-implement.md)" \
+            --allowedTools "Bash,Read,Write,Edit,Glob,Grep,Task,TodoWrite,WebFetch" \
+            --permission-mode acceptEdits \
+            2>&1 | tee /tmp/cycle.log
+
+      - name: Сохранить лог и зафиксировать результат
+        if: always()
+        run: |
+          mkdir -p log/runner
+          day=$(date -u +%Y-%m-%d)
+          {
+            echo "# Прогон реализации $day"
+            echo "статус шага агента: ${{ steps.cycle.outcome }}"
+            echo "run id: ${{ github.run_id }}"
+            echo
+            tail -c 60000 /tmp/cycle.log 2>/dev/null || echo "лог пуст — агент не стартовал"
+          } > "log/runner/${day}_implement.log"
+          git config user.name  "simpas-impl"
+          git config user.email "bot@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "изменений нет, коммит не нужен"
+          else
+            git commit -m "Реализация ${day}"
+            git pull --rebase --autostash origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Проверить результат
+        run: |
+          day=$(date -u +%Y-%m-%d)
+          if [ "${{ steps.cycle.outcome }}" != "success" ]; then
+            echo "::error::Агент реализации завершился с ошибкой — разбор в log/runner/${day}_implement.log"
+            exit 1
+          fi
+          echo "Реализация завершена, лог в log/runner/${day}_implement.log"
