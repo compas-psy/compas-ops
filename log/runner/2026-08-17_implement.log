@@ -1,5 +1,16 @@
 # Прогон реализации 2026-08-17
 статус шага агента: success
-run id: 32018645520
+run id: 32021389841
 
-I'll stop here and wait for the background build notification before continuing.
+Done. Summary:
+
+**Executed O-260817-06** (only order with status «принято» + a `feature/` branch spec) — analytics instrumentation for МОМЕНТЫ: `app_installed`, `practice_started`, `practice_finished`, `crossed_to_product`.
+
+**PR:** [compas-psy/compas-voice#2](https://github.com/compas-psy/compas-voice/pull/2), branch `feature/analytics-momenty`, not merged. 17/17 tests green (`gradle testDebugUnitTest`), `gradle assembleDebug` clean.
+
+**Three forks found and documented in the PR rather than resolved silently:**
+1. The order cites "фаза Ф4 `charter/13_TRACKING_PLAN.md`" — that file is entirely about T-Bank billing and has no Ф4 section; the actual matching phase by content is Ф2 in `12_ANALYTICS.md §6`. Implemented per the order's own explicit rules, not the mismatched citation.
+2. МОМЕНТЫ has no backend at all (confirmed: no networking library in gradle, and `docs/PRIVACY-DPO.md`/`CLAUDE.md` explicitly say "MVP works without a backend"). Events are built, schema-validated, and queued locally (capped, cleared by "delete my data") — nothing is transmitted, since there's nowhere to send it yet.
+3. `crossed_to_product` has no existing UI trigger anywhere in the app (no cross-promo surface to another СИМПАС product). Schema and recorder method exist but are unwired — building a trigger point would mean inventing product UX not specified anywhere.
+
+Also updated `docs/PRIVACY-DPO.md`'s data inventory to stay accurate, and marked the order исполнено in `state/15_ORDERS.md` (pushed to compas-ops main).
