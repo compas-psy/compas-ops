@@ -1,33 +1,14 @@
 # Прогон реализации 2026-08-18
 статус шага агента: success
-run id: 32123813180
+run id: 32125238027
 
-Both queued orders are now fully closed with green, tested PRs:
+This session is at a good stopping point. Summary of what was done:
 
-**O-260818-01** (свести две ветки с main) — done in the previous part of this session: `feature/reminders-outbox` (cmpas.ru#95) and `feature/booking-funnel` (cmpas.ru#92) both merged forward with `main`, conflicts resolved with reasoning documented, tests green, pushed to the existing PRs.
+**Critical finding (unplanned, escalated immediately):** Found a real private SSH key (`antigravity_key`, comment `eliah@Eliah`) and stray junk files committed to `main` of the public `compas-psy/cmpas.ru` repo, at what turned out to be the root of a squashed/replaced history (bot identity `simpas-doctor`, no prior history readable). Since a private key on a public repo is compromised the moment it lands, I didn't treat this as a backlog item — I escalated it immediately:
+- `H-260818-02` in `state/11_HUMAN_QUEUE.md` (key rotation + decision on rewriting `main`'s history — both need the founder, not an agent)
+- `B-260818-05` in `state/10_BACKLOG.md` (the code-side cleanup + CTO/InfoSec investigation into what replaced the history)
+- PR [`cmpas.ru#106`](https://github.com/compas-psy/cmpas.ru/pull/106) — removes the leaked key and junk files from `HEAD` (not a history rewrite, which is irreversible on a public repo and isn't my call)
 
-**O-260818-02** (гигиена сервера) — new PR [cmpas.ru#105](https://github.com/compas-psy/cmpas.ru/pull/105):
-- Investigated the perpetually-restarting `cmpas-singbox` container by actually pulling the real sing-box image and running its config check locally — proved the `mieru` outbound type has never existed in sing-box, so this VPN sidecar could never have worked. Removed it (config template, compose service, deploy-script logic, CI secrets wiring) rather than leaving it crash-looping.
-- Added build-cache/dangling-image cleanup at the start of every deploy and a free-disk-space guard (<10GB stops the deploy cleanly) before the image build.
-- Closed the CI/deploy build divergence structurally: CI's preflight now runs `docker compose build app` — the exact command the server runs — instead of a separate `npm run build` with fake env vars.
-- Verified everything against a live Docker daemon (image builds, compose config, the whole new CI step end-to-end).
-- Found and logged an unrelated pre-existing test regression (`B-260818-04`) rather than fixing it out-of-scope.
+**Order work:** Continued `O-260817-03` (status "в работе"), closing its last code-shaped gap — the client can now choose the calendar title for their own booked session (CJM §1.3), separate from the specialist's existing Google Calendar sync. PR [`cmpas.ru#108`](https://github.com/compas-psy/cmpas.ru/pull/108), gated behind the existing `privateRemindersEnabled` flag, 13 new tests, zero new lint/type/build issues. The order stays "в работе" — SMS reminders and reminder-channel choice still need an SMS vendor decision, which isn't something I can make.
 
-Both orders marked `исполнено` in `state/15_ORDERS.md`, pushed to `compas-ops`. Neither PR was merged, per boundaries. Remaining open orders in the queue are either blocked on missing source documents/tokens or require substantial new scope (SMS provider integration) that needs product/vendor decisions before implementation — good stopping point for this cycle.
-
----
-
-## Прогон реализации 2026-08-18, сессия 2
-
-**Внеплановая находка перед началом работы по распоряжениям.** При `git checkout` `products/cmpas.ru` в рабочем дереве обнаружен настоящий приватный SSH-ключ (`antigravity_key`/`.pub`, `eliah@Eliah`) и несколько явно посторонних файлов рабочей директории (`_tmp_migrate.sql`, `fix_schema.sql`, `migration.sql`, два файла с мусорными именами) — все закоммичены в `main`. Репозиторий публичный (`gh repo view` → `isPrivate: false`), значит ключ уже скомпрометирован. Дополнительно: коммит, впервые добавивший эти файлы (`bfdc2eeb`, автор `simpas-doctor`, 17.08 13:34 UTC), оказался **корнем всей текущей истории `main`** — история до него не читается (`git rev-list --max-parents=0 HEAD` = только этот коммит, 20 коммитов всего, 579 файлов добавлено разом).
-
-Это подпадает под устав §6.2 (доступы/токены/инциденты — автоматически `/human`) и CLAUDE.md §5.4 (секреты — задача учредителю, не примечание). Заведено:
-- `H-260818-02` в `state/11_HUMAN_QUEUE.md` — отзыв ключа + решение по истории `main`. Очередь временно превышена (6 вместо лимита 5) с явным обоснованием прямо в файле — находка не рутинная, откладывать её ради соблюдения лимита неверно.
-- `B-260818-05` в `state/10_BACKLOG.md` — код-часть (убрать файлы из `HEAD`) + расследование CTO/InfoSec, чем заменена история `main`.
-- PR [`compas-psy/cmpas.ru#106`](https://github.com/compas-psy/cmpas.ru/pull/106), ветка `feature/remove-leaked-secret-and-junk` от актуального `main` — убирает все перечисленные файлы из `HEAD` (не переписывает историю — это необратимо на публичном репозитории и не мой мандат), добавляет в `.gitignore` явные правила для этого ключа и общий паттерн приватных ключей. `npm ci && npx vitest run` — 109/111, два падения те же пре-существующие из `B-260818-04`, не относятся к дифу. Не смёржен.
-
-Дальше в этой сессии — возврат к распоряжениям из `state/15_ORDERS.md` со статусом «в работе»/«принято» и веткой `feature/` в «Как исполнять».
-
-**`O-260817-03`** (механики A и B записи, статус «в работе») — из двух оставшихся незакрытых пунктов (SMS-канал напоминаний и клиентский заголовок календарного события) SMS требует вендора/денег (не код, вне мандата), а клиентский заголовок календаря — чистая кодовая задача. Реализовано: pull request [`compas-psy/cmpas.ru#108`](https://github.com/compas-psy/cmpas.ru/pull/108), ветка `feature/client-calendar-title` — `GET /api/client/session-ics` отдаёт `.ics` с заголовком по выбору клиента (дефолт «Личная встреча»), поле ввода на экране успеха после самозаписи, за существующим флагом `privateRemindersEnabled`. `tests/client-ics.test.ts` (13 кейсов), `npx vitest run` 122/124 (2 пре-существующих падения не по дифу), `eslint`/`tsc`/`next build` — 0 новых проблем относительно `main`. Распоряжение остаётся «в работе» — канал напоминаний на выбор и SMS всё ещё не сделаны, оба зависят от решения по SMS-вендору. Не смёржен, `state/15_ORDERS.md` обновлён.
-
-Дальнейшие открытые распоряжения со статусом «в работе»/«принято» либо заблокированы отсутствующими документами/токенами (`O-260816-06`, часть `O-260816-03`), либо их код уже полностью закрыт предыдущими прогонами и остаток — организационные развилки за CTO/CDO, не код (`O-260817-12`: хранилище ЗАПИСОК требует пересечения изоляции соседнего репозитория, вебхуки Telegram/MAX требуют боевого токена внутри read-only сборщика, оба явно названы находками для CTO/CDO, не для молчаливого решения агентом). Хороший стоп для этого прогона.
+Nothing was merged or deployed. All state changes are pushed to `compas-ops` main.
