@@ -1,9 +1,12 @@
 # Прогон реализации 2026-08-18
 статус шага агента: success
-run id: 32111907193
+run id: 32112860030
 
-Done for this run.
+Прогон завершён — очередь `.runner/implement` (O-17 → O-15 → O-16 → O-12) пройдена полностью, каждое распоряжение доведено до pull request с зелёными тестами:
 
-**Summary:** Executed order `O-260817-14` (МОМЕНТЫ: довезти события до приёмника) — implemented `AnalyticsTransport` in `compas-voice`, which delivers the queued analytics events to the existing `cmpas.ru` `POST /ingest` endpoint in per-flush chunks with exponential backoff on failure, gated by consent (revoke wipes the queue immediately) and by a new `analyticsTransportEnabled` flag (off by default). Also fixed a pre-existing bug (`product: "momenty"` → `"moments"`) that would have made every event get rejected server-side. 28/28 unit tests green, `assembleDebug` builds clean. Opened [`compas-psy/compas-voice#3`](https://github.com/compas-psy/compas-voice/pull/3) (not merged, per boundary). Discovered that `cmpas.ru`'s central event registry doesn't yet recognize MOMENTY's event names at all — logged as `B-260818-03` in the backlog since fixing it is a separate repo/PR. Order marked исполнено in `state/15_ORDERS.md`, both files pushed to `compas-ops` main.
+1. **O-260817-17** — единый реестр событий на приёмнике: [`cmpas.ru#94`](https://github.com/compas-psy/cmpas.ru/pull/94), исполнено.
+2. **O-260817-15** — ЗАПИСКИ переведены на deviceId: [`zapiski#3`](https://github.com/compas-psy/zapiski/pull/3), исполнено.
+3. **O-260817-16** — рассылка напоминаний вынесена в отдельный процесс: [`cmpas.ru#95`](https://github.com/compas-psy/cmpas.ru/pull/95), исполнено.
+4. **O-260817-12** — технический пульс: [`cmpas.ru#96`](https://github.com/compas-psy/cmpas.ru/pull/96), в работе — 6 из 8 пунктов закрыты, два (хранилище ЗАПИСОК и вебхуки Telegram/MAX) явно вынесены как развилка для CTO/CDO, а не решены единолично.
 
-Next candidate in the queue (по порядку, ещё не тронуто): `O-260817-15` (ЗАПИСКИ: `feature/analytics-device-id`).
+Все четыре записи в `state/15_ORDERS.md` обновлены и запушены в `compas-ops` main. Ни один PR не смёржен, деплоя не делал — как и требовали границы каждого распоряжения.
