@@ -1,0 +1,18 @@
+# Прогон реализации 2026-08-18
+статус шага агента: success
+run id: 32110499649
+
+Done. Summary of this run:
+
+**Executed order O-260817-11** (воронка записи ПРАКТИКИ) — the first open order with a `feature/` branch not yet done, in file order.
+
+- Read the source docs (`TZ_management_dashboard.md`, `DATA_GAP.md`), confirmed the booking funnel had zero instrumentation in `cmpas.ru`, and explored the booking page/actions/ingest pipeline built by earlier orders.
+- Branched `feature/booking-funnel` off `main`, wrote tests first, then implemented:
+  - 5 funnel events (`booking_link_opened` → `…completed`) + `booking_created_by` in `analytics/schema/events.yaml`, reusing the existing `POST /ingest`/`ANALYTICS_INGEST_ENABLED` flag (no new flag).
+  - A `question` field required on every registry event, enforced by `assertEventsHaveQuestions()` (charter §12 rule 3) — retroactively documented on the 8 pre-existing events too, since that's the only way the loader stays self-consistent.
+  - Client-side funnel tracking wired into the booking page, and `booking_created_by` wired into all three real session-creation paths (client bot, specialist web, specialist mobile).
+  - A `?via=max` marker on every MAX booking link (`max-bot.ts`), since MAX has no client-side bridge to detect otherwise.
+- Verified: `npx vitest run` 63/63 green (23 new), `tsc`/`eslint`/`next build` diffed against `main` via `git stash -u` — zero new errors or warnings.
+- Opened [compas-psy/cmpas.ru#92](https://github.com/compas-psy/cmpas.ru/pull/92) (not merged), and marked O-260817-11 **исполнено** in `state/15_ORDERS.md` with the PR link and both surfaced trade-offs documented.
+
+Two follow-on orders (O-260817-12 «Технический пульс» and others) remain open for a future run — per the operating instructions, one finished PR beats two half-done ones, so I stopped here rather than starting a second order.
