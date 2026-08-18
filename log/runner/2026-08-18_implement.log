@@ -14,3 +14,16 @@ Both queued orders are now fully closed with green, tested PRs:
 - Found and logged an unrelated pre-existing test regression (`B-260818-04`) rather than fixing it out-of-scope.
 
 Both orders marked `исполнено` in `state/15_ORDERS.md`, pushed to `compas-ops`. Neither PR was merged, per boundaries. Remaining open orders in the queue are either blocked on missing source documents/tokens or require substantial new scope (SMS provider integration) that needs product/vendor decisions before implementation — good stopping point for this cycle.
+
+---
+
+## Прогон реализации 2026-08-18, сессия 2
+
+**Внеплановая находка перед началом работы по распоряжениям.** При `git checkout` `products/cmpas.ru` в рабочем дереве обнаружен настоящий приватный SSH-ключ (`antigravity_key`/`.pub`, `eliah@Eliah`) и несколько явно посторонних файлов рабочей директории (`_tmp_migrate.sql`, `fix_schema.sql`, `migration.sql`, два файла с мусорными именами) — все закоммичены в `main`. Репозиторий публичный (`gh repo view` → `isPrivate: false`), значит ключ уже скомпрометирован. Дополнительно: коммит, впервые добавивший эти файлы (`bfdc2eeb`, автор `simpas-doctor`, 17.08 13:34 UTC), оказался **корнем всей текущей истории `main`** — история до него не читается (`git rev-list --max-parents=0 HEAD` = только этот коммит, 20 коммитов всего, 579 файлов добавлено разом).
+
+Это подпадает под устав §6.2 (доступы/токены/инциденты — автоматически `/human`) и CLAUDE.md §5.4 (секреты — задача учредителю, не примечание). Заведено:
+- `H-260818-02` в `state/11_HUMAN_QUEUE.md` — отзыв ключа + решение по истории `main`. Очередь временно превышена (6 вместо лимита 5) с явным обоснованием прямо в файле — находка не рутинная, откладывать её ради соблюдения лимита неверно.
+- `B-260818-05` в `state/10_BACKLOG.md` — код-часть (убрать файлы из `HEAD`) + расследование CTO/InfoSec, чем заменена история `main`.
+- PR [`compas-psy/cmpas.ru#106`](https://github.com/compas-psy/cmpas.ru/pull/106), ветка `feature/remove-leaked-secret-and-junk` от актуального `main` — убирает все перечисленные файлы из `HEAD` (не переписывает историю — это необратимо на публичном репозитории и не мой мандат), добавляет в `.gitignore` явные правила для этого ключа и общий паттерн приватных ключей. `npm ci && npx vitest run` — 109/111, два падения те же пре-существующие из `B-260818-04`, не относятся к дифу. Не смёржен.
+
+Дальше в этой сессии — возврат к распоряжениям из `state/15_ORDERS.md` со статусом «в работе»/«принято» и веткой `feature/` в «Как исполнять».
