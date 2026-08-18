@@ -1,20 +1,16 @@
 # Прогон реализации 2026-08-18
 статус шага агента: success
-run id: 32119321718
+run id: 32123813180
 
-Already cleaned up (removed after the verification run). The work for this cycle is complete.
+Both queued orders are now fully closed with green, tested PRs:
 
-## Summary
+**O-260818-01** (свести две ветки с main) — done in the previous part of this session: `feature/reminders-outbox` (cmpas.ru#95) and `feature/booking-funnel` (cmpas.ru#92) both merged forward with `main`, conflicts resolved with reasoning documented, tests green, pushed to the existing PRs.
 
-Executed order `O-260817-09` (legal wrapping of the client booking path), the only open order in `state/15_ORDERS.md` with status "принято"/"в работе" and a `feature/` branch that hadn't already been started by a prior run.
+**O-260818-02** (гигиена сервера) — new PR [cmpas.ru#105](https://github.com/compas-psy/cmpas.ru/pull/105):
+- Investigated the perpetually-restarting `cmpas-singbox` container by actually pulling the real sing-box image and running its config check locally — proved the `mieru` outbound type has never existed in sing-box, so this VPN sidecar could never have worked. Removed it (config template, compose service, deploy-script logic, CI secrets wiring) rather than leaving it crash-looping.
+- Added build-cache/dangling-image cleanup at the start of every deploy and a free-disk-space guard (<10GB stops the deploy cleanly) before the image build.
+- Closed the CI/deploy build divergence structurally: CI's preflight now runs `docker compose build app` — the exact command the server runs — instead of a separate `npm run build` with fake env vars.
+- Verified everything against a live Docker daemon (image builds, compose config, the whole new CI step end-to-end).
+- Found and logged an unrelated pre-existing test regression (`B-260818-04`) rather than fixing it out-of-scope.
 
-**Found the actual bug:** consent for browser/MAX clients (non-Telegram) was completely broken — `checkConsentRequired('', ...)` silently returned an empty consent text, and `saveConsent('')` wrote nothing to the client record (only a garbage `TelegramClient` row keyed on an empty string, overwritten by every anonymous visitor). Fixed by keying consent to a channel-agnostic identity (`{clientId, telegramUserId}`) resolved directly against `DiaryClient`.
-
-**Delivered**, PR [`compas-psy/cmpas.ru#100`](https://github.com/compas-psy/cmpas.ru/pull/100), branch `feature/client-legal`, not merged:
-- Consent tied to the client record, not the channel, plus a server-side gate in `bookSession` (didn't exist before).
-- Consent checkbox no longer links to the Privacy Policy (that's now a separate informational link).
-- New consent text names the psychologist as data operator and КОМПАС as processor-by-instruction (data migration, versioned); profile page warns if the psychologist's name is blank.
-- Working "revoke consent" button on the client's own page — notifies the psychologist, blocks new self-booking until re-consent, preserves history.
-- Point 5 (service vs. marketing messages) confirmed not applicable — no marketing message exists in the codebase to gate.
-
-18 new tests, 58/58 total passing; 0 new TypeScript/ESLint errors vs. `main`; `next build` clean; migration verified idempotent against a real Postgres. Updated and pushed `state/15_ORDERS.md` and the runner log to `compas-ops` main. Did not merge or deploy anything.
+Both orders marked `исполнено` in `state/15_ORDERS.md`, pushed to `compas-ops`. Neither PR was merged, per boundaries. Remaining open orders in the queue are either blocked on missing source documents/tokens or require substantial new scope (SMS provider integration) that needs product/vendor decisions before implementation — good stopping point for this cycle.
