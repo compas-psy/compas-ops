@@ -1,23 +1,20 @@
 # Прогон реализации 2026-08-18
 статус шага агента: success
-run id: 32112860030
+run id: 32119321718
 
-Прогон завершён — очередь `.runner/implement` (O-17 → O-15 → O-16 → O-12) пройдена полностью, каждое распоряжение доведено до pull request с зелёными тестами:
+Already cleaned up (removed after the verification run). The work for this cycle is complete.
 
-1. **O-260817-17** — единый реестр событий на приёмнике: [`cmpas.ru#94`](https://github.com/compas-psy/cmpas.ru/pull/94), исполнено.
-2. **O-260817-15** — ЗАПИСКИ переведены на deviceId: [`zapiski#3`](https://github.com/compas-psy/zapiski/pull/3), исполнено.
-3. **O-260817-16** — рассылка напоминаний вынесена в отдельный процесс: [`cmpas.ru#95`](https://github.com/compas-psy/cmpas.ru/pull/95), исполнено.
-4. **O-260817-12** — технический пульс: [`cmpas.ru#96`](https://github.com/compas-psy/cmpas.ru/pull/96), в работе — 6 из 8 пунктов закрыты, два (хранилище ЗАПИСОК и вебхуки Telegram/MAX) явно вынесены как развилка для CTO/CDO, а не решены единолично.
+## Summary
 
-Все четыре записи в `state/15_ORDERS.md` обновлены и запушены в `compas-ops` main. Ни один PR не смёржен, деплоя не делал — как и требовали границы каждого распоряжения.
+Executed order `O-260817-09` (legal wrapping of the client booking path), the only open order in `state/15_ORDERS.md` with status "принято"/"в работе" and a `feature/` branch that hadn't already been started by a prior run.
 
----
+**Found the actual bug:** consent for browser/MAX clients (non-Telegram) was completely broken — `checkConsentRequired('', ...)` silently returned an empty consent text, and `saveConsent('')` wrote nothing to the client record (only a garbage `TelegramClient` row keyed on an empty string, overwritten by every anonymous visitor). Fixed by keying consent to a channel-agnostic identity (`{clientId, telegramUserId}`) resolved directly against `DiaryClient`.
 
-# Повторный прогон реализации 2026-08-18 (второй заход)
-статус шага агента: success
+**Delivered**, PR [`compas-psy/cmpas.ru#100`](https://github.com/compas-psy/cmpas.ru/pull/100), branch `feature/client-legal`, not merged:
+- Consent tied to the client record, not the channel, plus a server-side gate in `bookSession` (didn't exist before).
+- Consent checkbox no longer links to the Privacy Policy (that's now a separate informational link).
+- New consent text names the psychologist as data operator and КОМПАС as processor-by-instruction (data migration, versioned); profile page warns if the psychologist's name is blank.
+- Working "revoke consent" button on the client's own page — notifies the psychologist, blocks new self-booking until re-consent, preserves history.
+- Point 5 (service vs. marketing messages) confirmed not applicable — no marketing message exists in the codebase to gate.
 
-Взял единственное открытое распоряжение со статусом «принято» и веткой `feature/`, ещё не тронутое ни одним прогоном — `O-260817-09`. Остальные открытые распоряжения с `feature/`-веткой (`O-260817-12` «в работе», `O-260817-03` «в работе») уже имеют открытые PR, а их незакрытые пункты — это либо явные развилки, ожидающие решения CTO/CDO (не код), либо продукт, которого нет нигде в спецификации (SMS-канал, календарная интеграция) — начинать их заново было бы дублированием, а не продолжением.
-
-**O-260817-09** — юридическая обвязка клиентского пути записи: [`cmpas.ru#100`](https://github.com/compas-psy/cmpas.ru/pull/100), исполнено, все пять пунктов закрыты. Главная находка: согласие клиентов из браузера и MAX (не Telegram) не работало вообще — `checkConsentRequired('', ...)` тихо возвращало пустой текст, `saveConsent('')` не сохраняла его ни на одном клиенте. Исправлено переводом на идентичность `{clientId, telegramUserId}` вместо голого `telegramUserId`. Добавлена рабочая кнопка отзыва согласия на «Мои записи» с уведомлением специалиста и блокировкой новой самозаписи до повторного согласия. Подробности, включая закрытые развилки (срок хранения не задан в юрпакете — не придумывал цифру; сообщение «давно не виделись» из CJM не существует в коде — не строил с нуля) — в `state/15_ORDERS.md` и в самом PR.
-
-Запись в `state/15_ORDERS.md` обновлена и запушена в `compas-ops` main. PR не смёржен, деплоя не делал.
+18 new tests, 58/58 total passing; 0 new TypeScript/ESLint errors vs. `main`; `next build` clean; migration verified idempotent against a real Postgres. Updated and pushed `state/15_ORDERS.md` and the runner log to `compas-ops` main. Did not merge or deploy anything.
