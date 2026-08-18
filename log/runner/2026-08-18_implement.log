@@ -1,37 +1,14 @@
 # Прогон реализации 2026-08-18
 статус шага агента: success
-run id: 32110499649
+run id: 32110745887
 
-Done. Summary of this run:
+Прогон завершён.
 
-**Executed order O-260817-11** (воронка записи ПРАКТИКИ) — the first open order with a `feature/` branch not yet done, in file order.
+**Исполнено O-260817-13** («Приём событий без аккаунта: устройство как носитель личности») — первое открытое распоряжение с веткой `feature/`, по порядку в файле (O-14 и O-15 шли следом, но явно ждали именно этого).
 
-- Read the source docs (`TZ_management_dashboard.md`, `DATA_GAP.md`), confirmed the booking funnel had zero instrumentation in `cmpas.ru`, and explored the booking page/actions/ingest pipeline built by earlier orders.
-- Branched `feature/booking-funnel` off `main`, wrote tests first, then implemented:
-  - 5 funnel events (`booking_link_opened` → `…completed`) + `booking_created_by` in `analytics/schema/events.yaml`, reusing the existing `POST /ingest`/`ANALYTICS_INGEST_ENABLED` flag (no new flag).
-  - A `question` field required on every registry event, enforced by `assertEventsHaveQuestions()` (charter §12 rule 3) — retroactively documented on the 8 pre-existing events too, since that's the only way the loader stays self-consistent.
-  - Client-side funnel tracking wired into the booking page, and `booking_created_by` wired into all three real session-creation paths (client bot, specialist web, specialist mobile).
-  - A `?via=max` marker on every MAX booking link (`max-bot.ts`), since MAX has no client-side bridge to detect otherwise.
-- Verified: `npx vitest run` 63/63 green (23 new), `tsc`/`eslint`/`next build` diffed against `main` via `git stash -u` — zero new errors or warnings.
-- Opened [compas-psy/cmpas.ru#92](https://github.com/compas-psy/cmpas.ru/pull/92) (not merged), and marked O-260817-11 **исполнено** in `state/15_ORDERS.md` with the PR link and both surfaced trade-offs documented.
+- Ветка `feature/ingest-anonymous` в `cmpas.ru`, pull request [`compas-psy/cmpas.ru#93`](https://github.com/compas-psy/cmpas.ru/pull/93), не смёржен.
+- `POST /ingest` теперь принимает `device_id` вместо `account_id`; согласие устройства — отдельная модель `AnalyticsDeviceConsent`, независимая от согласия аккаунта; `identity_linked` не переписывает прошлые строки (пошёл по уже готовому аккаунтному пути без изменений); добавлен рейт-лимит по `device_id`. Миграция только расширяющая (nullable-колонка + новая таблица).
+- Тесты: `npx vitest run` 46/46 (было 40), `eslint`/`tsc`/`next build` сверены с `main`, миграция накатана на чистый Postgres в Docker.
+- `state/15_ORDERS.md` обновлён — распоряжение отмечено исполненным со ссылкой на PR; `.runner/implement` и лог прогона указывают, что следующими по очереди идут O-14, O-15 (теперь разблокированы), O-16, O-12, O-09.
 
-Two follow-on orders (O-260817-12 «Технический пульс» and others) remain open for a future run — per the operating instructions, one finished PR beats two half-done ones, so I stopped here rather than starting a second order.
-
----
-
-# Прогон реализации 2026-08-18, второй заход
-
-**Executed order O-260817-13** (приём событий без аккаунта: устройство как носитель личности) — the first open order with a `feature/` branch not yet done, in file order (`O-260817-14`/`-15` were next but explicitly wait on this one).
-
-- Read `product/dashboard/DATA_GAP.md` §2, then the existing `POST /ingest` pipeline in `cmpas.ru` (`src/app/api/ingest/route.ts`, `src/lib/analytics/{ingest,schema}.ts`) built by the Ф0/Ф1 order.
-- Branched `feature/ingest-anonymous` off `main`, wrote tests first, then implemented:
-  - `validateEvent` now requires at least one of `account_id`/`device_id`, not `account_id` unconditionally.
-  - New `AnalyticsDeviceConsent` model (independent of `User.analyticsConsentAt`) gates device-only events; without consent nothing is written at all (there's no account to fall back to, unlike the account path which just strips `device_id`).
-  - `identity_linked` needed no code change — it already goes through the existing account path, which naturally satisfies "past rows aren't rewritten."
-  - New `src/lib/analytics/rate-limit.ts`, an in-memory sliding-window flood guard keyed by `device_id`, shared by both paths; over the limit, nothing is written to `events` or `events_rejected`.
-  - Migration `20260818090000_ingest_anonymous`: `events.accountId` NOT NULL → nullable, plus the new table. Loosening-only.
-- Verified: `npx vitest run` 46/46 green (6 new cases in `tests/analytics-ingest.test.ts`), `eslint`/`tsc --noEmit` diffed against `main` via `git stash -u` — zero new errors beyond one `TS2352` of the same kind already present elsewhere in the repo's Prisma test mocks, `next build` clean. Migration applied to a throwaway Postgres 15 in Docker (`prisma db push` + empty `migrate diff`, plus the migration SQL itself replayed on a minimal `events` stand-in — old row untouched, new `accountId = NULL` row inserts).
-- Noted, not mine to fix: `prisma migrate deploy` across the full migration history fails on an unrelated pre-existing migration (`20260118_add_orders` → `relation "VisitorAnalytics" does not exist`) — the same migration-journal breakage `O-260817-12` already exists to address.
-- Opened [compas-psy/cmpas.ru#93](https://github.com/compas-psy/cmpas.ru/pull/93) (not merged), and marked O-260817-13 **исполнено** in `state/15_ORDERS.md` with the PR link.
-
-`O-260817-14`/`O-260817-15` are now unblocked for a future run; stopped here per "one finished PR beats two half-done ones."
+Не мержил, не выкатывал. Второе распоряжение в этом прогоне не начинал — по инструкции один законченный PR лучше двух наполовину.
