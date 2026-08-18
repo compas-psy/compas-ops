@@ -1,14 +1,9 @@
 # Прогон реализации 2026-08-18
 статус шага агента: success
-run id: 32110745887
+run id: 32111907193
 
-Прогон завершён.
+Done for this run.
 
-**Исполнено O-260817-13** («Приём событий без аккаунта: устройство как носитель личности») — первое открытое распоряжение с веткой `feature/`, по порядку в файле (O-14 и O-15 шли следом, но явно ждали именно этого).
+**Summary:** Executed order `O-260817-14` (МОМЕНТЫ: довезти события до приёмника) — implemented `AnalyticsTransport` in `compas-voice`, which delivers the queued analytics events to the existing `cmpas.ru` `POST /ingest` endpoint in per-flush chunks with exponential backoff on failure, gated by consent (revoke wipes the queue immediately) and by a new `analyticsTransportEnabled` flag (off by default). Also fixed a pre-existing bug (`product: "momenty"` → `"moments"`) that would have made every event get rejected server-side. 28/28 unit tests green, `assembleDebug` builds clean. Opened [`compas-psy/compas-voice#3`](https://github.com/compas-psy/compas-voice/pull/3) (not merged, per boundary). Discovered that `cmpas.ru`'s central event registry doesn't yet recognize MOMENTY's event names at all — logged as `B-260818-03` in the backlog since fixing it is a separate repo/PR. Order marked исполнено in `state/15_ORDERS.md`, both files pushed to `compas-ops` main.
 
-- Ветка `feature/ingest-anonymous` в `cmpas.ru`, pull request [`compas-psy/cmpas.ru#93`](https://github.com/compas-psy/cmpas.ru/pull/93), не смёржен.
-- `POST /ingest` теперь принимает `device_id` вместо `account_id`; согласие устройства — отдельная модель `AnalyticsDeviceConsent`, независимая от согласия аккаунта; `identity_linked` не переписывает прошлые строки (пошёл по уже готовому аккаунтному пути без изменений); добавлен рейт-лимит по `device_id`. Миграция только расширяющая (nullable-колонка + новая таблица).
-- Тесты: `npx vitest run` 46/46 (было 40), `eslint`/`tsc`/`next build` сверены с `main`, миграция накатана на чистый Postgres в Docker.
-- `state/15_ORDERS.md` обновлён — распоряжение отмечено исполненным со ссылкой на PR; `.runner/implement` и лог прогона указывают, что следующими по очереди идут O-14, O-15 (теперь разблокированы), O-16, O-12, O-09.
-
-Не мержил, не выкатывал. Второе распоряжение в этом прогоне не начинал — по инструкции один законченный PR лучше двух наполовину.
+Next candidate in the queue (по порядку, ещё не тронуто): `O-260817-15` (ЗАПИСКИ: `feature/analytics-device-id`).
