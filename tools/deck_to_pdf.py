@@ -35,16 +35,28 @@ import tempfile
 import time
 import urllib.request
 
-# Порядок поиска браузера продиктован опытом, а не вкусом.
+# Порядок поиска браузера продиктован опытом, а не вкусом — пересмотрен 21.08.2026
+# (диагноз D-260815-01..D-260820-09 был неверным, см. ниже).
 #
-# Сначала чистый Chromium, потом сборки Playwright, и только в последнюю
-# очередь google-chrome. Причина: предустановленный на раннерах GitHub
-# google-chrome печатать PDF отказывается. Он запускается, отчитывается в лог
-# про отсутствие dbus и попытки регистрации в GCM, после чего замолкает и не
-# создаёт файл — ни за 60 секунд, ни за 90. Тот же дек тот же код печатает
-# Chromium за секунду. Перебор флагов (виртуальное время, композитор, keyring,
-# краш-репортер, отключение фоновой сети) ничего не изменил, поэтому вместо
-# борьбы с чужой сборкой берём ту, которая работает.
+# Прежний диагноз («chromium печатает, google-chrome — нет») не пережил проверки:
+# 21.08.2026 полная сборка Chromium из кэша Playwright (chrome-linux64/chrome,
+# тот же движок, что и /usr/bin/chromium — обе версии 151.0.7922.x) зависала
+# на печати ровно так же, как google-chrome — до таймаута, без файла на выходе.
+# А вот отдельная headless-only сборка Playwright (chromium_headless_shell,
+# бинарь chrome-headless-shell) печатает тот же дек за секунды и без единой
+# строки про dbus/UPower/GCM в логе. Дело не в бренде (Chromium vs Chrome), а
+# в типе сборки: полный браузер тянет профиль, синхронизацию и push-регистрацию
+# (GCM) даже с --disable-sync/--disable-background-networking, headless-shell
+# этого стека не имеет вовсе — поэтому предпочитаем её, если она есть.
+BROWSER_GLOBS_HEADLESS_SHELL = [
+    "/opt/pw-browsers/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell",
+    "/opt/pw-browsers/chromium_headless_shell-*/chrome-linux/headless_shell",
+    os.path.expanduser("~/.cache/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell"),
+    os.path.expanduser("~/.cache/ms-playwright/chromium_headless_shell-*/chrome-linux*/headless_shell"),
+    "/root/.cache/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell",
+    "/root/.cache/ms-playwright/chromium_headless_shell-*/chrome-linux*/headless_shell",
+]
+
 BROWSER_CANDIDATES_PREFERRED = [
     "chromium",
     "chromium-browser",
@@ -56,12 +68,14 @@ BROWSER_CANDIDATES_FALLBACK = [
     "chrome",
 ]
 
-# Playwright кладёт браузеры не в PATH, а в свой каталог.
+# Playwright кладёт полные сборки не в PATH, а в свой каталог. Используются
+# только если headless-shell выше не нашлась — полная сборка рискует
+# зависнуть на печати (см. диагноз выше).
 BROWSER_GLOBS = [
+    "/opt/pw-browsers/chromium-*/chrome-linux64/chrome",
     "/opt/pw-browsers/chromium-*/chrome-linux/chrome",
-    "/opt/pw-browsers/chromium_headless_shell-*/chrome-linux/headless_shell",
+    os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome"),
     os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome"),
-    os.path.expanduser("~/.cache/ms-playwright/chromium_headless_shell-*/chrome-linux*/headless_shell"),
     "/root/.cache/ms-playwright/chromium-*/chrome-linux*/chrome",
     "/usr/lib/chromium/chromium",
 ]
@@ -82,11 +96,16 @@ class RenderError(Exception):
 
 
 def find_browser(explicit=None):
-    """Ищем движок: явный путь → PATH → каталоги Playwright."""
+    """Ищем движок: явный путь → headless-shell Playwright → PATH → полная сборка → фолбэк."""
     if explicit:
         if os.path.isfile(explicit) and os.access(explicit, os.X_OK):
             return explicit
         raise RenderError("указанный браузер не найден или не исполняем: %s" % explicit)
+
+    for pattern in BROWSER_GLOBS_HEADLESS_SHELL:
+        matches = sorted(glob.glob(pattern))
+        if matches:
+            return matches[-1]  # свежая версия, если их несколько
 
     for name in BROWSER_CANDIDATES_PREFERRED:
         found = shutil.which(name)
