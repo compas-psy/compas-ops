@@ -151,7 +151,7 @@
 | North Star | Недельные практикующие: число пользователей с ≥1 завершённой практикой за календарную неделю |
 | Контр-метрика | Доля незавершённых практик (запустил и бросил) — растёт при плохом подборе контента |
 | Воронка | Установка → открытие → выбор практики → первая завершённая практика → возврат на 2-й день → возврат на 2-й неделе |
-| Ключевые события | `install`, `first_open`, `practice_started`, `practice_completed`, `practice_abandoned`, `content_saved`, `notification_opt_in` |
+| Ключевые события | `app_installed`, `first_open`, `practice_opened`, `practice_started`, `practice_finished`, `content_saved`, `notification_opt_in`, `identity_linked`, `crossed_to_product` (девять событий, `product/moments/D0_TRACKING_PLAN.md`, принят CDO `D-260824-03`; отдельного `practice_abandoned` нет — брошенность считается полем `completion_pct` события `practice_finished`) |
 | Активация | ≥1 завершённая практика в первые 24 часа после установки (§3.4) |
 
 Целевые значения:
