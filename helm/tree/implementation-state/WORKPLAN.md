@@ -30,7 +30,11 @@
 - [ ] Docker
 - [ ] Caddy + TLS
 - [x] B7 подтверждён владельцем — доступ к консоли/rescue хостера есть
-- [ ] отключение password-login и root SSH (в процессе)
+- [x] password-login и root SSH отключены (`10-helm-hardening.conf`, reload проверен свежим подключением)
+- [ ] firewall (22/80/443)
+- [ ] bounded journald logs
+- [ ] Docker
+- [ ] Caddy + TLS
 
 ## Известные отклонения от live-server-first (ADR-017)
 
