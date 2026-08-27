@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-08-27T21:16:24Z",
+  "updated_at": "2026-08-28T00:35:00Z",
   "phase": "P1",
-  "task": "host-hardening",
+  "task": "ssh-hardening",
   "worker": "orchestrator",
   "model": "claude-sonnet-5",
   "status": "in_progress",
@@ -13,13 +13,7 @@
     "timezone_before": "Etc/UTC",
     "timezone_target": "Europe/Moscow"
   },
-  "blockers": [
-    {
-      "id": "B7",
-      "description": "Подтверждение доступа к консоли хостера (VNC/rescue) до отключения password-login",
-      "gates": "P1 финальный под-шаг: disable password auth"
-    }
-  ],
+  "blockers": [],
   "open_findings": [
     {
       "id": "F-260827-01",

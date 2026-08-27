@@ -23,13 +23,14 @@
 - [ ] Спека `HELM_FINAL_v3.3_2026-08-27.md` в `/root/helm-bootstrap` — не подтверждена; не блокирует
 - [ ] OS update
 - [ ] Timezone → Europe/Moscow
-- [ ] Каталоги §5, не унесённые git (skills/, prompts/, hermes/, n8n/exports/, config/models/)
-- [ ] `/opt/helm-state/*`, `/etc/helm/{secrets,ssh,backup}` (0700)
-- [ ] admin-пользователь + ключ + **проверка второго независимого входа**
+- [x] Каталоги §5 созданы
+- [x] `/opt/helm-state/*`, `/etc/helm/{secrets,ssh,backup}` (0700)
+- [x] admin-пользователь `helm` + ключ + **второй независимый вход подтверждён** (`helm` → `sudo` → `root`)
 - [ ] firewall (22/80/443)
 - [ ] Docker
 - [ ] Caddy + TLS
-- [ ] отключение password-login — **гейт B7**: подтверждён ли доступ к консоли хостера?
+- [x] B7 подтверждён владельцем — доступ к консоли/rescue хостера есть
+- [ ] отключение password-login и root SSH (в процессе)
 
 ## Известные отклонения от live-server-first (ADR-017)
 
