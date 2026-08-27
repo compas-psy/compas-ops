@@ -1,0 +1,27 @@
+/* СИМПАС — Radius & spacing tokens
+ * iOS-style soft rounding. Radii scale generously (8 → 24px); pills for chips/avatars.
+ * Spacing follows a 4px base (Tailwind scale) as used throughout the product.
+ */
+:root {
+  --radius-sm: 8px;    /* small chips, badges pill uses --radius-full */
+  --radius-md: 12px;   /* inputs, small cards */
+  --radius-lg: 16px;   /* buttons, cards */
+  --radius-xl: 20px;   /* dashboard cards, modals */
+  --radius-2xl: 24px;  /* large panels, hero mockups */
+  --radius-full: 999px;/* pills, avatars, toggles */
+
+  /* Spacing scale (4px base) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* Layout */
+  --container-max: 1240px;
+  --sidebar-width: 240px;
+}

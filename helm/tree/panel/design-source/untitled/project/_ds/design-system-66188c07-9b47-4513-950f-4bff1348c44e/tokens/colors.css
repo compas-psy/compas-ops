@@ -1,0 +1,68 @@
+/* СИМПАС — Color tokens
+ * Palette source: cmpas.ru src/app/globals.css (@theme).
+ * Forest greens + sage surfaces + warm gold accent on a milky cream ground.
+ * A calm, professional, "here you can be yourself" identity for helping specialists.
+ */
+:root {
+  /* ── Forest Greens — sidebar, primary, deep brand ── */
+  --forest-900: #143D2F;
+  --forest-800: #1D4735;
+  --forest-700: #285B46;
+  --forest-600: #2F6A52;
+  --forest-500: #3B8F5A;
+
+  /* ── Sage — soft milky-green surfaces ── */
+  --sage-50:  #F6FAF6;
+  --sage-100: #EEF4EF;
+  --sage-150: #E7F0EA;
+  --sage-200: #DDE9E1;
+  --sage-300: #C7D8CD;
+
+  /* ── Gold accent — warm, premium, "important action" ── */
+  --gold-500: #CC9E50;
+  --gold-400: #D8AE67;
+
+  /* ── Ink / neutrals ── */
+  --ink-900:  #142018; /* foreground text */
+  --ink-500:  #5F6C64; /* muted foreground */
+  --cream:    #F7F8F4; /* app background */
+  --white:    #ffffff;
+
+  /* ── Semantic aliases (roles) ── */
+  --primary: var(--forest-800);
+  --primary-foreground: var(--white);
+  --background: var(--cream);
+  --foreground: var(--ink-900);
+  --card: var(--white);
+  --card-foreground: var(--ink-900);
+  --popover: var(--white);
+  --popover-foreground: var(--ink-900);
+  --muted: #F2F4EF;
+  --muted-foreground: var(--ink-500);
+  --secondary: #F2F4EF;
+  --secondary-foreground: var(--ink-900);
+  --accent: var(--gold-500);
+  --accent-foreground: var(--white);
+  --border: #E4E9E3;
+  --input: var(--white);
+  --ring: var(--forest-700);
+  --destructive: #E35D4F;
+  --destructive-foreground: var(--white);
+
+  /* ── Status / soft-tint pairs (badges, calendar chips) ── */
+  --blue-soft: #EAF2FF;    --blue-500: #3B82F6;
+  --violet-soft: #F2ECFF;  --violet-500: #8B5CF6;
+  --orange-soft: #FFF2E8;  --orange-500: #F08A24;
+  --red-soft: #FFF0EE;     --red-500: #E35D4F;
+  --success-soft: #EAF7EE; --success-500: #3B8F5A;
+  --amber-soft: #FBF3E3;   --amber-500: #CC9E50;
+
+  /* ── Sidebar (dark forest surface) ── */
+  --sidebar: var(--forest-800);
+  --sidebar-foreground: var(--sage-50);
+  --sidebar-active: rgba(246, 250, 246, 0.15);
+  --sidebar-active-foreground: var(--white);
+  --sidebar-hover: rgba(255, 255, 255, 0.08);
+  --sidebar-muted: rgba(255, 255, 255, 0.5);
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+}

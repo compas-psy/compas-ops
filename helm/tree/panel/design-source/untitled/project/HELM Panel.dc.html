@@ -1,0 +1,1874 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/design-system-66188c07-9b47-4513-950f-4bff1348c44e/tokens/fonts.css">
+<link rel="stylesheet" href="_ds/design-system-66188c07-9b47-4513-950f-4bff1348c44e/tokens/colors.css">
+<link rel="stylesheet" href="_ds/design-system-66188c07-9b47-4513-950f-4bff1348c44e/tokens/typography.css">
+<link rel="stylesheet" href="_ds/design-system-66188c07-9b47-4513-950f-4bff1348c44e/tokens/radius.css">
+<link rel="stylesheet" href="_ds/design-system-66188c07-9b47-4513-950f-4bff1348c44e/tokens/shadows.css">
+<link rel="stylesheet" href="_ds/design-system-66188c07-9b47-4513-950f-4bff1348c44e/tokens/services.css">
+<link rel="stylesheet" href="_ds/design-system-66188c07-9b47-4513-950f-4bff1348c44e/tokens/base.css">
+<link rel="stylesheet" href="_ds/design-system-66188c07-9b47-4513-950f-4bff1348c44e/styles.css">
+<script src="_ds/design-system-66188c07-9b47-4513-950f-4bff1348c44e/_ds_bundle.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { background: #E8EBE6; }
+  a { color: inherit; }
+  a:hover { color: inherit; }
+  *::-webkit-scrollbar { width: 6px; height: 6px; }
+  *::-webkit-scrollbar-thumb { background: rgba(20,32,24,.16); border-radius: 3px; }
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;gap:16px;padding:24px 20px 48px;font-family:var(--font-sans);box-sizing:border-box">
+
+  <sc-if value="{{ showHarness }}" hint-placeholder-val="{{ true }}">
+    <div style="width:100%;max-width:1180px;display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding:12px 14px;background:#fff;border:1px solid #E4E9E3;border-radius:16px;box-sizing:border-box">
+      <div style="display:flex;flex-direction:column;gap:2px;margin-right:auto">
+        <div style="font-size:13px;font-weight:700;color:#142018;letter-spacing:.02em">HELM Panel</div>
+        <div style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#8A9490">прототип · режим operate</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#8A9490">Состояние</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          <sc-for list="{{ scenarios }}" as="s" hint-placeholder-count="5">
+            <button onClick="{{ s.onPick }}" style="{{ s.style }}">{{ s.label }}</button>
+          </sc-for>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#8A9490">Раскладка</div>
+        <div style="display:flex;gap:6px">
+          <sc-for list="{{ devices }}" as="d" hint-placeholder-count="2">
+            <button onClick="{{ d.onPick }}" style="{{ d.style }}">{{ d.label }}</button>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <div style="{{ frameStyle }}">
+
+    <sc-if value="{{ isPhone }}" hint-placeholder-val="{{ true }}">
+      <div style="position:absolute;top:0;left:0;right:0;height:44px;display:flex;align-items:flex-end;justify-content:space-between;padding:0 26px 6px;font-family:var(--font-mono,ui-monospace);font-size:13px;font-weight:500;color:var(--h-ink,#142018);z-index:5;pointer-events:none">
+        <span>{{ now }}</span>
+        <span style="color:var(--h-mut,#5F6C64)">5G · 84%</span>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ showAuth }}" hint-placeholder-val="{{ false }}">
+      <div style="{{ authStyle }}">
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div style="font-family:var(--font-mono,ui-monospace);font-size:13px;font-weight:500;letter-spacing:.22em;color:var(--h-acc,#1D4735)">HELM</div>
+          <div style="font-size:20px;font-weight:700;color:var(--h-ink,#142018);letter-spacing:-.02em">Пульт системы</div>
+          <div style="font-size:13px;color:var(--h-mut,#5F6C64);max-width:300px;line-height:1.5">{{ auth.hint }}</div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:10px;width:100%;max-width:320px">
+          <sc-if value="{{ auth.isTg }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <x-import component-from-global-scope="DesignSystem_66188c.Button" block="{{ true }}" style="{{ accBtn }}" onClick="{{ auth.onTelegram }}" hint-size="100%,44px">Войти через Telegram</x-import>
+              <div style="font-size:13px;color:var(--h-mut,#5F6C64);text-align:center">Проверяется owner id. Другие аккаунты не пройдут.</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ auth.isPasskey }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:14px">
+                <span style="font-size:13px;color:var(--h-mut,#5F6C64)">Telegram</span>
+                <span style="font-size:13px;font-weight:500;color:var(--h-ok,#3B8F5A)">owner подтверждён</span>
+              </div>
+              <x-import component-from-global-scope="DesignSystem_66188c.Button" block="{{ true }}" style="{{ accBtn }}" onClick="{{ auth.onPasskey }}" hint-size="100%,44px">Подтвердить passkey</x-import>
+              <div style="font-size:13px;color:var(--h-mut,#5F6C64);text-align:center">Второй фактор обязателен. Сессия 24 часа, одно устройство.</div>
+              <button onClick="{{ auth.onFail }}" style="background:none;border:none;padding:6px;font-family:var(--font-sans);font-size:13px;color:var(--h-mut,#5F6C64);text-decoration:underline;cursor:pointer">Показать неудачный вход</button>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ auth.err }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:12px 14px;background:var(--h-crit-soft,#FBEDEB);border:1px solid var(--h-crit,#C4453A);border-radius:14px;display:flex;flex-direction:column;gap:6px">
+              <div style="font-size:15px;font-weight:700;color:var(--h-crit,#C4453A)">Вход не выполнен</div>
+              <div style="font-size:13px;color:var(--h-ink,#142018);line-height:1.5">Passkey не подтверждён на этом устройстве. Активная сессия остаётся на прежнем устройстве. Попытка записана в журнал.</div>
+              <button onClick="{{ auth.onRetry }}" style="align-self:flex-start;background:none;border:none;padding:4px 0;font-family:var(--font-sans);font-size:13px;font-weight:500;color:var(--h-acc,#1D4735);text-decoration:underline;cursor:pointer">Попробовать снова</button>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ showApp }}" hint-placeholder-val="{{ true }}">
+      <div style="{{ stageStyle }}">
+
+        <sc-if value="{{ isLaptop }}" hint-placeholder-val="{{ false }}">
+          <div style="width:212px;flex:none;display:flex;flex-direction:column;gap:2px;padding:18px 12px;background:var(--h-card,#fff);border-right:1px solid var(--h-border,#E4E9E3);box-sizing:border-box">
+            <div style="font-family:var(--font-mono,ui-monospace);font-size:13px;font-weight:500;letter-spacing:.22em;color:var(--h-acc,#1D4735);padding:0 10px 16px">HELM</div>
+            <sc-for list="{{ nav }}" as="n" hint-placeholder-count="5">
+              <button onClick="{{ n.onPick }}" style="{{ n.railStyle }}">
+                <span>{{ n.label }}</span>
+                <span style="{{ n.countStyle }}">{{ n.count }}</span>
+              </button>
+            </sc-for>
+            <div style="margin-top:auto;padding:10px;font-size:13px;color:var(--h-faint,#8A9490);line-height:1.5">{{ sessionNote }}</div>
+          </div>
+        </sc-if>
+
+        <div style="flex:1;min-width:0;min-height:0;height:100%;display:flex;flex-direction:column;background:var(--h-bg,#F7F8F4)">
+
+          <div style="{{ headerStyle }}">
+            <div style="font-size:20px;font-weight:700;letter-spacing:-.02em;color:var(--h-ink,#142018)">{{ title }}</div>
+            <button onClick="{{ clock.onToggle }}" style="background:none;border:none;padding:4px 0;font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);cursor:pointer">{{ clock.label }}</button>
+          </div>
+
+          <div style="{{ contentStyle }}">
+
+            <sc-if value="{{ stale }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:6px;padding:12px 14px;background:var(--h-warn-soft,#FBF1E4);border:1px solid var(--h-warn,#C97A16);border-radius:14px">
+                <div style="font-size:15px;font-weight:700;color:var(--h-warn,#C97A16)">Control Plane не отвечает</div>
+                <div style="font-size:13px;color:var(--h-ink,#142018);line-height:1.5">Показан последний снимок: данные от 07:12, 5 ч 29 мин назад. Записывающие действия недоступны.</div>
+                <button onClick="{{ onGuardian }}" style="align-self:flex-start;background:none;border:none;padding:4px 0;font-family:var(--font-sans);font-size:13px;font-weight:500;color:var(--h-acc,#1D4735);text-decoration:underline;cursor:pointer">Статус Guardian</button>
+              </div>
+            </sc-if>
+
+            <!-- ── СЕГОДНЯ ── -->
+            <sc-if value="{{ isToday }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;flex-direction:column;gap:10px">
+
+                <div style="{{ status.style }}">
+                  <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+                    <span style="font-size:20px;font-weight:700;letter-spacing:-.02em">{{ status.word }}</span>
+                    <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;opacity:.75">{{ status.since }}</span>
+                  </div>
+                  <sc-if value="{{ status.reason }}" hint-placeholder-val="{{ true }}">
+                    <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
+                      <div style="font-size:13px;line-height:1.5">{{ status.reason }}</div>
+                      <button onClick="{{ status.onLink }}" style="align-self:flex-start;background:none;border:none;padding:4px 0;font-family:var(--font-sans);font-size:13px;font-weight:700;color:inherit;text-decoration:underline;cursor:pointer">{{ status.link }}</button>
+                    </div>
+                  </sc-if>
+                </div>
+
+                <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:16px;padding:12px">
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                    <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Ждут вас</span>
+                    <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;font-weight:500;color:var(--h-ink,#142018)">{{ pendingCount }}</span>
+                  </div>
+                  <sc-if value="{{ hasPending }}" hint-placeholder-val="{{ true }}">
+                    <div style="display:flex;flex-direction:column">
+                      <sc-for list="{{ todayApprovals }}" as="a" hint-placeholder-count="3">
+                        <div style="{{ a.rowStyle }}">
+                          <button onClick="{{ a.onOpen }}" style="display:flex;flex-direction:column;gap:2px;width:100%;background:none;border:none;padding:0;text-align:left;font-family:var(--font-sans);cursor:pointer">
+                            <span style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;width:100%">
+                              <span style="font-size:15px;font-weight:500;color:var(--h-ink,#142018);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ a.title }}</span>
+                              <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);white-space:nowrap">{{ a.dueShort }}</span>
+                            </span>
+                            <span style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;width:100%">
+                              <span style="font-size:13px;color:var(--h-mut,#5F6C64);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ a.gist }}</span>
+                              <span style="font-size:13px;font-weight:500;color:var(--h-acc,#1D4735);white-space:nowrap">Открыть</span>
+                            </span>
+                          </button>
+                          <sc-if value="{{ a.inline }}" hint-placeholder-val="{{ false }}">
+                            <div style="display:flex;gap:8px;margin-top:8px">
+                              <x-import component-from-global-scope="DesignSystem_66188c.Button" size="sm" style="{{ accBtn }}" disabled="{{ a.locked }}" onClick="{{ a.onApprove }}" hint-size="auto,36px">Одобрить</x-import>
+                              <x-import component-from-global-scope="DesignSystem_66188c.Button" size="sm" variant="secondary" disabled="{{ a.locked }}" onClick="{{ a.onReject }}" hint-size="auto,36px">Отклонить</x-import>
+                            </div>
+                          </sc-if>
+                          <sc-if value="{{ a.result }}" hint-placeholder-val="{{ false }}">
+                            <div style="{{ a.result.style }}">{{ a.result.text }}</div>
+                          </sc-if>
+                        </div>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ noPending }}" hint-placeholder-val="{{ false }}">
+                    <div style="font-size:15px;color:var(--h-mut,#5F6C64);padding:8px 0 2px">Нет ожидающих одобрений</div>
+                  </sc-if>
+                </div>
+
+                <button onClick="{{ onMoney }}" style="display:flex;flex-direction:column;gap:4px;background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:16px;padding:12px;text-align:left;font-family:var(--font-sans);cursor:pointer">
+                  <span style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;width:100%">
+                    <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Деньги сегодня</span>
+                    <span style="font-family:var(--font-mono,ui-monospace);font-size:15px;font-weight:500;color:var(--h-ink,#142018);white-space:nowrap">{{ money.todayLine }}</span>
+                  </span>
+                  <sc-if value="{{ money.expensive }}" hint-placeholder-val="{{ true }}">
+                    <span style="font-size:13px;color:var(--h-mut,#5F6C64);line-height:1.4">{{ money.expensive }}</span>
+                  </sc-if>
+                </button>
+
+                <button onClick="{{ tasksSummary.onOpen }}" style="display:flex;flex-direction:column;gap:4px;background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:16px;padding:12px;text-align:left;font-family:var(--font-sans);cursor:pointer">
+                  <span style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;width:100%">
+                    <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Задачи</span>
+                    <span style="font-size:15px;font-weight:500;color:var(--h-ink,#142018);white-space:nowrap">{{ tasksSummary.line }}</span>
+                  </span>
+                  <sc-if value="{{ tasksSummary.stuck }}" hint-placeholder-val="{{ true }}">
+                    <span style="font-size:13px;color:var(--h-crit,#C4453A);line-height:1.4">{{ tasksSummary.stuck }}</span>
+                  </sc-if>
+                </button>
+
+                <button onClick="{{ onSystem }}" style="display:flex;flex-direction:column;background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:16px;padding:12px;text-align:left;font-family:var(--font-sans);cursor:pointer">
+                  <span style="display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%">
+                    <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Сервер</span>
+                    <span style="font-size:13px;font-weight:500;color:var(--h-acc,#1D4735)">Открыть</span>
+                  </span>
+                  <sc-for list="{{ serverBrief }}" as="r" hint-placeholder-count="3">
+                    <span style="{{ r.style }}">{{ r.text }}</span>
+                  </sc-for>
+                </button>
+
+                <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:16px;padding:12px">
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                    <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Ночью сделано</span>
+                    <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64)">{{ night.window }}</span>
+                  </div>
+                  <sc-if value="{{ night.failed }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex;flex-direction:column;gap:6px;padding:10px 0 2px">
+                      <div style="font-size:15px;font-weight:500;color:var(--h-warn,#C97A16)">Блок не загрузился</div>
+                      <div style="font-size:13px;color:var(--h-mut,#5F6C64);line-height:1.45">Control Plane не отвечает. Остальные блоки показывают снимок 07:12.</div>
+                      <button onClick="{{ night.onRetry }}" style="align-self:flex-start;background:none;border:none;padding:4px 0;font-family:var(--font-sans);font-size:13px;font-weight:500;color:var(--h-acc,#1D4735);text-decoration:underline;cursor:pointer">Повторить</button>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ night.ok }}" hint-placeholder-val="{{ true }}">
+                    <div style="display:flex;flex-direction:column">
+                      <sc-for list="{{ night.rows }}" as="r" hint-placeholder-count="4">
+                        <div style="{{ r.style }}">
+                          <span style="font-size:15px;color:var(--h-ink,#142018);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.name }}</span>
+                          <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);white-space:nowrap">{{ r.cost }}</span>
+                        </div>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+                </div>
+
+              </div>
+            </sc-if>
+
+            <!-- ── ОДОБРЕНИЯ ── -->
+            <sc-if value="{{ isApprovals }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:12px">
+                <x-import component-from-global-scope="DesignSystem_66188c.SegmentedControl" options="{{ apprTabs }}" value="{{ apprTab }}" onChange="{{ onApprTab }}" hint-size="100%,44px"></x-import>
+
+                <sc-if value="{{ apprPending }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex;flex-direction:column;gap:12px">
+
+                    <sc-if value="{{ cur }}" hint-placeholder-val="{{ false }}">
+                      <div style="display:flex;flex-direction:column;gap:12px">
+                        <button onClick="{{ onCloseCard }}" style="align-self:flex-start;background:none;border:none;padding:0;font-family:var(--font-sans);font-size:13px;font-weight:500;color:var(--h-acc,#1D4735);cursor:pointer">← Все ожидающие</button>
+
+                        <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:16px;display:flex;flex-direction:column;gap:14px">
+
+                          <div style="display:flex;flex-direction:column;gap:4px">
+                            <div style="font-size:20px;font-weight:700;letter-spacing:-.02em;color:var(--h-ink,#142018)">{{ cur.title }}</div>
+                            <div style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64)">{{ cur.tech }}</div>
+                          </div>
+
+                          <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px">
+                            <button onClick="{{ cur.onTask }}" style="background:none;border:none;padding:0;font-family:var(--font-sans);font-size:13px;color:var(--h-acc,#1D4735);text-decoration:underline;cursor:pointer">{{ cur.taskLabel }}</button>
+                            <span style="font-size:13px;color:var(--h-crit,#C4453A);font-weight:500">{{ cur.due }}</span>
+                          </div>
+
+                          <sc-if value="{{ cur.isPost }}" hint-placeholder-val="{{ true }}">
+                            <div style="display:flex;flex-direction:column;gap:8px;padding:14px;background:var(--h-card2,#F2F4EF);border-radius:14px">
+                              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                                <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Текст как будет отправлен</span>
+                                <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-ink,#142018)">{{ cur.channel }}</span>
+                              </div>
+                              <div style="font-size:15px;line-height:1.6;color:var(--h-ink,#142018);white-space:pre-line">{{ cur.body }}</div>
+                              <div style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64)">{{ cur.bodyMeta }}</div>
+                            </div>
+                          </sc-if>
+
+                          <sc-if value="{{ cur.isMerge }}" hint-placeholder-val="{{ false }}">
+                            <div style="display:flex;flex-direction:column;gap:10px;padding:14px;background:var(--h-card2,#F2F4EF);border-radius:14px">
+                              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                                <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Изменения</span>
+                                <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-ink,#142018)">{{ cur.diffstat }}</span>
+                              </div>
+                              <div style="display:flex;flex-direction:column;gap:4px">
+                                <sc-for list="{{ cur.files }}" as="f" hint-placeholder-count="5">
+                                  <div style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-ink,#142018);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ f }}</div>
+                                </sc-for>
+                              </div>
+                              <x-import component-from-global-scope="DesignSystem_66188c.Button" size="sm" variant="secondary" onClick="{{ cur.onDiff }}" hint-size="auto,36px">Открыть diff</x-import>
+                            </div>
+                          </sc-if>
+
+                          <sc-if value="{{ cur.isCharge }}" hint-placeholder-val="{{ false }}">
+                            <div style="display:flex;flex-direction:column;padding:4px 14px;background:var(--h-card2,#F2F4EF);border-radius:14px">
+                              <sc-for list="{{ cur.fields }}" as="f" hint-placeholder-count="3">
+                                <div style="{{ f.style }}">
+                                  <span style="font-size:13px;color:var(--h-mut,#5F6C64)">{{ f.k }}</span>
+                                  <span style="font-family:var(--font-mono,ui-monospace);font-size:15px;font-weight:500;color:var(--h-ink,#142018);text-align:right">{{ f.v }}</span>
+                                </div>
+                              </sc-for>
+                            </div>
+                          </sc-if>
+
+                          <sc-if value="{{ cur.isSimple }}" hint-placeholder-val="{{ false }}">
+                            <div style="padding:14px;background:var(--h-card2,#F2F4EF);border-radius:14px;font-size:15px;line-height:1.55;color:var(--h-ink,#142018)">{{ cur.gist }}</div>
+                          </sc-if>
+
+                          <div style="display:flex;flex-direction:column;gap:8px">
+                            <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Предусловия</span>
+                            <div style="display:flex;flex-direction:column;gap:6px">
+                              <sc-for list="{{ cur.pre }}" as="p" hint-placeholder-count="3">
+                                <div style="display:flex;align-items:flex-start;gap:8px">
+                                  <span style="{{ p.markStyle }}">{{ p.mark }}</span>
+                                  <span style="font-size:13px;line-height:1.45;color:var(--h-ink,#142018)">{{ p.text }}</span>
+                                </div>
+                              </sc-for>
+                            </div>
+                          </div>
+
+                          <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding-top:2px;border-top:1px solid var(--h-border,#E4E9E3)">
+                            <button onClick="{{ cur.onCopy }}" style="display:flex;align-items:center;gap:8px;background:none;border:none;padding:8px 0;font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-ink,#142018);cursor:pointer">
+                              <span>{{ cur.hash }}</span>
+                              <span style="font-family:var(--font-sans);color:var(--h-mut,#5F6C64)">{{ cur.copyLabel }}</span>
+                            </button>
+                            <span style="font-size:13px;color:var(--h-mut,#5F6C64)">{{ cur.trust }}</span>
+                          </div>
+
+                          <sc-if value="{{ cur.result }}" hint-placeholder-val="{{ false }}">
+                            <div style="{{ cur.result.style }}">{{ cur.result.text }}</div>
+                          </sc-if>
+
+                          <sc-if value="{{ cur.actionable }}" hint-placeholder-val="{{ true }}">
+                            <div style="display:flex;gap:10px">
+                              <x-import component-from-global-scope="DesignSystem_66188c.Button" style="{{ accBtn }}" disabled="{{ cur.locked }}" onClick="{{ cur.onApprove }}" hint-size="auto,44px">Одобрить</x-import>
+                              <x-import component-from-global-scope="DesignSystem_66188c.Button" variant="secondary" disabled="{{ cur.locked }}" onClick="{{ cur.onReject }}" hint-size="auto,44px">Отклонить</x-import>
+                            </div>
+                          </sc-if>
+
+                          <sc-if value="{{ cur.locked }}" hint-placeholder-val="{{ false }}">
+                            <div style="font-size:13px;color:var(--h-warn,#C97A16);line-height:1.45">Действия недоступны: Control Plane не отвечает. Панель не имеет собственных прав на запись.</div>
+                          </sc-if>
+
+                          <sc-if value="{{ rejectOpen }}" hint-placeholder-val="{{ false }}">
+                            <div style="display:flex;flex-direction:column;gap:10px;padding:14px;background:var(--h-card2,#F2F4EF);border-radius:14px">
+                              <span style="font-size:13px;color:var(--h-mut,#5F6C64)">Причина — по желанию. Спросим только один раз.</span>
+                              <textarea value="{{ rejectText }}" onChange="{{ onRejectText }}" rows="2" placeholder="Например: текст уйдёт в понедельник" style="width:100%;box-sizing:border-box;resize:none;padding:10px 12px;font-family:var(--font-sans);font-size:15px;color:var(--h-ink,#142018);background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:12px"></textarea>
+                              <div style="display:flex;gap:10px">
+                                <x-import component-from-global-scope="DesignSystem_66188c.Button" size="sm" style="{{ accBtn }}" onClick="{{ onRejectSend }}" hint-size="auto,36px">Отклонить</x-import>
+                                <x-import component-from-global-scope="DesignSystem_66188c.Button" size="sm" variant="ghost" onClick="{{ onRejectCancel }}" hint-size="auto,36px">Отмена</x-import>
+                              </div>
+                            </div>
+                          </sc-if>
+
+                        </div>
+                      </div>
+                    </sc-if>
+
+                    <sc-if value="{{ showList }}" hint-placeholder-val="{{ true }}">
+                      <div style="display:flex;flex-direction:column;gap:10px">
+                        <sc-if value="{{ batch }}" hint-placeholder-val="{{ false }}">
+                          <div style="background:var(--h-card,#fff);border:1px solid var(--h-acc,#1D4735);border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:10px">
+                            <div style="font-size:15px;font-weight:700;color:var(--h-ink,#142018)">{{ batch.title }}</div>
+                            <div style="display:flex;flex-direction:column;gap:4px">
+                              <sc-for list="{{ batch.items }}" as="b" hint-placeholder-count="4">
+                                <div style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64)">{{ b }}</div>
+                              </sc-for>
+                            </div>
+                            <div style="font-size:13px;color:var(--h-mut,#5F6C64);line-height:1.45">Каждое действие подписывается отдельно.</div>
+                            <x-import component-from-global-scope="DesignSystem_66188c.Button" size="sm" style="{{ accBtn }}" onClick="{{ batch.onRun }}" hint-size="auto,36px">{{ batch.cta }}</x-import>
+                          </div>
+                        </sc-if>
+
+                        <sc-for list="{{ pendingList }}" as="a" hint-placeholder-count="3">
+                          <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:8px">
+                            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+                              <span style="font-size:15px;font-weight:500;color:var(--h-ink,#142018)">{{ a.title }}</span>
+                              <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);white-space:nowrap">{{ a.dueShort }}</span>
+                            </div>
+                            <div style="font-size:13px;color:var(--h-mut,#5F6C64);line-height:1.45">{{ a.gist }}</div>
+                            <div style="display:flex;flex-wrap:wrap;gap:8px">
+                              <sc-if value="{{ a.inline }}" hint-placeholder-val="{{ false }}">
+                                <div style="display:flex;gap:8px">
+                                  <x-import component-from-global-scope="DesignSystem_66188c.Button" size="sm" style="{{ accBtn }}" disabled="{{ a.locked }}" onClick="{{ a.onApprove }}" hint-size="auto,36px">Одобрить</x-import>
+                                  <x-import component-from-global-scope="DesignSystem_66188c.Button" size="sm" variant="secondary" disabled="{{ a.locked }}" onClick="{{ a.onReject }}" hint-size="auto,36px">Отклонить</x-import>
+                                </div>
+                              </sc-if>
+                              <x-import component-from-global-scope="DesignSystem_66188c.Button" size="sm" variant="secondary" onClick="{{ a.onOpen }}" hint-size="auto,36px">Открыть</x-import>
+                            </div>
+                            <sc-if value="{{ a.result }}" hint-placeholder-val="{{ false }}">
+                              <div style="{{ a.result.style }}">{{ a.result.text }}</div>
+                            </sc-if>
+                          </div>
+                        </sc-for>
+
+                        <sc-if value="{{ noPending }}" hint-placeholder-val="{{ false }}">
+                          <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:16px;font-size:15px;color:var(--h-mut,#5F6C64)">Нет ожидающих одобрений</div>
+                        </sc-if>
+                      </div>
+                    </sc-if>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{ apprHistory }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;flex-direction:column;gap:12px">
+                    <div style="display:flex;flex-wrap:wrap;gap:6px">
+                      <sc-for list="{{ histFilters }}" as="f" hint-placeholder-count="4">
+                        <button onClick="{{ f.onPick }}" style="{{ f.style }}">{{ f.label }}</button>
+                      </sc-for>
+                    </div>
+                    <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:4px 14px">
+                      <sc-for list="{{ history }}" as="h" hint-placeholder-count="6">
+                        <div style="{{ h.style }}">
+                          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+                            <span style="font-size:15px;color:var(--h-ink,#142018)">{{ h.type }}</span>
+                            <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);white-space:nowrap">{{ h.date }}</span>
+                          </div>
+                          <div style="font-size:13px;color:var(--h-mut,#5F6C64);line-height:1.45;margin-top:2px">{{ h.line }}</div>
+                        </div>
+                      </sc-for>
+                    </div>
+                    <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:8px">
+                      <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Доверие</span>
+                      <div style="display:flex;flex-direction:column">
+                        <sc-for list="{{ trust }}" as="t" hint-placeholder-count="4">
+                          <div style="{{ t.style }}">
+                            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+                              <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-ink,#142018)">{{ t.type }}</span>
+                              <span style="font-size:13px;font-weight:500;color:var(--h-ink,#142018)">{{ t.level }}</span>
+                            </div>
+                            <div style="font-size:13px;color:var(--h-mut,#5F6C64);margin-top:2px">{{ t.line }}</div>
+                          </div>
+                        </sc-for>
+                      </div>
+                    </div>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-if>
+
+            <!-- ── ЗАДАЧИ ── -->
+            <sc-if value="{{ isTasks }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:12px">
+                <sc-if value="{{ task }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;flex-direction:column;gap:12px">
+                    <button onClick="{{ onCloseTask }}" style="align-self:flex-start;background:none;border:none;padding:0;font-family:var(--font-sans);font-size:13px;font-weight:500;color:var(--h-acc,#1D4735);cursor:pointer">← Все задачи</button>
+                    <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:16px;display:flex;flex-direction:column;gap:14px">
+                      <div style="display:flex;flex-direction:column;gap:6px">
+                        <div style="font-size:20px;font-weight:700;letter-spacing:-.02em;color:var(--h-ink,#142018)">{{ task.title }}</div>
+                        <div style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64)">{{ task.meta }}</div>
+                        <div style="{{ task.stateStyle }}">{{ task.state }}</div>
+                      </div>
+                      <div style="display:flex;flex-direction:column;gap:8px">
+                        <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Журнал задачи</span>
+                        <div style="display:flex;flex-direction:column">
+                          <sc-for list="{{ task.events }}" as="e" hint-placeholder-count="5">
+                            <div style="{{ e.style }}">
+                              <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);flex:none;width:52px">{{ e.time }}</span>
+                              <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-ink,#142018);flex:none;width:88px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ e.actor }}</span>
+                              <span style="font-size:13px;color:var(--h-ink,#142018);line-height:1.45;min-width:0">{{ e.text }}</span>
+                            </div>
+                          </sc-for>
+                        </div>
+                      </div>
+                      <div style="display:flex;flex-direction:column;gap:8px">
+                        <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Вызовы моделей</span>
+                        <div style="display:flex;flex-direction:column">
+                          <sc-for list="{{ task.calls }}" as="c" hint-placeholder-count="3">
+                            <div style="{{ c.style }}">
+                              <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-ink,#142018);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.alias }}</span>
+                              <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);white-space:nowrap">{{ c.meta }}</span>
+                            </div>
+                          </sc-for>
+                        </div>
+                      </div>
+                      <div style="display:flex;flex-direction:column;gap:8px">
+                        <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Артефакты</span>
+                        <div style="display:flex;flex-direction:column">
+                          <sc-for list="{{ task.artifacts }}" as="f" hint-placeholder-count="2">
+                            <div style="{{ f.style }}">
+                              <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-ink,#142018);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ f.name }}</span>
+                              <button onClick="{{ f.onCopy }}" style="background:none;border:none;padding:4px 0;font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);cursor:pointer;white-space:nowrap">{{ f.sha }}</button>
+                            </div>
+                          </sc-for>
+                        </div>
+                      </div>
+                      <div style="display:flex;flex-wrap:wrap;gap:10px;padding-top:12px;border-top:1px solid var(--h-border,#E4E9E3)">
+                        <x-import component-from-global-scope="DesignSystem_66188c.Button" size="sm" style="{{ accBtn }}" onClick="{{ task.onRetry }}" hint-size="auto,36px">Повторить</x-import>
+                        <x-import component-from-global-scope="DesignSystem_66188c.Button" size="sm" variant="secondary" onClick="{{ task.onStop }}" hint-size="auto,36px">Остановить</x-import>
+                      </div>
+                      <div style="font-size:13px;color:var(--h-mut,#5F6C64);line-height:1.45">Kanban Hermes — 127.0.0.1:7010, откроется только через tunnel.</div>
+                      <sc-if value="{{ task.note }}" hint-placeholder-val="{{ false }}">
+                        <div style="{{ task.noteStyle }}">{{ task.note }}</div>
+                      </sc-if>
+                    </div>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{ taskList }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex;flex-direction:column;gap:12px">
+                    <x-import component-from-global-scope="DesignSystem_66188c.Input" value="{{ q }}" onChange="{{ onQuery }}" placeholder="Название или id" hint-size="100%,44px"></x-import>
+                    <div style="display:flex;flex-wrap:wrap;gap:6px">
+                      <sc-for list="{{ domains }}" as="d" hint-placeholder-count="4">
+                        <button onClick="{{ d.onPick }}" style="{{ d.style }}">{{ d.label }}</button>
+                      </sc-for>
+                    </div>
+                    <sc-for list="{{ groups }}" as="g" hint-placeholder-count="3">
+                      <div style="display:flex;flex-direction:column;gap:6px">
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                          <span style="{{ g.capStyle }}">{{ g.name }}</span>
+                          <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64)">{{ g.count }}</span>
+                        </div>
+                        <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:4px 14px">
+                          <sc-for list="{{ g.rows }}" as="t" hint-placeholder-count="2">
+                            <button onClick="{{ t.onOpen }}" style="{{ t.style }}">
+                              <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+                                <span style="font-size:15px;color:var(--h-ink,#142018);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.title }}</span>
+                                <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);white-space:nowrap">{{ t.cost }}</span>
+                              </div>
+                              <div style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);margin-top:2px;text-align:left">{{ t.meta }}</div>
+                            </button>
+                          </sc-for>
+                        </div>
+                      </div>
+                    </sc-for>
+                    <sc-if value="{{ noTasks }}" hint-placeholder-val="{{ false }}">
+                      <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:16px;font-size:15px;color:var(--h-mut,#5F6C64)">Ничего не найдено по этому фильтру</div>
+                    </sc-if>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-if>
+
+            <!-- ── ДЕНЬГИ ── -->
+            <sc-if value="{{ isMoney }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:12px">
+                <x-import component-from-global-scope="DesignSystem_66188c.SegmentedControl" options="{{ moneyTabs }}" value="{{ moneyTab }}" onChange="{{ onMoneyTab }}" hint-size="100%,44px"></x-import>
+
+                <sc-if value="{{ moneySpend }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex;flex-direction:column;gap:12px">
+                    <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:14px;display:flex;flex-direction:column">
+                      <div style="{{ money.rowA }}">
+                        <span style="font-size:13px;color:var(--h-mut,#5F6C64)">Сегодня</span>
+                        <span style="font-family:var(--font-mono,ui-monospace);font-size:15px;font-weight:500;color:var(--h-ink,#142018)">{{ money.today }}</span>
+                      </div>
+                      <div style="{{ money.rowB }}">
+                        <span style="font-size:13px;color:var(--h-mut,#5F6C64)">Месяц · soft-alert</span>
+                        <span style="font-family:var(--font-mono,ui-monospace);font-size:15px;font-weight:500;color:var(--h-ink,#142018)">{{ money.month }}</span>
+                      </div>
+                      <div style="{{ money.rowC }}">
+                        <span style="{{ money.killStyle }}">{{ money.kill }}</span>
+                        <x-import component-from-global-scope="DesignSystem_66188c.Button" size="sm" variant="secondary" onClick="{{ money.onKill }}" hint-size="auto,36px">{{ money.killCta }}</x-import>
+                      </div>
+                      <sc-if value="{{ money.killNote }}" hint-placeholder-val="{{ false }}">
+                        <div style="font-size:13px;color:var(--h-warn,#C97A16);line-height:1.45;padding-top:10px">{{ money.killNote }}</div>
+                      </sc-if>
+                    </div>
+
+                    <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:12px">
+                      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                        <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Расход за 30 дней</span>
+                        <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64)">{{ money.sum30 }}</span>
+                      </div>
+                      <div style="display:flex;align-items:flex-end;gap:2px;height:96px">
+                        <sc-for list="{{ bars }}" as="b" hint-placeholder-count="30">
+                          <button onClick="{{ b.onPick }}" style="{{ b.style }}"></button>
+                        </sc-for>
+                      </div>
+                      <div style="display:flex;justify-content:space-between;font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-faint,#8A9490)">
+                        <span>{{ money.firstDay }}</span>
+                        <span>{{ money.lastDay }}</span>
+                      </div>
+                      <x-import component-from-global-scope="DesignSystem_66188c.SegmentedControl" options="{{ breakdownTabs }}" value="{{ breakdown }}" onChange="{{ onBreakdown }}" hint-size="100%,44px"></x-import>
+                      <sc-if value="{{ day }}" hint-placeholder-val="{{ true }}">
+                        <div style="display:flex;flex-direction:column;gap:2px">
+                          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding-bottom:6px">
+                            <span style="font-size:15px;font-weight:500;color:var(--h-ink,#142018)">{{ day.label }}</span>
+                            <span style="font-family:var(--font-mono,ui-monospace);font-size:15px;font-weight:500;color:var(--h-ink,#142018)">{{ day.total }}</span>
+                          </div>
+                          <sc-for list="{{ day.rows }}" as="r" hint-placeholder-count="3">
+                            <div style="{{ r.style }}">
+                              <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-ink,#142018)">{{ r.k }}</span>
+                              <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64)">{{ r.v }}</span>
+                            </div>
+                          </sc-for>
+                        </div>
+                      </sc-if>
+                      <sc-if value="{{ noDay }}" hint-placeholder-val="{{ false }}">
+                        <div style="font-size:13px;color:var(--h-mut,#5F6C64)">Тап по столбцу — раскладка за день.</div>
+                      </sc-if>
+                    </div>
+
+                    <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:14px">
+                      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px">
+                        <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Дороже helm-standard</span>
+                        <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64)">{{ pricey.count }}</span>
+                      </div>
+                      <div style="display:flex;flex-direction:column">
+                        <sc-for list="{{ pricey.rows }}" as="r" hint-placeholder-count="4">
+                          <div style="{{ r.style }}">
+                            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+                              <span style="font-size:15px;color:var(--h-ink,#142018);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.task }}</span>
+                              <span style="font-family:var(--font-mono,ui-monospace);font-size:15px;font-weight:500;color:var(--h-ink,#142018);white-space:nowrap">{{ r.cost }}</span>
+                            </div>
+                            <div style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);margin-top:2px">{{ r.model }}</div>
+                            <div style="font-size:13px;color:var(--h-mut,#5F6C64);line-height:1.45;margin-top:2px">{{ r.why }}</div>
+                          </div>
+                        </sc-for>
+                      </div>
+                    </div>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{ moneyModels }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;flex-direction:column;gap:12px">
+                    <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:4px 14px">
+                      <sc-for list="{{ models }}" as="m" hint-placeholder-count="4">
+                        <div style="{{ m.style }}">
+                          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+                            <span style="font-family:var(--font-mono,ui-monospace);font-size:15px;font-weight:500;color:var(--h-ink,#142018)">{{ m.alias }}</span>
+                            <span style="font-size:13px;color:var(--h-mut,#5F6C64)">{{ m.eval }}</span>
+                          </div>
+                          <div style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);margin-top:2px">{{ m.primary }}</div>
+                          <div style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-faint,#8A9490);margin-top:2px">{{ m.challenger }}</div>
+                        </div>
+                      </sc-for>
+                    </div>
+                    <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:8px">
+                      <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Auto-demotion</span>
+                      <div style="display:flex;flex-direction:column">
+                        <sc-for list="{{ demotions }}" as="d" hint-placeholder-count="3">
+                          <div style="{{ d.style }}">
+                            <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);flex:none;width:88px">{{ d.date }}</span>
+                            <span style="font-size:13px;color:var(--h-ink,#142018);line-height:1.45;min-width:0">{{ d.text }}</span>
+                          </div>
+                        </sc-for>
+                      </div>
+                    </div>
+                    <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:10px">
+                      <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Изменить лимиты</span>
+                      <div style="display:flex;gap:10px;flex-wrap:wrap">
+                        <x-import component-from-global-scope="DesignSystem_66188c.Input" value="{{ limitDay }}" onChange="{{ onLimitDay }}" placeholder="День, $" hint-size="120px,44px"></x-import>
+                        <x-import component-from-global-scope="DesignSystem_66188c.Input" value="{{ limitMonth }}" onChange="{{ onLimitMonth }}" placeholder="Месяц, $" hint-size="120px,44px"></x-import>
+                      </div>
+                      <div style="font-size:13px;color:var(--h-mut,#5F6C64);line-height:1.45">Изменение лимита — RED-действие. Уйдёт в Одобрения и потребует passkey.</div>
+                      <x-import component-from-global-scope="DesignSystem_66188c.Button" size="sm" style="{{ accBtn }}" onClick="{{ onLimitSend }}" hint-size="auto,36px">Отправить в Одобрения</x-import>
+                      <sc-if value="{{ limitNote }}" hint-placeholder-val="{{ false }}">
+                        <div style="font-size:13px;color:var(--h-ok,#3B8F5A);line-height:1.45">{{ limitNote }}</div>
+                      </sc-if>
+                    </div>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-if>
+
+            <!-- ── СИСТЕМА ── -->
+            <sc-if value="{{ isSystem }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:12px">
+                <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:2px">
+                  <sc-for list="{{ sysTabs }}" as="s" hint-placeholder-count="5">
+                    <button onClick="{{ s.onPick }}" style="{{ s.style }}">{{ s.label }}</button>
+                  </sc-for>
+                </div>
+
+                <sc-if value="{{ sysServer }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex;flex-direction:column;gap:12px">
+                    <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:4px 14px">
+                      <sc-for list="{{ resources }}" as="r" hint-placeholder-count="6">
+                        <div style="{{ r.style }}">
+                          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+                            <span style="font-size:15px;color:var(--h-ink,#142018)">{{ r.name }}</span>
+                            <span style="{{ r.valStyle }}">{{ r.value }}</span>
+                          </div>
+                          <div style="display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:2px">
+                            <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64)">{{ r.threshold }}</span>
+                            <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64)">{{ r.forecast }}</span>
+                          </div>
+                        </div>
+                      </sc-for>
+                    </div>
+
+                    <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:10px">
+                      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                        <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Диск, 30 дней</span>
+                        <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64)">{{ disk.note }}</span>
+                      </div>
+                      <div style="position:relative;height:96px;display:flex;align-items:flex-end;gap:2px">
+                        <div style="{{ disk.lineStyle }}"></div>
+                        <sc-for list="{{ disk.bars }}" as="b" hint-placeholder-count="30">
+                          <div style="{{ b.style }}"></div>
+                        </sc-for>
+                      </div>
+                      <div style="font-size:13px;color:var(--h-mut,#5F6C64);line-height:1.45">{{ disk.caption }}</div>
+                    </div>
+
+                    <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:4px 14px">
+                      <sc-for list="{{ containers }}" as="c" hint-placeholder-count="5">
+                        <div style="{{ c.style }}">
+                          <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-ink,#142018);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.name }}</span>
+                          <span style="{{ c.metaStyle }}">{{ c.meta }}</span>
+                        </div>
+                      </sc-for>
+                    </div>
+
+                    <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:4px 14px">
+                      <sc-for list="{{ backup }}" as="b" hint-placeholder-count="4">
+                        <div style="{{ b.style }}">
+                          <span style="font-size:13px;color:var(--h-mut,#5F6C64)">{{ b.k }}</span>
+                          <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-ink,#142018);text-align:right">{{ b.v }}</span>
+                        </div>
+                      </sc-for>
+                    </div>
+
+                    <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:8px">
+                      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                        <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Автоочистка</span>
+                        <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64)">последние 20</span>
+                      </div>
+                      <div style="display:flex;flex-direction:column;gap:4px">
+                        <sc-for list="{{ cleanup }}" as="l" hint-placeholder-count="6">
+                          <div style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);line-height:1.5">{{ l }}</div>
+                        </sc-for>
+                      </div>
+                    </div>
+
+                    <div style="display:flex;flex-wrap:wrap;gap:10px">
+                      <x-import component-from-global-scope="DesignSystem_66188c.Button" size="sm" style="{{ accBtn }}" onClick="{{ onRestoreTest }}" hint-size="auto,36px">Запустить restore-тест</x-import>
+                      <x-import component-from-global-scope="DesignSystem_66188c.Button" size="sm" variant="secondary" onClick="{{ onSnapshot }}" hint-size="auto,36px">Снапшот Kanban</x-import>
+                    </div>
+                    <sc-if value="{{ ranNote }}" hint-placeholder-val="{{ false }}">
+                      <div style="font-size:13px;color:var(--h-ok,#3B8F5A);line-height:1.45">{{ ranNote }}</div>
+                    </sc-if>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{ sysIntegrations }}" hint-placeholder-val="{{ false }}">
+                  <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:4px 14px">
+                    <sc-for list="{{ integrations }}" as="i" hint-placeholder-count="9">
+                      <div style="{{ i.style }}">
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                          <span style="font-size:15px;color:var(--h-ink,#142018);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ i.name }}</span>
+                          <span style="{{ i.stateStyle }}">{{ i.state }}</span>
+                        </div>
+                        <div style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);margin-top:2px">{{ i.detail }}</div>
+                      </div>
+                    </sc-for>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{ sysRoutines }}" hint-placeholder-val="{{ false }}">
+                  <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:4px 14px">
+                    <sc-for list="{{ routines }}" as="r" hint-placeholder-count="5">
+                      <div style="{{ r.style }}">
+                        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+                          <span style="font-size:15px;color:var(--h-ink,#142018);min-width:0">{{ r.name }}</span>
+                          <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);white-space:nowrap">{{ r.cost }}</span>
+                        </div>
+                        <div style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);margin-top:2px">{{ r.meta }}</div>
+                        <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+                          <button onClick="{{ r.onToggle }}" style="{{ r.toggleStyle }}">{{ r.toggleLabel }}</button>
+                          <button onClick="{{ r.onRun }}" style="background:none;border:none;padding:6px 0;font-family:var(--font-sans);font-size:13px;font-weight:500;color:var(--h-acc,#1D4735);text-decoration:underline;cursor:pointer">Запустить сейчас</button>
+                        </div>
+                      </div>
+                    </sc-for>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{ sysPolicies }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;flex-direction:column;gap:12px">
+                    <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:14px">
+                      <div style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);margin-bottom:6px">actions.yaml</div>
+                      <div style="display:flex;flex-direction:column">
+                        <sc-for list="{{ policies }}" as="p" hint-placeholder-count="6">
+                          <div style="{{ p.style }}">
+                            <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-ink,#142018);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ p.action }}</span>
+                            <span style="display:flex;align-items:center;gap:10px;white-space:nowrap">
+                              <span style="{{ p.levelStyle }}">{{ p.level }}</span>
+                              <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);width:52px;text-align:right">{{ p.hard }}</span>
+                            </span>
+                          </div>
+                        </sc-for>
+                      </div>
+                    </div>
+                    <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:8px">
+                      <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Очередь skills-candidates</span>
+                      <div style="display:flex;flex-direction:column">
+                        <sc-for list="{{ candidates }}" as="c" hint-placeholder-count="2">
+                          <div style="{{ c.style }}">
+                            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+                              <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-ink,#142018)">{{ c.skill }}</span>
+                              <span style="font-size:13px;color:var(--h-mut,#5F6C64)">{{ c.material }}</span>
+                            </div>
+                            <div style="font-size:13px;color:var(--h-mut,#5F6C64);line-height:1.45;margin-top:2px">{{ c.changed }}</div>
+                            <div style="display:flex;gap:10px;margin-top:8px">
+                              <x-import component-from-global-scope="DesignSystem_66188c.Button" size="sm" variant="secondary" onClick="{{ c.onDiff }}" hint-size="auto,36px">Открыть diff</x-import>
+                              <x-import component-from-global-scope="DesignSystem_66188c.Button" size="sm" style="{{ accBtn }}" onClick="{{ c.onPromote }}" hint-size="auto,36px">Promote</x-import>
+                            </div>
+                          </div>
+                        </sc-for>
+                      </div>
+                    </div>
+                    <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:8px">
+                      <span style="font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--h-mut,#5F6C64)">Решения (ADR)</span>
+                      <div style="display:flex;flex-direction:column;gap:8px">
+                        <sc-for list="{{ adrs }}" as="a" hint-placeholder-count="3">
+                          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+                            <span style="font-size:15px;color:var(--h-ink,#142018);min-width:0">{{ a.title }}</span>
+                            <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);white-space:nowrap">{{ a.file }}</span>
+                          </div>
+                        </sc-for>
+                      </div>
+                    </div>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{ sysJournal }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;flex-direction:column;gap:12px">
+                    <div style="display:flex;flex-wrap:wrap;gap:6px">
+                      <sc-for list="{{ jFilters }}" as="f" hint-placeholder-count="4">
+                        <button onClick="{{ f.onPick }}" style="{{ f.style }}">{{ f.label }}</button>
+                      </sc-for>
+                    </div>
+                    <div style="background:var(--h-card,#fff);border:1px solid var(--h-border,#E4E9E3);border-radius:18px;padding:4px 14px">
+                      <sc-for list="{{ journal }}" as="j" hint-placeholder-count="8">
+                        <div style="{{ j.style }}">
+                          <div style="display:flex;align-items:baseline;gap:10px">
+                            <button onClick="{{ j.onTime }}" style="background:none;border:none;padding:0;font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64);cursor:pointer;flex:none;width:72px;text-align:left">{{ j.time }}</button>
+                            <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-ink,#142018);flex:none;width:92px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ j.actor }}</span>
+                            <span style="font-size:13px;color:var(--h-ink,#142018);line-height:1.45;min-width:0">{{ j.event }}</span>
+                          </div>
+                          <sc-if value="{{ j.task }}" hint-placeholder-val="{{ true }}">
+                            <div style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-faint,#8A9490);margin-top:2px;padding-left:82px">{{ j.task }}</div>
+                          </sc-if>
+                        </div>
+                      </sc-for>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                      <x-import component-from-global-scope="DesignSystem_66188c.Button" size="sm" variant="secondary" onClick="{{ onExport }}" hint-size="auto,36px">Экспорт CSV</x-import>
+                      <sc-if value="{{ exportNote }}" hint-placeholder-val="{{ false }}">
+                        <span style="font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-mut,#5F6C64)">{{ exportNote }}</span>
+                      </sc-if>
+                    </div>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-if>
+
+          </div>
+
+          <sc-if value="{{ isPhone }}" hint-placeholder-val="{{ true }}">
+            <div style="flex:none;display:flex;align-items:stretch;gap:2px;padding:6px 8px 20px;background:var(--h-card,#fff);border-top:1px solid var(--h-border,#E4E9E3)">
+              <sc-for list="{{ nav }}" as="n" hint-placeholder-count="5">
+                <button onClick="{{ n.onPick }}" style="{{ n.tabStyle }}">
+                  <span>{{ n.label }}</span>
+                  <span style="{{ n.dotStyle }}">{{ n.count }}</span>
+                </button>
+              </sc-for>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ sheet }}" hint-placeholder-val="{{ false }}">
+      <div style="position:absolute;inset:0;z-index:20;display:flex;background:rgba(10,16,12,.42);{{ sheet.wrapExtra }}" onClick="{{ sheet.onDismiss }}">
+        <div style="{{ sheet.style }}" onClick="{{ sheet.stop }}">
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div style="font-size:20px;font-weight:700;letter-spacing:-.02em;color:var(--h-ink,#142018)">{{ sheet.title }}</div>
+            <div style="font-size:13px;color:var(--h-mut,#5F6C64);line-height:1.5">{{ sheet.sub }}</div>
+          </div>
+
+          <sc-if value="{{ sheet.isPk }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;flex-direction:column;gap:12px">
+              <div style="padding:12px 14px;background:var(--h-card2,#F2F4EF);border-radius:14px;font-family:var(--font-mono,ui-monospace);font-size:13px;color:var(--h-ink,#142018);word-break:break-all">{{ sheet.mono }}</div>
+              <div style="{{ sheet.stageStyle }}">{{ sheet.stageText }}</div>
+              <div style="display:flex;gap:10px">
+                <x-import component-from-global-scope="DesignSystem_66188c.Button" style="{{ accBtn }}" disabled="{{ sheet.busy }}" onClick="{{ sheet.onConfirm }}" hint-size="auto,44px">{{ sheet.cta }}</x-import>
+                <x-import component-from-global-scope="DesignSystem_66188c.Button" variant="ghost" onClick="{{ sheet.onDismiss }}" hint-size="auto,44px">Отмена</x-import>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ sheet.isDiff }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:12px;min-height:0">
+              <div style="overflow:auto;padding:12px;background:var(--h-card2,#F2F4EF);border-radius:14px;display:flex;flex-direction:column">
+                <sc-for list="{{ sheet.lines }}" as="l" hint-placeholder-count="8">
+                  <span style="{{ l.style }}">{{ l.text }}</span>
+                </sc-for>
+              </div>
+              <x-import component-from-global-scope="DesignSystem_66188c.Button" variant="secondary" onClick="{{ sheet.onDismiss }}" hint-size="auto,44px">Закрыть</x-import>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ sheet.isGuardian }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:12px;min-height:0">
+              <div style="overflow:auto;padding:12px;background:var(--h-card2,#F2F4EF);border-radius:14px;font-family:var(--font-mono,ui-monospace);font-size:13px;line-height:1.6;color:var(--h-ink,#142018);white-space:pre">{{ sheet.text }}</div>
+              <x-import component-from-global-scope="DesignSystem_66188c.Button" variant="secondary" onClick="{{ sheet.onDismiss }}" hint-size="auto,44px">Закрыть</x-import>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </sc-if>
+
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;scenario&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;monday&quot;,&quot;calm&quot;,&quot;batch&quot;,&quot;offline&quot;,&quot;kill&quot;,&quot;login&quot;],&quot;default&quot;:&quot;monday&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Состояние&quot;},&quot;device&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;phone&quot;,&quot;laptop&quot;],&quot;default&quot;:&quot;phone&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Состояние&quot;},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Оформление&quot;},&quot;accent&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;options&quot;:[&quot;#1D4735&quot;,&quot;#4A4E78&quot;,&quot;#5C2F42&quot;,&quot;#6A5F63&quot;],&quot;default&quot;:&quot;#1D4735&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Оформление&quot;},&quot;showHarness&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Прототип&quot;}}">
+class Component extends DCLogic {
+  state = {
+    device: null, theme: null, scenario: null,
+    tab: 'today', sysTab: 'server', apprTab: 'Ожидают', moneyTab: 'Расход',
+    open: null, openTask: null, sheet: null, decided: {}, absTime: {},
+    copied: null, breakdown: 'По профилю', dayIdx: 29,
+    authStep: 'tg', authErr: false, absClock: false,
+    q: '', domain: 'все', histType: 'все', jType: 'все',
+    rejectId: null, rejectText: '', ran: {}, limitDay: '', limitMonth: '',
+    routineOff: {}, exportDone: false
+  };
+
+  // ── palette ─────────────────────────────────────────────
+  palette(theme, acc) {
+    const L = {
+      bg: '#F3F5F0', card: '#FFFFFF', card2: '#F2F4EF', border: '#E4E9E3',
+      ink: '#142018', mut: '#5F6C64', faint: '#8A9490',
+      ok: '#3B8F5A', okSoft: '#EAF7EE', warn: '#B0740F', warnSoft: '#FAF1E2',
+      crit: '#BE4034', critSoft: '#FAECEA', accFg: '#FFFFFF',
+      accSoft: 'color-mix(in srgb, ' + acc + ' 9%, #fff)', chip: '#FFFFFF',
+      shadow: '0 1px 2px rgba(20,32,24,.05)'
+    };
+    const D = {
+      bg: '#0E1310', card: '#161D19', card2: '#1D2620', border: '#28322C',
+      ink: '#E7EDE9', mut: '#94A19B', faint: '#6C7973',
+      ok: '#5FA97A', okSoft: '#16251C', warn: '#D19A4C', warnSoft: '#2A2114',
+      crit: '#DD7E70', critSoft: '#2C1B18', accFg: '#0B0F0C',
+      accSoft: 'color-mix(in srgb, ' + acc + ' 22%, #0E1310)', chip: '#1D2620',
+      shadow: 'none'
+    };
+    return theme === 'dark' ? D : L;
+  }
+
+  // ── helpers ─────────────────────────────────────────────
+  sep(i, extra) {
+    return Object.assign({
+      display: 'flex', flexDirection: 'column', justifyContent: 'center',
+      gap: 0, padding: '10px 0', minHeight: 40,
+      borderTop: i ? '1px solid var(--h-border)' : 'none'
+    }, extra || {});
+  }
+  sepRow(i, extra) {
+    return Object.assign({
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      gap: 12, padding: '10px 0', minHeight: 40,
+      borderTop: i ? '1px solid var(--h-border)' : 'none'
+    }, extra || {});
+  }
+  chip(active, acc) {
+    return {
+      padding: '7px 12px', borderRadius: 999, cursor: 'pointer',
+      fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500,
+      whiteSpace: 'nowrap', transition: 'background .15s ease, color .15s ease',
+      background: active ? acc : 'var(--h-card)',
+      color: active ? 'var(--h-acc-fg)' : 'var(--h-mut)',
+      border: '1px solid ' + (active ? acc : 'var(--h-border)')
+    };
+  }
+  tone(t) {
+    if (t === 'crit') return { fg: 'var(--h-crit)', bg: 'var(--h-crit-soft)' };
+    if (t === 'warn') return { fg: 'var(--h-warn)', bg: 'var(--h-warn-soft)' };
+    if (t === 'ok') return { fg: 'var(--h-ok)', bg: 'var(--h-ok-soft)' };
+    return { fg: 'var(--h-mut)', bg: 'transparent' };
+  }
+  pill(t) {
+    const c = this.tone(t);
+    return {
+      fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 500,
+      color: t === 'mut' ? 'var(--h-mut)' : c.fg, whiteSpace: 'nowrap'
+    };
+  }
+  resultStyle(t) {
+    const c = this.tone(t);
+    return {
+      padding: '10px 12px', borderRadius: 12, fontSize: 13, lineHeight: 1.5,
+      background: c.bg, color: c.fg, fontWeight: 500, marginTop: 8
+    };
+  }
+
+  // ── actions ─────────────────────────────────────────────
+  go = (tab) => this.setState({ tab, open: null, openTask: null, rejectId: null });
+  scen = (s) => this.setState({
+    scenario: s, tab: 'today', open: null, openTask: null, decided: {}, ran: {},
+    sheet: null, rejectId: null, authStep: 'tg', authErr: false, dayIdx: 29, exportDone: false
+  });
+  ask = (title, sub, mono, run) => this.setState({ sheet: { kind: 'pk', title, sub, mono, run, busy: false } });
+  confirm = () => {
+    const s = this.state.sheet;
+    if (!s || s.busy) return;
+    this.setState({ sheet: Object.assign({}, s, { busy: true }) });
+    setTimeout(() => { this.setState({ sheet: null }); if (s.run) s.run(); }, 520);
+  };
+  dismiss = () => this.setState({ sheet: null });
+  decide = (id, res) => this.setState((st) => ({
+    decided: Object.assign({}, st.decided, { [id]: res }), rejectId: null, rejectText: ''
+  }));
+  copy = (text) => {
+    try { if (navigator.clipboard) navigator.clipboard.writeText(text); } catch (e) { void e; }
+    this.setState({ copied: text });
+    setTimeout(() => this.setState((st) => (st.copied === text ? { copied: null } : {})), 1400);
+  };
+  toggleAbs = (k) => this.setState((st) => ({
+    absTime: Object.assign({}, st.absTime, { [k]: !st.absTime[k] })
+  }));
+  note = (k, v) => this.setState((st) => ({ ran: Object.assign({}, st.ran, { [k]: v }) }));
+
+  // ── data ────────────────────────────────────────────────
+  approvals(sc) {
+    const post = {
+      id: 'a_post', title: 'Публикация в канал', tech: 'telegram.post', kind: 'post',
+      task: 'Дайджест недели', taskId: 't_4471',
+      gist: 'Дайджест недели · @cmpas_notes · 1 240 знаков',
+      due: 'истекает через 18 ч', dueShort: '18 ч', hash: 'sha256:9f21c4ab7d',
+      trust: 'Доверие: 7 из 10 supervised', channel: '@cmpas_notes',
+      body: 'Собрал короткий разбор того, как держу расход на моделях в рамках десяти долларов в день.\n\nТри правила: дешёвая модель по умолчанию, дорогая — только по явному признаку длинного контекста, и запись причины вызова в журнал.\n\nТаблица порогов и что считать длинным контекстом — по ссылке.',
+      bodyMeta: 'cmpas.ru/notes/limits · без предпросмотра ссылки',
+      pre: [
+        { text: 'Черновик не менялся после проверки тона', ok: true },
+        { text: 'В окне 09:00–13:00 нет других публикаций', ok: true },
+        { text: 'Ссылки в тексте отвечают 200', ok: true }
+      ],
+      doneAt: '12:42', doneResult: 'опубликовано, message_id 8841'
+    };
+    const merge = {
+      id: 'a_merge', title: 'Слияние ветки в main', tech: 'git.merge', kind: 'merge',
+      task: 'Карточка одобрения', taskId: 't_4468',
+      gist: 'panel/approvals → main · +128 −34 в 6 файлах',
+      due: 'истекает через 6 ч', dueShort: '6 ч', hash: 'sha256:a1b2c3d4e5',
+      trust: 'Доверие: 9 из 10 supervised', diffstat: '+128 −34 · 6 файлов',
+      files: ['src/panel/today.tsx', 'src/panel/approvals.tsx', 'src/lib/actions.ts', 'helm/registry.yaml', 'tests/approvals.spec.ts', 'docs/ADR-014.md'],
+      pre: [
+        { text: 'CI зелёный на a1b2c3d', ok: true },
+        { text: 'Нет конфликтов с main', ok: true },
+        { text: 'Ветка не трогает secrets/', ok: true }
+      ],
+      doneAt: '12:43', doneResult: 'merge a1b2c3d → main'
+    };
+    const charge = {
+      id: 'a_charge', title: 'Оплата пополнения баланса', tech: 'billing.charge', kind: 'charge',
+      task: 'Порог баланса OpenRouter', taskId: 't_4470',
+      gist: '24,00 $ · OpenRouter · баланс упал ниже 25 $',
+      due: 'истекает через 3 ч', dueShort: '3 ч', hash: 'sha256:5c7e0091ab',
+      trust: 'Доверие: 4 из 10 supervised',
+      fields: [
+        { k: 'Сумма', v: '24,00 $' },
+        { k: 'Получатель', v: 'OpenRouter' },
+        { k: 'Назначение', v: 'Пополнение до 25 $' },
+        { k: 'Карта', v: '•• 4417' }
+      ],
+      pre: [
+        { text: 'Цена не менялась с 12 авг.', ok: true },
+        { text: 'Баланс ниже порога 25 $', ok: true },
+        { text: 'Месячный лимит не превышен: 84 $ из 300 $', ok: true }
+      ],
+      doneAt: '12:44', doneResult: 'списано 24,00 $, баланс 49,10 $'
+    };
+    const deploy = {
+      id: 'a_deploy', title: 'Деплой панели на прод', tech: 'deploy.release', kind: 'charge',
+      task: 'Карточка одобрения', taskId: 't_4468',
+      gist: 'e7d9f04 → helm.cmpas.ru · 2 изменения',
+      due: 'истекает через 11 ч', dueShort: '11 ч', hash: 'sha256:e7d9f04c11',
+      trust: 'Доверие: 6 из 10 supervised',
+      fields: [
+        { k: 'SHA', v: 'e7d9f04' },
+        { k: 'Что изменится', v: 'карточка одобрения' },
+        { k: '', v: 'проверка preconditions перед исполнением' }
+      ],
+      pre: [
+        { text: 'CI зелёный на e7d9f04', ok: true },
+        { text: 'Бэкап свежее 12 ч', ok: true },
+        { text: 'Окно деплоя открыто до 18:00', ok: true }
+      ],
+      fail: 'Precondition упал в момент исполнения: CI перестал быть зелёным на e7d9f04. Действие не выполнено, хэш аннулирован.'
+    };
+    const tls = {
+      id: 'a_tls', title: 'Продление сертификата', tech: 'tls.renew', kind: 'simple', simple: true,
+      task: 'Рутина «TLS»', taskId: 't_4462',
+      gist: 'helm.cmpas.ru · Let’s Encrypt · истекает через 50 дн.',
+      due: 'истекает через 40 дн.', dueShort: '40 дн.', hash: 'sha256:b0c1d2e3f4',
+      trust: 'Доверие: 10 из 10 supervised',
+      pre: [{ text: 'DNS-запись на месте', ok: true }, { text: 'Порт 80 свободен', ok: true }],
+      doneAt: '12:41', doneResult: 'сертификат до 14 дек.'
+    };
+    const demote = {
+      id: 'a_demote', title: 'Понизить уровень доверия', tech: 'trust.demote', kind: 'simple', simple: true,
+      task: 'Предложение системы', taskId: 't_4465',
+      gist: 'telegram.post: supervised → assisted · причина: 2 отклонения за 7 дней',
+      due: 'истекает через 30 дн.', dueShort: '30 дн.', hash: 'sha256:7a91bb02cd',
+      trust: 'Действие уровня RED, hard',
+      pre: [{ text: 'Инцидентов за 24 ч нет', ok: true }, { text: 'Уровень выше минимального', ok: true }],
+      doneAt: '12:41', doneResult: 'уровень telegram.post: assisted'
+    };
+    const killoff = {
+      id: 'a_kill', title: 'Снять kill switch', tech: 'budget.killswitch.off', kind: 'simple', simple: true,
+      task: 'Kill switch 11:58', taskId: 't_4472',
+      gist: 'Дневной лимит исчерпан: 10,00 $ из 10 $. Снятие поднимет лимит до 12 $ на сегодня.',
+      due: 'истекает через 12 ч', dueShort: '12 ч', hash: 'sha256:cc10ee4402',
+      trust: 'Действие уровня RED, hard',
+      pre: [
+        { text: 'Месячный лимит не превышен: 84 $ из 300 $', ok: true },
+        { text: 'Активных задач в очереди: 4', ok: true }
+      ],
+      doneAt: '12:42', doneResult: 'лимит на сегодня 12 $, очередь возобновлена'
+    };
+    const mirror = (n, repo) => ({
+      id: 'a_m' + n, title: 'Синхронизация зеркала', tech: 'git.mirror.sync', kind: 'simple', simple: true,
+      task: 'Рутина «Проверка зеркал»', taskId: 't_446' + n,
+      gist: repo + ' · отставание 3 коммита',
+      due: 'истекает через 20 ч', dueShort: '20 ч', hash: 'sha256:mirror' + n + '0a4b',
+      trust: 'Доверие: 10 из 10 supervised',
+      pre: [{ text: 'Зеркало доступно', ok: true }, { text: 'Расхождений истории нет', ok: true }],
+      doneAt: '12:41', doneResult: 'зеркало синхронно'
+    });
+
+    if (sc === 'calm') return [];
+    if (sc === 'batch') return [mirror(1, 'cmpas.ru'), mirror(2, 'helm-core'), mirror(3, 'compas-voice'), mirror(4, 'ilyamartynov.ru'), post];
+    if (sc === 'offline') return [post, merge];
+    if (sc === 'kill') return [killoff];
+    return [post, merge, charge, deploy, tls, demote];
+  }
+
+  scenarioData(sc) {
+    const S = {
+      calm: {
+        now: '08:12', status: { word: 'В порядке', tone: 'ok', since: 'проверено 08:12' },
+        today: '2,40', tasks: 'Задач в работе: 1 · застрявших нет',
+        stuck: null, disk: ['41 / 100 GB', '+0,3 ГБ/день', '90% через 190 дн.', 'mut'],
+        ram: ['7,1 / 12 GB', 'порог 9 GB', 'mut'], expensive: null
+      },
+      monday: {
+        now: '12:41', status: {
+          word: 'Проблема', tone: 'crit', since: 'с 09:04',
+          reason: 'Диск 91 / 100 GB, порог 90. При +1,4 ГБ/день предел через 3 дня.', link: 'Открыть Сервер', to: 'system'
+        },
+        today: '4,80', tasks: 'Задач в работе: 3 · застряла 1',
+        stuck: 'Экспорт n8n workflow — 2 ч 14 мин без heartbeat',
+        disk: ['91 / 100 GB', '+1,4 ГБ/день', '95% через 3 дн.', 'crit'],
+        ram: ['8,5 / 12 GB', 'порог 9 GB', 'warn'],
+        expensive: 'claude-opus-4 · Разбор роста диска · вызвана из-за длинного контекста: 182k токенов лога'
+      },
+      batch: {
+        now: '09:30', status: { word: 'В порядке', tone: 'ok', since: 'проверено 09:29' },
+        today: '3,05', tasks: 'Задач в работе: 2 · застрявших нет', stuck: null,
+        disk: ['44 / 100 GB', '+0,3 ГБ/день', '90% через 176 дн.', 'mut'],
+        ram: ['7,4 / 12 GB', 'порог 9 GB', 'mut'], expensive: null
+      },
+      offline: {
+        now: '07:12', status: {
+          word: 'Внимание', tone: 'warn', since: 'снимок 07:12',
+          reason: 'Control Plane не отвечает с 07:19. Показаны данные снимка, записи недоступны.', link: 'Статус Guardian', to: 'guardian'
+        },
+        today: '1,10', tasks: 'Задач в работе: 2 · застрявших нет', stuck: null,
+        disk: ['43 / 100 GB', '+0,3 ГБ/день', '90% через 180 дн.', 'mut'],
+        ram: ['6,8 / 12 GB', 'порог 9 GB', 'mut'], expensive: null
+      },
+      kill: {
+        now: '12:03', status: {
+          word: 'Проблема', tone: 'crit', since: 'с 11:58',
+          reason: 'Kill switch сработал в 11:58: дневной лимит 10 $ исчерпан. Очередь из 4 задач остановлена.', link: 'Открыть Деньги', to: 'money'
+        },
+        today: '10,00', tasks: 'Задач в работе: 0 · остановлено kill switch: 4', stuck: null,
+        disk: ['44 / 100 GB', '+0,3 ГБ/день', '90% через 176 дн.', 'mut'],
+        ram: ['7,0 / 12 GB', 'порог 9 GB', 'mut'],
+        expensive: 'claude-opus-4 · Сводка по клиентским заметкам · вызвана из-за длинного контекста: 210k токенов'
+      }
+    };
+    return S[sc] || S.monday;
+  }
+
+  renderVals() {
+    const st = this.state;
+    const p = this.props || {};
+    const dev = st.device || p.device || 'phone';
+    const isPhone = dev === 'phone';
+    const theme = st.theme || p.theme || 'light';
+    const acc = p.accent || '#1D4735';
+    const sc = st.scenario || p.scenario || 'monday';
+    const C = this.palette(theme, acc);
+    const stale = sc === 'offline';
+    const locked = stale;
+    const d = this.scenarioData(sc);
+    const all = this.approvals(sc);
+    const dec = st.decided;
+    const pending = all.filter((a) => !dec[a.id]);
+
+    const vars = {
+      '--h-bg': C.bg, '--h-card': C.card, '--h-card2': C.card2, '--h-border': C.border,
+      '--h-ink': C.ink, '--h-mut': C.mut, '--h-faint': C.faint,
+      '--h-ok': C.ok, '--h-ok-soft': C.okSoft, '--h-warn': C.warn, '--h-warn-soft': C.warnSoft,
+      '--h-crit': C.crit, '--h-crit-soft': C.critSoft,
+      '--h-acc': acc, '--h-acc-fg': C.accFg, '--h-acc-soft': C.accSoft, '--h-shadow': C.shadow
+    };
+
+    const frameStyle = Object.assign({}, vars, {
+      position: 'relative', display: 'flex', overflow: 'hidden', flex: 'none',
+      background: C.bg, boxSizing: 'border-box',
+      width: isPhone ? 390 : 1180, height: isPhone ? 844 : 800,
+      border: isPhone ? '9px solid ' + (theme === 'dark' ? '#242E28' : '#14201A') : '1px solid ' + C.border,
+      borderRadius: isPhone ? 46 : 16,
+      boxShadow: isPhone ? '0 24px 60px rgba(20,32,24,.22)' : '0 18px 44px rgba(20,32,24,.12)'
+    });
+
+    const NAV = [
+      { id: 'today', label: 'Сегодня' }, { id: 'approvals', label: 'Одобрения' },
+      { id: 'tasks', label: 'Задачи' }, { id: 'money', label: 'Деньги' }, { id: 'system', label: 'Система' }
+    ];
+    const nav = NAV.map((n) => {
+      const active = st.tab === n.id;
+      const count = n.id === 'approvals' && pending.length ? String(pending.length) : '';
+      return {
+        label: n.label, count, onPick: () => this.go(n.id),
+        tabStyle: {
+          flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center',
+          gap: 3, padding: '8px 2px 6px', background: 'none', border: 'none', cursor: 'pointer',
+          fontFamily: 'var(--font-sans)', fontSize: 11, fontWeight: active ? 700 : 500,
+          color: active ? acc : 'var(--h-mut)',
+          borderTop: '2px solid ' + (active ? acc : 'transparent'), borderRadius: 0
+        },
+        railStyle: {
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+          padding: '10px 12px', borderRadius: 12, border: 'none', cursor: 'pointer',
+          fontFamily: 'var(--font-sans)', fontSize: 15, fontWeight: active ? 700 : 500,
+          textAlign: 'left', background: active ? 'var(--h-acc-soft)' : 'transparent',
+          color: active ? acc : 'var(--h-ink)', transition: 'background .15s ease'
+        },
+        countStyle: {
+          fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 500,
+          color: count ? acc : 'transparent'
+        },
+        dotStyle: {
+          fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700,
+          minHeight: 12, color: count ? acc : 'transparent'
+        }
+      };
+    });
+
+    const titles = { today: 'Сегодня', approvals: 'Одобрения', tasks: 'Задачи', money: 'Деньги', system: 'Система' };
+
+    // ── approvals mapping
+    const decorate = (a) => {
+      const r = dec[a.id];
+      return Object.assign({}, a, {
+        inline: !!a.simple, needsOpen: !a.simple, locked,
+        onOpen: () => this.setState({ tab: 'approvals', apprTab: 'Ожидают', open: a.id }),
+        onApprove: () => this.ask('Подтвердите passkey', a.title + ' · подпись действия', a.hash, () => {
+          this.decide(a.id, a.fail
+            ? { tone: 'crit', text: a.fail }
+            : { tone: 'ok', text: 'Выполнено · ' + a.doneAt + ' · ' + a.doneResult });
+        }),
+        onReject: () => this.setState({ tab: 'approvals', apprTab: 'Ожидают', open: a.id, rejectId: a.id, rejectText: '' }),
+        result: r ? { text: r.text, style: this.resultStyle(r.tone) } : null
+      });
+    };
+    const pendingDec = pending.map(decorate);
+    const todayApprovals = pendingDec.slice(0, 3).map((a, i) => Object.assign({}, a, {
+      rowStyle: this.sep(i, { paddingTop: i ? 12 : 8, paddingBottom: 8 })
+    }));
+    const decidedToday = all.filter((a) => dec[a.id]).map(decorate);
+    const shownToday = todayApprovals.concat(decidedToday.slice(0, 1).map((a, i) => Object.assign({}, a, {
+      rowStyle: this.sep(todayApprovals.length + i, { paddingTop: 12, paddingBottom: 8 })
+    })));
+
+    const curRaw = st.open ? all.find((a) => a.id === st.open) : null;
+    let cur = null;
+    if (curRaw) {
+      const a = decorate(curRaw);
+      cur = Object.assign({}, a, {
+        taskLabel: 'Задача: ' + a.task + ' · ' + a.taskId,
+        onTask: () => this.setState({ tab: 'tasks', openTask: 't_4471', open: null }),
+        isPost: a.kind === 'post', isMerge: a.kind === 'merge',
+        isCharge: a.kind === 'charge', isSimple: a.kind === 'simple',
+        fields: (a.fields || []).map((f, i) => Object.assign({}, f, { style: this.sepRow(i, { alignItems: 'flex-start' }) })),
+        pre: (a.pre || []).map((x) => ({
+          text: x.text + (x.note ? ' — ' + x.note : ''), mark: x.ok ? '✓' : '✗',
+          markStyle: {
+            fontFamily: 'var(--font-mono)', fontSize: 13, lineHeight: '19px',
+            color: x.ok ? 'var(--h-ok)' : 'var(--h-crit)', flex: 'none', width: 14
+          }
+        })),
+        hash: a.hash, copyLabel: st.copied === a.hash ? 'скопировано' : 'копировать',
+        onCopy: () => this.copy(a.hash),
+        onDiff: () => this.setState({
+          sheet: {
+            kind: 'diff', title: 'diff · panel/approvals → main',
+            sub: a.diffstat + ' · показаны ключевые строки',
+            lines: [
+              '--- a/src/panel/approvals.tsx',
+              '+++ b/src/panel/approvals.tsx',
+              '@@ -18,7 +18,11 @@',
+              '-  const ok = pre.every(p => p.ok)',
+              '+  const ok = pre.every(p => p.ok && !p.stale)',
+              '+  if (!ok) return blocked(pre)',
+              '   return sign(action.hash)',
+              '@@ -64,3 +68,6 @@',
+              '+  // хэш проверяется повторно в момент исполнения',
+              '+  assertHash(action.hash, snapshot.hash)'
+            ]
+          }
+        }),
+        actionable: !dec[a.id] && !locked,
+        result: a.result
+      });
+    }
+
+    const typeGroups = {};
+    pendingDec.forEach((a) => { typeGroups[a.tech] = (typeGroups[a.tech] || 0) + 1; });
+    let batch = null;
+    const batchTech = Object.keys(typeGroups).find((k) => typeGroups[k] > 3);
+    if (batchTech && !locked) {
+      const items = pendingDec.filter((a) => a.tech === batchTech);
+      batch = {
+        title: 'Одобрить все ' + items.length + ' · ' + batchTech,
+        cta: 'Одобрить все ' + items.length,
+        items: items.map((a) => a.gist),
+        onRun: () => this.ask('Подтвердите passkey', items.length + ' действия ' + batchTech + ', каждое подписывается отдельно', items.map((a) => a.hash.slice(7, 17)).join('\n'), () => {
+          this.setState((s2) => {
+            const nd = Object.assign({}, s2.decided);
+            items.forEach((a, i) => { nd[a.id] = { tone: 'ok', text: 'Выполнено · 09:3' + (i + 1) + ' · ' + a.doneResult + ' (подписано отдельно)' }; });
+            return { decided: nd };
+          });
+        })
+      };
+    }
+
+    const HIST = [
+      { type: 'Публикация в канал', date: '24 авг. 21:04', line: 'одобрено · Telegram · опубликовано, message_id 8790', t: 'telegram.post' },
+      { type: 'Слияние ветки в main', date: '24 авг. 18:22', line: 'одобрено · панель · merge 4c9a1f0 → main', t: 'git.merge' },
+      { type: 'Публикация в канал', date: '23 авг. 20:41', line: 'отклонено · панель · причина сохранена', t: 'telegram.post' },
+      { type: 'Оплата пополнения', date: '22 авг. 11:09', line: 'одобрено · панель · списано 24,00 $', t: 'billing.charge' },
+      { type: 'Деплой панели', date: '21 авг. 16:35', line: 'одобрено · панель · precondition упал, не выполнено', t: 'deploy.release' },
+      { type: 'Продление сертификата', date: '20 авг. 03:12', line: 'одобрено · Telegram · сертификат до 14 дек.', t: 'tls.renew' }
+    ];
+    const histTypes = ['все', 'telegram.post', 'git.merge', 'billing.charge'];
+    const history = HIST.filter((h) => st.histType === 'все' || h.t === st.histType)
+      .map((h, i) => Object.assign({}, h, { style: this.sep(i) }));
+
+    const TRUST = [
+      { type: 'telegram.post', level: 'supervised', line: '7 из 10 · последний инцидент 23 авг.' },
+      { type: 'git.merge', level: 'supervised', line: '9 из 10 · инцидентов нет' },
+      { type: 'billing.charge', level: 'supervised', line: '4 из 10 · инцидентов нет' },
+      { type: 'tls.renew', level: 'autonomous', line: '10 из 10 · инцидентов нет' }
+    ];
+
+    // ── tasks
+    const TASKS = [
+      { g: 'Застряли', title: 'Экспорт n8n workflow', id: 't_4471', dom: 'infra', prof: 'helm-fast', time: '2 ч 14 мин без heartbeat', cost: '0,08 $', tone: 'crit' },
+      { g: 'В работе', title: 'Разбор роста диска', id: 't_4469', dom: 'infra', prof: 'helm-deep', time: '18 мин', cost: '1,90 $' },
+      { g: 'В работе', title: 'Дайджест недели', id: 't_4468', dom: 'content', prof: 'helm-standard', time: '6 мин', cost: '0,42 $' },
+      { g: 'В работе', title: 'Проверка зеркал', id: 't_4467', dom: 'infra', prof: 'helm-fast', time: '2 мин', cost: '0,02 $' },
+      { g: 'Ждут одобрения', title: 'Порог баланса OpenRouter', id: 't_4470', dom: 'money', prof: 'helm-fast', time: '3 ч 02 мин', cost: '0,01 $' },
+      { g: 'Готово сегодня', title: 'Ночная сводка задач', id: 't_4455', dom: 'infra', prof: 'helm-fast', time: '4 мин', cost: '0,06 $' },
+      { g: 'Готово сегодня', title: 'Бэкап и проверка TLS', id: 't_4452', dom: 'infra', prof: 'helm-fast', time: '11 мин', cost: '0,03 $' }
+    ];
+    const domains = ['все', 'infra', 'content', 'money'].map((v) => ({
+      label: v, onPick: () => this.setState({ domain: v }), style: this.chip(st.domain === v, acc)
+    }));
+    const q = st.q.trim().toLowerCase();
+    const filtered = TASKS.filter((t) => (st.domain === 'все' || t.dom === st.domain) &&
+      (!q || t.title.toLowerCase().indexOf(q) >= 0 || t.id.indexOf(q) >= 0));
+    const groupNames = ['Застряли', 'В работе', 'Ждут одобрения', 'Готово сегодня'];
+    const groups = groupNames.map((g) => {
+      const rows = filtered.filter((t) => t.g === g);
+      return {
+        name: g, count: String(rows.length),
+        capStyle: {
+          fontSize: 10, fontWeight: 700, letterSpacing: '.09em', textTransform: 'uppercase',
+          color: g === 'Застряли' ? 'var(--h-crit)' : 'var(--h-mut)'
+        },
+        rows: rows.map((t, i) => ({
+          title: t.title, cost: t.cost,
+          meta: t.id + ' · ' + t.dom + ' · ' + t.prof + ' · ' + t.time,
+          onOpen: () => this.setState({ openTask: t.id }),
+          style: Object.assign(this.sep(i, {}), {
+            background: 'none', border: 'none', borderTop: i ? '1px solid var(--h-border)' : 'none',
+            cursor: 'pointer', textAlign: 'left', padding: '10px 0', fontFamily: 'var(--font-sans)'
+          })
+        }))
+      };
+    }).filter((g) => g.rows.length);
+
+    const openT = st.openTask ? (TASKS.find((t) => t.id === st.openTask) || TASKS[0]) : null;
+    let task = null;
+    if (openT) {
+      task = {
+        title: openT.title,
+        meta: openT.id + ' · ' + openT.dom + ' · ' + openT.prof + ' · ' + openT.cost + ' · ' + openT.time,
+        state: openT.g === 'Застряли' ? 'Застряла: нет heartbeat с 10:58' : openT.g,
+        stateStyle: { fontSize: 13, fontWeight: 500, color: openT.tone === 'crit' ? 'var(--h-crit)' : 'var(--h-mut)' },
+        events: [
+          { time: '09:12', actor: 'scheduler', text: 'задача создана рутиной «Экспорт n8n»' },
+          { time: '09:12', actor: 'helm-fast', text: 'план из трёх шагов' },
+          { time: '09:13', actor: 'mcp.n8n', text: 'экспорт workflow 1 из 4' },
+          { time: '09:41', actor: 'mcp.n8n', text: 'таймаут 30 с, повтор 1 из 3' },
+          { time: '10:58', actor: 'runner', text: 'heartbeat потерян, задача помечена застрявшей' }
+        ].map((e, i) => Object.assign({}, e, { style: this.sepRow(i, { alignItems: 'flex-start', gap: 10 }) })),
+        calls: [
+          { alias: 'helm-fast → gpt-4.1-mini', meta: '12 400 ток. · 0,04 $' },
+          { alias: 'helm-fast → gpt-4.1-mini', meta: '9 800 ток. · 0,03 $' },
+          { alias: 'helm-standard → sonnet-4.5', meta: '4 100 ток. · 0,01 $' }
+        ].map((c, i) => Object.assign({}, c, { style: this.sepRow(i) })),
+        artifacts: [
+          { name: 'n8n-export-2026-08-25.json', sha: 'b31f0c2' },
+          { name: 'run.log', sha: '4ad9e71' }
+        ].map((f, i) => Object.assign({}, f, { style: this.sepRow(i), onCopy: () => this.copy(f.sha) })),
+        onRetry: () => this.ask('Подтвердите passkey', 'Повторить задачу ' + openT.id + ' — действие уровня YELLOW', 'task.retry:' + openT.id, () => this.note('retry', 'Задача поставлена в очередь повторно · 12:45')),
+        onStop: () => this.ask('Подтвердите passkey', 'Остановить задачу ' + openT.id, 'task.stop:' + openT.id, () => this.note('retry', 'Задача остановлена · 12:45')),
+        note: st.ran.retry || null,
+        noteStyle: this.resultStyle('ok')
+      };
+    }
+
+    // ── money
+    const raw = [2.1, 3.4, 2.8, 1.9, 4.2, 3.1, 2.6, 5.4, 3.8, 2.2, 1.7, 3.3, 4.9, 3.6, 2.4, 2.9, 6.1, 3.2, 2.7, 1.8, 3.9, 4.4, 2.3, 3.0, 3.5, 2.0, 4.7, 3.1, 3.1, parseFloat(d.today.replace(',', '.'))];
+    const max = Math.max.apply(null, raw);
+    const bars = raw.map((v, i) => {
+      const sel = st.dayIdx === i;
+      return {
+        onPick: () => this.setState({ dayIdx: sel ? null : i }),
+        style: {
+          flex: 1, minWidth: 0, padding: 0, border: 'none', cursor: 'pointer',
+          borderRadius: '2px 2px 0 0', height: Math.max(4, Math.round((v / max) * 92)),
+          background: sel ? acc : 'color-mix(in srgb, ' + acc + ' 26%, transparent)',
+          transition: 'background .15s ease'
+        }
+      };
+    });
+    const dayNames = ['профиль', 'alias', 'модель'];
+    const bd = st.breakdown;
+    const dayRowsFor = (v) => {
+      if (bd === 'По alias') return [
+        { k: 'helm-fast', v: (v * 0.22).toFixed(2).replace('.', ',') + ' $' },
+        { k: 'helm-standard', v: (v * 0.41).toFixed(2).replace('.', ',') + ' $' },
+        { k: 'helm-deep', v: (v * 0.37).toFixed(2).replace('.', ',') + ' $' }
+      ];
+      if (bd === 'По модели') return [
+        { k: 'gpt-4.1-mini', v: (v * 0.19).toFixed(2).replace('.', ',') + ' $' },
+        { k: 'sonnet-4.5', v: (v * 0.44).toFixed(2).replace('.', ',') + ' $' },
+        { k: 'claude-opus-4', v: (v * 0.37).toFixed(2).replace('.', ',') + ' $' }
+      ];
+      return [
+        { k: 'routine', v: (v * 0.31).toFixed(2).replace('.', ',') + ' $' },
+        { k: 'interactive', v: (v * 0.46).toFixed(2).replace('.', ',') + ' $' },
+        { k: 'eval', v: (v * 0.23).toFixed(2).replace('.', ',') + ' $' }
+      ];
+    };
+    const dayIdx = st.dayIdx;
+    const day = dayIdx == null ? null : {
+      label: dayIdx === 29 ? 'Сегодня' : (dayIdx + 1) + ' день из 30',
+      total: raw[dayIdx].toFixed(2).replace('.', ',') + ' $ · раскладка по ' + dayNames[['По профилю', 'По alias', 'По модели'].indexOf(bd)],
+      rows: dayRowsFor(raw[dayIdx]).map((r, i) => Object.assign({}, r, { style: this.sepRow(i, { padding: '8px 0', minHeight: 34 }) }))
+    };
+    const killOn = sc === 'kill';
+    const money = {
+      todayLine: d.today + ' $ из 10 $ · вчера 3,10 $',
+      expensive: d.expensive,
+      today: d.today + ' $ из 10 $',
+      month: '84,20 $ из 300 $ · soft-alert 240 $',
+      kill: killOn ? 'Kill switch: сработал 11:58' : 'Kill switch: выкл',
+      killStyle: { fontSize: 15, fontWeight: killOn ? 700 : 500, color: killOn ? 'var(--h-crit)' : 'var(--h-ink)' },
+      killCta: killOn ? 'Снять' : 'Включить',
+      killNote: st.ran.kill || null,
+      onKill: () => this.note('kill', 'RED-действие отправлено в Одобрения · подпись потребуется там, здесь не срабатывает'),
+      rowA: this.sepRow(0), rowB: this.sepRow(1), rowC: this.sepRow(2),
+      sum30: raw.reduce((a, b) => a + b, 0).toFixed(0) + ' $ за 30 дней',
+      firstDay: '27 июл.', lastDay: '25 авг.'
+    };
+    const pricey = {
+      count: '4 вызова',
+      rows: [
+        { task: 'Разбор роста диска', cost: '1,42 $', model: 'helm-deep → claude-opus-4 · 182k ток.', why: 'Причина: длинный контекст, лог за 30 дней не помещается в standard' },
+        { task: 'Сводка по клиентским заметкам', cost: '0,88 $', model: 'helm-deep → claude-opus-4 · 96k ток.', why: 'Причина: требуется цитирование без пересказа' },
+        { task: 'Ревизия actions.yaml', cost: '0,61 $', model: 'helm-deep → claude-opus-4 · 44k ток.', why: 'Причина: сравнение двух версий политики построчно' },
+        { task: 'Дайджест недели', cost: '0,42 $', model: 'helm-standard → sonnet-4.5 · 31k ток.', why: 'Причина: не дороже standard, показан для сравнения' }
+      ].map((r, i) => Object.assign({}, r, { style: this.sep(i) }))
+    };
+    const models = [
+      { alias: 'helm-fast', primary: 'primary: gpt-4.1-mini', challenger: 'challenger: gemini-2.5-flash', eval: 'eval 18 авг. · без изменений' },
+      { alias: 'helm-standard', primary: 'primary: sonnet-4.5', challenger: 'challenger: gpt-5.1', eval: 'eval 20 авг. · primary лучше' },
+      { alias: 'helm-deep', primary: 'primary: claude-opus-4', challenger: 'challenger: o4-pro', eval: 'eval 12 авг. · ничья' },
+      { alias: 'helm-vision', primary: 'primary: gpt-4.1', challenger: 'challenger: нет', eval: 'eval не запускался' }
+    ].map((m, i) => Object.assign({}, m, { style: this.sep(i) }));
+    const demotions = [
+      { date: '22 авг.', text: 'helm-standard: challenger gpt-5.1 понижен, 3 провала eval подряд' },
+      { date: '14 авг.', text: 'helm-fast: primary переведён на gpt-4.1-mini, цена ниже при равном eval' },
+      { date: '02 авг.', text: 'helm-deep: авто-понижение отменено вручную' }
+    ].map((x, i) => Object.assign({}, x, { style: this.sepRow(i, { alignItems: 'flex-start' }) }));
+
+    // ── system
+    const R = [
+      { name: 'Диск', v: d.disk[0], th: 'порог 80 · 90 GB', fc: d.disk[2], tone: d.disk[3] },
+      { name: 'inodes', v: '412k / 6,5M', th: 'порог 70% · 85%', fc: 'предел не прогнозируется', tone: 'mut' },
+      { name: 'RAM', v: d.ram[0], th: 'порог 9 · 11 GB', fc: d.ram[2] === 'warn' ? 'порог через 9 дн.' : 'предел не прогнозируется', tone: d.ram[2] },
+      { name: 'swap', v: '0,4 / 2 GB', th: 'порог 1 · 1,6 GB', fc: 'предел не прогнозируется', tone: 'mut' },
+      { name: 'Docker disk', v: '22 / 40 GB', th: 'порог 30 · 35 GB', fc: '30 GB через 62 дн.', tone: 'mut' },
+      { name: 'BuildKit cache', v: '6,1 GB', th: 'порог 8 · 10 GB', fc: '8 GB через 24 дн.', tone: 'mut' }
+    ];
+    const resources = R.map((r, i) => ({
+      name: r.name, value: r.v, threshold: r.th, forecast: r.fc, style: this.sep(i),
+      valStyle: {
+        fontFamily: 'var(--font-mono)', fontSize: 15, fontWeight: r.tone === 'mut' ? 500 : 700,
+        color: r.tone === 'mut' ? 'var(--h-ink)' : this.tone(r.tone).fg, whiteSpace: 'nowrap'
+      }
+    }));
+    const diskSeries = [];
+    for (let i = 0; i < 30; i++) {
+      const base = sc === 'monday' ? 48 + i * 1.45 : 36 + i * 0.28;
+      diskSeries.push(Math.min(99, base));
+    }
+    const disk = {
+      note: d.disk[0] + ' · ' + d.disk[1],
+      caption: sc === 'monday'
+        ? 'Линия — порог 90 GB. Пересечён 24 августа, рост дают снапшоты BuildKit.'
+        : 'Линия — порог 90 GB. При текущем росте не будет достигнут в этом квартале.',
+      lineStyle: {
+        position: 'absolute', left: 0, right: 0, bottom: Math.round(0.9 * 92),
+        height: 1, background: 'var(--h-crit)', opacity: .55
+      },
+      bars: diskSeries.map((v) => ({
+        style: {
+          flex: 1, minWidth: 0, height: Math.max(3, Math.round((v / 100) * 92)),
+          borderRadius: '2px 2px 0 0',
+          background: v >= 90 ? 'var(--h-crit)' : 'color-mix(in srgb, ' + acc + ' 26%, transparent)'
+        }
+      }))
+    };
+    const containers = [
+      { n: 'helm-api', m: 'up 12 дн. · 0 рестартов · 210 MB', t: 'mut' },
+      { n: 'helm-runner', m: 'up 3 ч · 2 рестарта · 640 MB', t: 'warn' },
+      { n: 'litellm', m: 'up 12 дн. · 0 рестартов · 180 MB', t: 'mut' },
+      { n: 'n8n', m: 'up 6 дн. · 0 рестартов · 320 MB', t: 'mut' },
+      { n: 'postgres', m: 'up 31 дн. · 0 рестартов · 410 MB', t: 'mut' },
+      { n: 'caddy', m: 'up 31 дн. · 0 рестартов · 40 MB', t: 'mut' }
+    ].map((c, i) => ({
+      name: c.n, meta: c.m, style: this.sepRow(i),
+      metaStyle: {
+        fontFamily: 'var(--font-mono)', fontSize: 13, whiteSpace: 'nowrap',
+        color: c.t === 'mut' ? 'var(--h-mut)' : this.tone(c.t).fg
+      }
+    }));
+    const backup = [
+      { k: 'Последний бэкап', v: '06:12 · 6 ч назад' },
+      { k: 'Размер', v: '1,8 GB' },
+      { k: 'Restore-тест', v: '22 авг. · успешно' },
+      { k: 'TLS', v: 'до 14 окт. · 50 дн.' }
+    ].map((b, i) => Object.assign({}, b, { style: this.sepRow(i) }));
+    const cleanup = [
+      '12:00  buildkit prune       освобождено 1,2 GB',
+      '06:30  docker image prune   освобождено 0,4 GB',
+      '06:30  journald vacuum      освобождено 0,2 GB',
+      '00:10  tmp cleanup          освобождено 0,1 GB',
+      '00:10  n8n execution purge  удалено 1 204 записи',
+      '00:10  task_events rotate   перенесено в архив 8 900 строк'
+    ];
+    const integrations = [
+      { n: 'Telegram', s: 'ок', d: 'проверка 12:40 · webhook активен', t: 'ok' },
+      { n: 'MAX', s: 'внимание', d: 'проверка 12:40 · outbox 14 сообщений', t: 'warn' },
+      { n: 'LiteLLM', s: 'ок', d: 'проверка 12:41 · 4 alias, 0 ошибок за час', t: 'ok' },
+      { n: 'OpenRouter', s: 'внимание', d: 'проверка 12:41 · баланс 1,10 $', t: 'warn' },
+      { n: 'MCP fs', s: 'ок', d: 'проверка 12:38 · только чтение вне /data', t: 'ok' },
+      { n: 'MCP git', s: 'ок', d: 'проверка 12:38 · 3 репозитория', t: 'ok' },
+      { n: 'MCP n8n', s: 'ошибка', d: 'проверка 12:39 · таймаут 30 с', t: 'crit' },
+      { n: 'n8n · daily-export', s: 'активен', d: 'запуск 09:10 · экспорт 24 авг. · открыть в n8n', t: 'ok' },
+      { n: 'n8n · backup', s: 'активен', d: 'запуск 03:00 · экспорт 24 авг. · открыть в n8n', t: 'ok' },
+      { n: 'n8n · mirror-check', s: 'активен', d: 'запуск 06:00 · экспорт 20 авг. · открыть в n8n', t: 'ok' },
+      { n: 'n8n · digest', s: 'выключен', d: 'запуск 18 авг. · экспорт 18 авг. · открыть в n8n', t: 'mut' },
+      { n: 'git-зеркало', s: 'внимание', d: 'cmpas.ru свежее 2 ч · helm-core отставание 3 коммита', t: 'warn' }
+    ].map((x, i) => ({
+      name: x.n, state: x.s, detail: x.d, style: this.sep(i),
+      stateStyle: this.pill(x.t)
+    }));
+    const ROUT = [
+      { n: 'Экспорт n8n', m: 'ежедневно 09:10 · последний 09:12 · застряла', c: '0,08 $' },
+      { n: 'Бэкап', m: 'ежедневно 03:00 · последний 03:02 · успешно', c: '0,00 $' },
+      { n: 'Проверка зеркал', m: 'каждые 6 ч · последний 12:00 · успешно', c: '0,02 $' },
+      { n: 'Дайджест недели', m: 'пн 08:00 · последний 18 авг. · успешно', c: '0,42 $' },
+      { n: 'Restore-тест', m: '1-е число · последний 1 авг. · успешно', c: '0,00 $' }
+    ];
+    const routines = ROUT.map((r, i) => {
+      const off = !!st.routineOff[r.n];
+      return {
+        name: r.n, meta: r.m, cost: r.c, style: this.sep(i),
+        toggleLabel: off ? 'Выключена' : 'Включена',
+        toggleStyle: this.chip(!off, acc),
+        onToggle: () => this.ask('Подтвердите passkey', (off ? 'Включить' : 'Выключить') + ' рутину «' + r.n + '» — действие уровня YELLOW', 'routine.toggle:' + r.n, () => {
+          this.setState((s2) => ({ routineOff: Object.assign({}, s2.routineOff, { [r.n]: !off }) }));
+        }),
+        onRun: () => this.ask('Подтвердите passkey', 'Запустить «' + r.n + '» сейчас — действие уровня YELLOW', 'routine.run:' + r.n, () => this.note('server', 'Рутина «' + r.n + '» запущена · 12:45'))
+      };
+    });
+    const policies = [
+      { a: 'telegram.post', l: 'YELLOW', h: 'нет' },
+      { a: 'git.merge', l: 'YELLOW', h: 'нет' },
+      { a: 'tls.renew', l: 'YELLOW', h: 'нет' },
+      { a: 'deploy.release', l: 'RED', h: 'да' },
+      { a: 'billing.charge', l: 'RED', h: 'да' },
+      { a: 'trust.demote', l: 'RED', h: 'да' },
+      { a: 'fs.delete', l: 'RED', h: 'да' }
+    ].map((p, i) => ({
+      action: p.a, level: p.l, hard: 'hard: ' + p.h, style: this.sepRow(i),
+      levelStyle: {
+        fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 700,
+        color: p.l === 'RED' ? 'var(--h-crit)' : 'var(--h-warn)'
+      }
+    }));
+    const candidates = [
+      { skill: 'skills/digest.md', material: 'material: да', changed: 'Добавлен раздел о длине абзацев и запрет на восклицательные знаки' },
+      { skill: 'skills/incident.md', material: 'material: нет', changed: 'Уточнён порядок шагов при потере heartbeat' }
+    ].map((c, i) => Object.assign({}, c, {
+      style: this.sep(i),
+      onDiff: () => this.setState({
+        sheet: {
+          kind: 'diff', title: 'diff · ' + c.skill, sub: 'кандидат против текущей версии',
+          lines: ['--- a/' + c.skill, '+++ b/' + c.skill, '@@ -12,4 +12,7 @@', '-  Абзац: до 6 строк', '+  Абзац: до 4 строк', '+  Восклицательные знаки не использовать', '   Обращение: вы']
+        }
+      }),
+      onPromote: () => this.ask('Подтвердите passkey', 'Promote ' + c.skill + ' — уйдёт в Одобрения', 'skill.promote:' + c.skill, () => this.note('server', 'Кандидат ' + c.skill + ' отправлен в Одобрения · 12:45'))
+    }));
+    const adrs = [
+      { title: 'Панель не имеет прав на запись', file: 'ADR-014.md' },
+      { title: 'Дорогая модель только по признаку контекста', file: 'ADR-011.md' },
+      { title: 'Одобрения дублируются в Telegram', file: 'ADR-007.md' }
+    ];
+    const JOUR = [
+      { rel: '2 мин назад', abs: '25 авг. 12:39', actor: 'runner', e: 'задача помечена застрявшей: нет heartbeat', task: 't_4471 · Экспорт n8n workflow', sec: false },
+      { rel: '18 мин назад', abs: '25 авг. 12:23', actor: 'owner', e: 'вход в панель подтверждён passkey', task: '', sec: true },
+      { rel: '41 мин назад', abs: '25 авг. 12:00', actor: 'system', e: 'автоочистка buildkit, освобождено 1,2 GB', task: '', sec: false },
+      { rel: '1 ч назад', abs: '25 авг. 11:41', actor: 'guardian', e: 'диск превысил порог 90 GB', task: '', sec: false },
+      { rel: '2 ч назад', abs: '25 авг. 10:12', actor: 'owner', e: 'отклонено одобрение telegram.post, причина сохранена', task: 't_4466 · Анонс практики', sec: false },
+      { rel: '4 ч назад', abs: '25 авг. 08:30', actor: 'system', e: 'неудачная попытка входа, owner id не совпал', task: '', sec: true },
+      { rel: '6 ч назад', abs: '25 авг. 06:12', actor: 'system', e: 'бэкап завершён, 1,8 GB', task: '', sec: false },
+      { rel: '9 ч назад', abs: '25 авг. 03:02', actor: 'scheduler', e: 'рутина «Бэкап» выполнена', task: 't_4452 · Бэкап и проверка TLS', sec: false }
+    ];
+    const journal = JOUR.filter((j) => st.jType === 'все' || (st.jType === 'только security' ? j.sec : true))
+      .map((j, i) => ({
+        time: st.absTime['j' + i] ? j.abs : j.rel, actor: j.actor, event: j.e, task: j.task,
+        onTime: () => this.toggleAbs('j' + i),
+        style: this.sep(i, j.sec ? { background: 'var(--h-crit-soft)', margin: '0 -14px', padding: '10px 14px' } : {})
+      }));
+
+    const sysTabsDef = [
+      { id: 'server', label: 'Сервер' }, { id: 'integrations', label: 'Интеграции' },
+      { id: 'routines', label: 'Рутины' }, { id: 'policies', label: 'Политики' }, { id: 'journal', label: 'Журнал' }
+    ];
+
+    // ── sheet
+    let sheet = null;
+    const sh = st.sheet;
+    if (sh) {
+      const wrap = isPhone
+        ? { alignItems: 'flex-end' }
+        : { alignItems: 'center', justifyContent: 'center', padding: 40 };
+      const box = isPhone
+        ? {
+          width: '100%', maxHeight: '78%', display: 'flex', flexDirection: 'column', gap: 16,
+          padding: '20px 18px 28px', background: 'var(--h-card)', borderRadius: '20px 20px 0 0'
+        }
+        : {
+          width: 560, maxHeight: '80%', display: 'flex', flexDirection: 'column', gap: 16,
+          padding: 24, background: 'var(--h-card)', borderRadius: 20
+        };
+      sheet = {
+        title: sh.title, sub: sh.sub, wrapExtra: '', style: box,
+        isPk: sh.kind === 'pk', isDiff: sh.kind === 'diff', isGuardian: sh.kind === 'guardian',
+        mono: sh.mono, busy: !!sh.busy,
+        cta: sh.busy ? 'Проверка…' : 'Подтвердить passkey',
+        stageText: sh.busy ? 'Ждём подтверждения устройства' : 'Каждая запись требует passkey заново. «Запомнить» нет.',
+        stageStyle: { fontSize: 13, lineHeight: 1.5, color: sh.busy ? 'var(--h-acc)' : 'var(--h-mut)' },
+        onConfirm: this.confirm, onDismiss: this.dismiss, stop: (e) => e.stopPropagation(),
+        lines: (sh.lines || []).map((l) => ({
+          text: l,
+          style: {
+            fontFamily: 'var(--font-mono)', fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre',
+            color: l.charAt(0) === '+' ? 'var(--h-ok)' : (l.charAt(0) === '-' ? 'var(--h-crit)' : 'var(--h-mut)')
+          }
+        })),
+        text: sh.text
+      };
+    }
+
+    const showAuth = sc === 'login';
+    const clockLabel = st.absClock ? '25 августа 2026, ' + d.now : 'обновлено ' + d.now;
+
+    return {
+      // shell
+      showHarness: p.showHarness !== false, isPhone, isLaptop: !isPhone,
+      frameStyle, now: d.now,
+      stageStyle: { flex: 1, minWidth: 0, minHeight: 0, height: '100%', display: 'flex', flexDirection: isPhone ? 'column' : 'row', overflow: 'hidden' },
+      headerStyle: {
+        flex: 'none', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12,
+        padding: isPhone ? '48px 16px 10px' : '20px 26px 12px', background: 'var(--h-bg)'
+      },
+      contentStyle: {
+        flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12,
+        padding: isPhone ? '2px 16px 18px' : '4px 26px 26px',
+        maxWidth: isPhone ? 'none' : 1100
+      },
+      accBtn: acc === '#1D4735' ? {} : { background: acc, color: C.accFg },
+      scenarios: [
+        { id: 'calm', label: 'Спокойно' }, { id: 'monday', label: 'Утро понедельника' },
+        { id: 'batch', label: 'Пакет однотипных' }, { id: 'offline', label: 'Сервер не отвечает' },
+        { id: 'kill', label: 'Kill switch' }, { id: 'login', label: 'Вход' }
+      ].map((s) => ({
+        label: s.label, onPick: () => this.scen(s.id),
+        style: {
+          padding: '7px 12px', borderRadius: 999, cursor: 'pointer', fontFamily: 'var(--font-sans)',
+          fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap',
+          background: sc === s.id ? '#142018' : '#fff', color: sc === s.id ? '#fff' : '#5F6C64',
+          border: '1px solid ' + (sc === s.id ? '#142018' : '#E4E9E3')
+        }
+      })),
+      devices: [{ id: 'phone', label: 'Телефон' }, { id: 'laptop', label: 'Ноутбук' }].map((x) => ({
+        label: x.label, onPick: () => this.setState({ device: x.id }),
+        style: {
+          padding: '7px 12px', borderRadius: 999, cursor: 'pointer', fontFamily: 'var(--font-sans)',
+          fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap',
+          background: dev === x.id ? '#142018' : '#fff', color: dev === x.id ? '#fff' : '#5F6C64',
+          border: '1px solid ' + (dev === x.id ? '#142018' : '#E4E9E3')
+        }
+      })),
+
+      // auth
+      showAuth, showApp: !showAuth,
+      authStyle: {
+        flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 28,
+        padding: isPhone ? '0 24px' : '0 120px', background: 'var(--h-bg)'
+      },
+      auth: {
+        hint: st.authStep === 'tg'
+          ? 'Вход только для владельца. Telegram подтверждает личность, passkey — устройство.'
+          : 'Второй фактор. Без него панель не откроется, даже если Telegram подтвердил владельца.',
+        isTg: st.authStep === 'tg' && !st.authErr,
+        isPasskey: st.authStep === 'pk' && !st.authErr,
+        err: st.authErr,
+        onTelegram: () => this.setState({ authStep: 'pk' }),
+        onPasskey: () => this.setState({ scenario: 'monday', tab: 'today' }),
+        onFail: () => this.setState({ authErr: true }),
+        onRetry: () => this.setState({ authErr: false, authStep: 'tg' })
+      },
+
+      // chrome
+      nav, title: titles[st.tab], sessionNote: 'Сессия 24 ч · одно устройство · выход по неактивности',
+      clock: { label: clockLabel, onToggle: () => this.setState({ absClock: !st.absClock }) },
+      stale, onGuardian: () => this.setState({
+        sheet: {
+          kind: 'guardian', title: 'Guardian', sub: 'Статический JSON, отдаётся независимо от Control Plane',
+          text: '{\n  "ts": "2026-08-25T12:41:08Z",\n  "control_plane": "unreachable",\n  "last_ok": "07:19",\n  "disk_pct": 43,\n  "containers_up": 5,\n  "queue": 4\n}'
+        }
+      }),
+
+      // today
+      isToday: st.tab === 'today',
+      status: {
+        word: d.status.word, since: d.status.since, reason: d.status.reason || null,
+        link: d.status.link, onLink: () => (d.status.to === 'guardian' ? this.setState({ sheet: null }) || this.go('system') : this.go(d.status.to || 'system')),
+        style: {
+          padding: '14px 16px', borderRadius: 16,
+          background: this.tone(d.status.tone).bg, color: this.tone(d.status.tone).fg,
+          border: '1px solid ' + (d.status.tone === 'ok' ? 'var(--h-border)' : 'currentColor')
+        }
+      },
+      pendingCount: pending.length ? String(pending.length) : '0',
+      hasPending: pending.length > 0, noPending: pending.length === 0,
+      todayApprovals: shownToday,
+      morePending: pending.length > 3 ? 'Ещё ' + (pending.length - 3) + ' в разделе Одобрения' : null,
+      onAllApprovals: () => this.go('approvals'),
+      money, onMoney: () => this.go('money'),
+      tasksSummary: {
+        line: d.tasks, stuck: d.stuck,
+        onStuck: () => this.setState({ tab: 'tasks', openTask: 't_4471' })
+      },
+      onTasks: () => this.go('tasks'), onSystem: () => this.go('system'),
+      serverBrief: [
+        { text: 'Диск ' + d.disk[0] + ' · ' + d.disk[1] + ' · ' + d.disk[2], t: d.disk[3] },
+        { text: 'RAM ' + d.ram[0] + ' · ' + d.ram[1], t: d.ram[2] },
+        { text: 'Бэкап 6 ч назад · restore-тест 3 дн. назад', t: 'mut' }
+      ].map((r, i) => ({
+        text: r.text,
+        style: Object.assign(this.sepRow(i, { justifyContent: 'flex-start' }), {
+          fontFamily: 'var(--font-mono)', fontSize: 13,
+          color: r.t === 'mut' ? 'var(--h-ink)' : this.tone(r.t).fg,
+          fontWeight: r.t === 'mut' ? 500 : 700
+        })
+      })),
+      night: {
+        window: '22:00 — ' + d.now, failed: stale, ok: !stale,
+        onRetry: () => this.note('night', 'x'),
+        rows: [
+          { name: 'Бэкап и проверка TLS', cost: '0,03 $' },
+          { name: 'Ночная сводка задач', cost: '0,06 $' },
+          { name: 'Проверка зеркал ×4', cost: '0,08 $' },
+          { name: 'Автоочистка диска', cost: '0,00 $' }
+        ].map((r, i) => Object.assign({}, r, { style: this.sepRow(i) }))
+      },
+
+      // approvals
+      isApprovals: st.tab === 'approvals',
+      apprTabs: ['Ожидают', 'История'], apprTab: st.apprTab,
+      onApprTab: (v) => this.setState({ apprTab: v, open: null }),
+      apprPending: st.apprTab === 'Ожидают', apprHistory: st.apprTab === 'История',
+      cur, showList: !cur, pendingList: pendingDec, batch,
+      onCloseCard: () => this.setState({ open: null, rejectId: null }),
+      rejectOpen: !!st.rejectId, rejectText: st.rejectText,
+      onRejectText: (e) => this.setState({ rejectText: e.target.value }),
+      onRejectSend: () => {
+        const id = st.rejectId;
+        const a = all.find((x) => x.id === id);
+        this.ask('Подтвердите passkey', 'Отклонение ' + (a ? a.title : ''), a ? a.hash : '', () => {
+          this.decide(id, { tone: 'mut', text: 'Отклонено · 12:42' + (st.rejectText.trim() ? ' · причина сохранена' : '') });
+        });
+      },
+      onRejectCancel: () => this.setState({ rejectId: null, rejectText: '' }),
+      histFilters: histTypes.map((t) => ({
+        label: t, onPick: () => this.setState({ histType: t }), style: this.chip(st.histType === t, acc)
+      })),
+      history, trust: TRUST.map((t, i) => Object.assign({}, t, { style: this.sep(i) })),
+
+      // tasks
+      isTasks: st.tab === 'tasks', task, taskList: !task, groups, domains,
+      noTasks: groups.length === 0, q: st.q,
+      onQuery: (e) => this.setState({ q: e.target.value }),
+      onCloseTask: () => this.setState({ openTask: null }),
+
+      // money
+      isMoney: st.tab === 'money', moneyTabs: ['Расход', 'Модели'], moneyTab: st.moneyTab,
+      onMoneyTab: (v) => this.setState({ moneyTab: v }),
+      moneySpend: st.moneyTab === 'Расход', moneyModels: st.moneyTab === 'Модели',
+      bars, day, noDay: dayIdx == null,
+      breakdownTabs: ['По профилю', 'По alias', 'По модели'], breakdown: bd,
+      onBreakdown: (v) => this.setState({ breakdown: v }),
+      pricey, models, demotions,
+      limitDay: st.limitDay, limitMonth: st.limitMonth,
+      onLimitDay: (e) => this.setState({ limitDay: e.target.value }),
+      onLimitMonth: (e) => this.setState({ limitMonth: e.target.value }),
+      onLimitSend: () => this.note('limit', 'RED-действие «изменить лимиты» отправлено в Одобрения · 12:45'),
+      limitNote: st.ran.limit || null,
+
+      // system
+      isSystem: st.tab === 'system',
+      sysTabs: sysTabsDef.map((s) => ({
+        label: s.label, onPick: () => this.setState({ sysTab: s.id }), style: this.chip(st.sysTab === s.id, acc)
+      })),
+      sysServer: st.sysTab === 'server', sysIntegrations: st.sysTab === 'integrations',
+      sysRoutines: st.sysTab === 'routines', sysPolicies: st.sysTab === 'policies',
+      sysJournal: st.sysTab === 'journal',
+      resources, disk, containers, backup, cleanup, integrations, routines, policies, candidates, adrs, journal,
+      jFilters: ['все', 'только security', 'задачи', 'сутки'].map((t) => ({
+        label: t, onPick: () => this.setState({ jType: t }), style: this.chip(st.jType === t, acc)
+      })),
+      onRestoreTest: () => this.ask('Подтвердите passkey', 'Запустить restore-тест — действие уровня YELLOW', 'backup.restore_test', () => this.note('server', 'Restore-тест запущен · займёт около 8 мин · 12:45')),
+      onSnapshot: () => this.ask('Подтвердите passkey', 'Снапшот Kanban — действие уровня YELLOW', 'kanban.snapshot', () => this.note('server', 'Снапшот Kanban сохранён · kanban-2026-08-25.json · 12:45')),
+      ranNote: st.ran.server || null,
+      onExport: () => this.setState({ exportDone: true }),
+      exportNote: st.exportDone ? 'journal-2026-08.csv · 1 204 строки' : null,
+
+      sheet
+    };
+  }
+}
+</script>
+</body>
+</html>

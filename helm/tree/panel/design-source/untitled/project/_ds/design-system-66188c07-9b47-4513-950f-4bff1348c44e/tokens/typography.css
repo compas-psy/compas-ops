@@ -1,0 +1,36 @@
+/* СИМПАС — Typography tokens
+ * Source app ships system-native fonts for an iOS feel; this design system pins
+ * Geist (the family declared in cmpas.ru layout.tsx via next/font) so recreations
+ * render consistently. Geist Mono is used for links/URLs and tabular data.
+ */
+:root {
+  --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Weights actually used across the product */
+  --fw-normal: 400;   /* @kind other */
+  --fw-medium: 500;   /* @kind other */
+  --fw-semibold: 600; /* @kind other */
+  --fw-bold: 700;     /* @kind other */
+
+  /* ── Type scale (px values lifted verbatim from globals.css utilities) ── */
+  --text-page-title: 40px;   --lh-page-title: 44px;   /* dashboard H1 */
+  --text-hero-title: 24px;   --lh-hero-title: 30px;
+  --text-section-title: 20px;--lh-section-title: 26px;
+  --text-body-primary: 15px; --lh-body-primary: 22px;
+  --text-body-secondary: 14px;--lh-body-secondary: 20px;
+  --text-small-meta: 12px;   --lh-small-meta: 16px;
+  --text-kpi-number: 32px;   --lh-kpi-number: 34px;
+  --text-caption: 11px;      --lh-caption: 14px;
+}
+
+/* ── Named type styles (mirror .text-* utilities in the app) ── */
+.text-page-title   { font-size: var(--text-page-title); line-height: var(--lh-page-title); font-weight: 700; letter-spacing: -0.02em; }
+.text-hero-title   { font-size: var(--text-hero-title); line-height: var(--lh-hero-title); font-weight: 650; }
+.text-section-title{ font-size: var(--text-section-title); line-height: var(--lh-section-title); font-weight: 650; }
+.text-body-primary { font-size: var(--text-body-primary); line-height: var(--lh-body-primary); font-weight: 500; }
+.text-body-secondary{ font-size: var(--text-body-secondary); line-height: var(--lh-body-secondary); font-weight: 450; }
+.text-small-meta   { font-size: var(--text-small-meta); line-height: var(--lh-small-meta); font-weight: 500; }
+.text-kpi-number   { font-size: var(--text-kpi-number); line-height: var(--lh-kpi-number); font-weight: 700; font-variant-numeric: tabular-nums; }
+.text-caption      { font-size: var(--text-caption); line-height: var(--lh-caption); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.tabular-nums      { font-variant-numeric: tabular-nums; }

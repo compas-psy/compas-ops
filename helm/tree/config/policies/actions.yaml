@@ -1,0 +1,187 @@
+# Реестр уровней действий HELM (ТЗ §8.1, §8.2).
+#
+# Уровень здесь — детерминированная истина. LLM не может его понизить;
+# graduated trust (§8.7) не опускает уровень ниже minimum_allowed_level, а
+# для закрытого списка NEVER_GRADUATE в helm_core/actions/policy.py — вообще
+# не опускает.
+#
+# panel_view выбирает рендерер детали одобрения в панели (§8.3): бриф панели
+# §3.2 требует показывать суть действия «в его родной форме» — для публикации
+# полный текст, для merge — diff-статистику, для трат — сумму и получателя.
+
+actions:
+
+  # ── GREEN: исполняется автоматически (§8.1) ──────────────────────────────
+  create_internal_draft:
+    initial_level: GREEN
+    minimum_allowed_level: GREEN
+    title_ru: "Черновик во внутреннем хранилище"
+    panel_view: generic
+
+  run_routine:
+    initial_level: GREEN
+    minimum_allowed_level: GREEN
+    title_ru: "Запуск рутины"
+    panel_view: generic
+
+  notify_owner:
+    initial_level: GREEN
+    minimum_allowed_level: GREEN
+    title_ru: "Уведомление владельцу"
+    panel_view: generic
+
+  # ── YELLOW: обратимое внутреннее изменение, но записывается (§8.1) ────────
+  create_feature_branch:
+    initial_level: YELLOW
+    minimum_allowed_level: GREEN
+    title_ru: "Создать ветку"
+    panel_view: git_merge
+
+  open_pull_request:
+    initial_level: YELLOW
+    minimum_allowed_level: GREEN
+    title_ru: "Открыть pull request"
+    panel_view: git_merge
+
+  write_candidate_skill:
+    initial_level: YELLOW
+    minimum_allowed_level: YELLOW
+    title_ru: "Черновик нового skill"
+    panel_view: generic
+
+  task_retry:
+    initial_level: YELLOW
+    minimum_allowed_level: GREEN
+    title_ru: "Повторить задачу"
+    panel_view: generic
+
+  task_stop:
+    initial_level: YELLOW
+    minimum_allowed_level: GREEN
+    title_ru: "Остановить задачу"
+    panel_view: generic
+
+  routine_toggle:
+    initial_level: YELLOW
+    minimum_allowed_level: YELLOW
+    title_ru: "Включить или выключить рутину"
+    panel_view: generic
+
+  backup_restore_test:
+    initial_level: YELLOW
+    minimum_allowed_level: YELLOW
+    title_ru: "Запустить restore-тест бэкапа"
+    panel_view: generic
+
+  kanban_snapshot:
+    initial_level: YELLOW
+    minimum_allowed_level: GREEN
+    title_ru: "Снапшот Kanban"
+    panel_view: generic
+
+  # ── RED: без действующего approval исполнить физически нельзя (§8.1) ─────
+  publish_public_content:
+    initial_level: RED
+    minimum_allowed_level: YELLOW      # D6: публичные каналы — не раньше 10 supervised
+    approval_ttl: 24h
+    required_preconditions: [channel_allowlisted, brand_rules_checked]
+    title_ru: "Публикация в публичный канал"
+    panel_view: publication
+
+  merge_main:
+    initial_level: RED
+    minimum_allowed_level: YELLOW
+    approval_ttl: 24h
+    required_preconditions: [ci_green_on_exact_sha, no_direct_main_push]
+    title_ru: "Слить в main"
+    panel_view: git_merge
+
+  production_deploy:
+    initial_level: RED
+    minimum_allowed_level: RED
+    approval_ttl: 24h
+    required_preconditions: [ci_green_on_exact_sha, head_sha_unchanged]
+    title_ru: "Выкатить в продакшен"
+    panel_view: deploy
+
+  spend_money:
+    initial_level: RED
+    minimum_allowed_level: RED
+    approval_ttl: 2h                   # §8.4: короче обычного, сумма устаревает
+    required_preconditions: [budget_available, recipient_known]
+    title_ru: "Потратить деньги"
+    panel_view: spend
+
+  legal_submission:
+    initial_level: RED
+    minimum_allowed_level: RED
+    approval_ttl: 24h
+    title_ru: "Подать юридический документ"
+    panel_view: generic
+
+  change_price:
+    initial_level: RED
+    minimum_allowed_level: RED
+    approval_ttl: 24h
+    title_ru: "Изменить цену или оферту"
+    panel_view: generic
+
+  delete_business_data:
+    initial_level: RED
+    minimum_allowed_level: RED
+    approval_ttl: 2h
+    required_preconditions: [backup_fresh]
+    title_ru: "Удалить бизнес-данные"
+    panel_view: generic
+
+  secret_rotation:
+    initial_level: RED
+    minimum_allowed_level: RED
+    approval_ttl: 2h
+    title_ru: "Ротация секрета"
+    panel_view: generic
+
+  signalai_live_execution:
+    initial_level: RED
+    minimum_allowed_level: RED
+    approval_ttl: 2h
+    required_preconditions: [single_writer_verified]
+    title_ru: "Включить боевое исполнение SignalAI"
+    panel_view: deploy
+
+  change_policy:
+    initial_level: RED
+    minimum_allowed_level: RED
+    approval_ttl: 24h
+    title_ru: "Изменить policy"
+    panel_view: generic
+
+  change_trust_level:
+    initial_level: RED
+    minimum_allowed_level: RED
+    approval_ttl: 24h
+    required_preconditions: [supervised_threshold_met]
+    title_ru: "Изменить уровень доверия"
+    panel_view: generic
+
+  budget_limit_change:
+    initial_level: RED
+    minimum_allowed_level: RED
+    approval_ttl: 24h
+    title_ru: "Изменить лимит расходов"
+    panel_view: spend
+
+  budget_kill_switch:
+    initial_level: RED
+    minimum_allowed_level: RED
+    approval_ttl: 2h
+    title_ru: "Аварийный стоп расходов"
+    panel_view: spend
+
+  skill_promote:
+    initial_level: RED
+    minimum_allowed_level: YELLOW
+    approval_ttl: 24h
+    required_preconditions: [diff_reviewed]
+    title_ru: "Ввести skill в продакшен"
+    panel_view: generic

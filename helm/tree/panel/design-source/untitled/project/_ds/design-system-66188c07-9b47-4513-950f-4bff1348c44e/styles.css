@@ -1,0 +1,10 @@
+/* СИМПАС Design System — global entry point.
+ * Consumers link THIS file. It only @imports; every token & font lives downstream.
+ */
+@import "./tokens/fonts.css";
+@import "./tokens/colors.css";
+@import "./tokens/typography.css";
+@import "./tokens/radius.css";
+@import "./tokens/shadows.css";
+@import "./tokens/services.css";
+@import "./tokens/base.css";

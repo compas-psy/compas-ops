@@ -1,0 +1,4 @@
+# Проверенные SHA256 исходников дизайна панели (§6.1). Сверено 27.08.2026.
+5b0b375dae441dea639236b004f00e7cba615927e0ac8c0e1887beb7fd9f0a30  HELM_PANEL_DESIGN_BRIEF.md
+84b1184bd76af2d4979719be963b3bba65d45ffee87ebd9ef6b9c94233d52b19  Техническое задание-handoff.zip
+c62b11f01bb08779038c9abee93aa1fa262873e1a2abb83c3f114c817c2cab75  untitled/project/HELM Panel.dc.html

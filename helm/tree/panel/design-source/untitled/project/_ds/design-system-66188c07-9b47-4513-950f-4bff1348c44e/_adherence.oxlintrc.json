@@ -1,0 +1,383 @@
+{
+  "plugins": [
+    "react",
+    "import"
+  ],
+  "rules": {
+    "react/forbid-elements": [
+      "warn",
+      {
+        "forbid": []
+      }
+    ],
+    "no-restricted-imports": [
+      "warn",
+      {
+        "patterns": [
+          {
+            "group": [
+              "components/brand/**",
+              "components/core/**",
+              "components/icons/**",
+              "components/navigation/**",
+              "ui_kits/diary/**",
+              "ui_kits/landing/**"
+            ],
+            "message": "Import design-system components from 'index.js', not component internals."
+          }
+        ]
+      }
+    ],
+    "no-restricted-syntax": [
+      "warn",
+      {
+        "selector": "Literal[value=/#[0-9a-fA-F]{3,8}\\b/]",
+        "message": "Raw hex color — use a design-system color token via var()."
+      },
+      {
+        "selector": "Literal[value=/\\b\\d+px\\b/]",
+        "message": "Raw px value — use a design-system spacing token via var()."
+      },
+      {
+        "selector": "Literal[value=/font-family\\s*:\\s*(?!['\\\"]?(?:Geist|Geist Mono))/i]",
+        "message": "Font not provided by the design system. Available: Geist, Geist Mono."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Badge'] > JSXAttribute > JSXIdentifier[name!=/^(?:variant|dot|key|ref|className|style|children)$/]",
+        "message": "<Badge> doesn't accept that prop. Declared props: variant, dot."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Badge'] > JSXAttribute[name.name='variant'] > Literal[value!=/^(?:default|secondary|outline|confirmed|pending|completed|cancelled|paid|processing|new)$/]",
+        "message": "<Badge> variant must be one of 'default' | 'secondary' | 'outline' | 'confirmed' | 'pending' | 'completed' | 'cancelled' | 'paid' | 'processing' | 'new'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute > JSXIdentifier[name!=/^(?:variant|size|block|leadingIcon|trailingIcon|key|ref|className|style|children)$/]",
+        "message": "<Button> doesn't accept that prop. Declared props: variant, size, block, leadingIcon, trailingIcon."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute[name.name='variant'] > Literal[value!=/^(?:primary|accent|secondary|ghost|destructive)$/]",
+        "message": "<Button> variant must be one of 'primary' | 'accent' | 'secondary' | 'ghost' | 'destructive'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute[name.name='size'] > Literal[value!=/^(?:sm|md|lg)$/]",
+        "message": "<Button> size must be one of 'sm' | 'md' | 'lg'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Card'] > JSXAttribute > JSXIdentifier[name!=/^(?:interactive|padding|key|ref|className|style|children)$/]",
+        "message": "<Card> doesn't accept that prop. Declared props: interactive, padding."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Icon'] > JSXAttribute > JSXIdentifier[name!=/^(?:name|size|strokeWidth|key|ref|className|style|children)$/]",
+        "message": "<Icon> doesn't accept that prop. Declared props: name, size, strokeWidth."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Input'] > JSXAttribute > JSXIdentifier[name!=/^(?:leading|trailing|wrapperStyle|key|ref|className|style|children)$/]",
+        "message": "<Input> doesn't accept that prop. Declared props: leading, trailing, wrapperStyle."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='SegmentOption'] > JSXAttribute > JSXIdentifier[name!=/^(?:value|label|icon|key|ref|className|style|children)$/]",
+        "message": "<SegmentOption> doesn't accept that prop. Declared props: value, label, icon."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Separator'] > JSXAttribute > JSXIdentifier[name!=/^(?:orientation|key|ref|className|style|children)$/]",
+        "message": "<Separator> doesn't accept that prop. Declared props: orientation."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Separator'] > JSXAttribute[name.name='orientation'] > Literal[value!=/^(?:horizontal|vertical)$/]",
+        "message": "<Separator> orientation must be one of 'horizontal' | 'vertical'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='ServiceMark'] > JSXAttribute > JSXIdentifier[name!=/^(?:service|size|shape|bare|key|ref|className|style|children)$/]",
+        "message": "<ServiceMark> doesn't accept that prop. Declared props: service, size, shape, bare."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='ServiceMark'] > JSXAttribute[name.name='shape'] > Literal[value!=/^(?:squircle|rounded|circle)$/]",
+        "message": "<ServiceMark> shape must be one of 'squircle' | 'rounded' | 'circle'."
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": [
+        "**/index.js"
+      ],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    }
+  ],
+  "x-omelette": {
+    "components": {
+      "Badge": {
+        "replaces": []
+      },
+      "Button": {
+        "replaces": []
+      },
+      "Card": {
+        "replaces": []
+      },
+      "Icon": {
+        "replaces": []
+      },
+      "Input": {
+        "replaces": []
+      },
+      "SegmentOption": {
+        "replaces": []
+      },
+      "Separator": {
+        "replaces": []
+      },
+      "ServiceMark": {
+        "replaces": []
+      }
+    },
+    "tokens": [
+      "--accent",
+      "--accent-foreground",
+      "--amber-500",
+      "--amber-soft",
+      "--background",
+      "--blue-500",
+      "--blue-soft",
+      "--border",
+      "--card",
+      "--card-foreground",
+      "--container-max",
+      "--cream",
+      "--destructive",
+      "--destructive-foreground",
+      "--font-mono",
+      "--font-sans",
+      "--foreground",
+      "--forest-500",
+      "--forest-600",
+      "--forest-700",
+      "--forest-800",
+      "--forest-900",
+      "--fw-bold",
+      "--fw-medium",
+      "--fw-normal",
+      "--fw-semibold",
+      "--gold-400",
+      "--gold-500",
+      "--icon-rounded",
+      "--icon-squircle",
+      "--ink-500",
+      "--ink-900",
+      "--input",
+      "--lh-body-primary",
+      "--lh-body-secondary",
+      "--lh-caption",
+      "--lh-hero-title",
+      "--lh-kpi-number",
+      "--lh-page-title",
+      "--lh-section-title",
+      "--lh-small-meta",
+      "--muted",
+      "--muted-foreground",
+      "--orange-500",
+      "--orange-soft",
+      "--popover",
+      "--popover-foreground",
+      "--primary",
+      "--primary-foreground",
+      "--radius-2xl",
+      "--radius-full",
+      "--radius-lg",
+      "--radius-md",
+      "--radius-sm",
+      "--radius-xl",
+      "--red-500",
+      "--red-soft",
+      "--ring",
+      "--sage-100",
+      "--sage-150",
+      "--sage-200",
+      "--sage-300",
+      "--sage-50",
+      "--secondary",
+      "--secondary-foreground",
+      "--shadow-card",
+      "--shadow-card-hover",
+      "--shadow-floating",
+      "--shadow-header",
+      "--shadow-sm",
+      "--shadow-xs",
+      "--sidebar",
+      "--sidebar-active",
+      "--sidebar-active-foreground",
+      "--sidebar-border",
+      "--sidebar-foreground",
+      "--sidebar-hover",
+      "--sidebar-muted",
+      "--sidebar-width",
+      "--space-1",
+      "--space-10",
+      "--space-12",
+      "--space-2",
+      "--space-3",
+      "--space-4",
+      "--space-5",
+      "--space-6",
+      "--space-8",
+      "--success-500",
+      "--success-soft",
+      "--svc-dnevnik-bg",
+      "--svc-dnevnik-fg",
+      "--svc-grani-bg",
+      "--svc-grani-fg",
+      "--svc-krugi-bg",
+      "--svc-krugi-fg",
+      "--svc-momenty-bg",
+      "--svc-momenty-fg",
+      "--svc-praktika-bg",
+      "--svc-praktika-fg",
+      "--svc-shagi-bg",
+      "--svc-shagi-fg",
+      "--svc-stupeni-bg",
+      "--svc-stupeni-fg",
+      "--svc-svoi-bg",
+      "--svc-svoi-fg",
+      "--svc-zapiski-bg",
+      "--svc-zapiski-fg",
+      "--text-body-primary",
+      "--text-body-secondary",
+      "--text-caption",
+      "--text-hero-title",
+      "--text-kpi-number",
+      "--text-page-title",
+      "--text-section-title",
+      "--text-small-meta",
+      "--violet-500",
+      "--violet-soft",
+      "--white"
+    ],
+    "tokenKinds": {
+      "--forest-900": "color",
+      "--forest-800": "color",
+      "--forest-700": "color",
+      "--forest-600": "color",
+      "--forest-500": "color",
+      "--sage-50": "color",
+      "--sage-100": "color",
+      "--sage-150": "color",
+      "--sage-200": "color",
+      "--sage-300": "color",
+      "--gold-500": "color",
+      "--gold-400": "color",
+      "--ink-900": "color",
+      "--ink-500": "color",
+      "--cream": "color",
+      "--white": "color",
+      "--primary": "color",
+      "--primary-foreground": "color",
+      "--background": "color",
+      "--foreground": "color",
+      "--card": "color",
+      "--card-foreground": "color",
+      "--popover": "color",
+      "--popover-foreground": "color",
+      "--muted": "color",
+      "--muted-foreground": "color",
+      "--secondary": "color",
+      "--secondary-foreground": "color",
+      "--accent": "color",
+      "--accent-foreground": "color",
+      "--border": "color",
+      "--input": "color",
+      "--ring": "color",
+      "--destructive": "color",
+      "--destructive-foreground": "color",
+      "--blue-soft": "color",
+      "--blue-500": "color",
+      "--violet-soft": "color",
+      "--violet-500": "color",
+      "--orange-soft": "color",
+      "--orange-500": "color",
+      "--red-soft": "color",
+      "--red-500": "color",
+      "--success-soft": "color",
+      "--success-500": "color",
+      "--amber-soft": "color",
+      "--amber-500": "color",
+      "--sidebar": "color",
+      "--sidebar-foreground": "color",
+      "--sidebar-active": "color",
+      "--sidebar-active-foreground": "color",
+      "--sidebar-hover": "color",
+      "--sidebar-muted": "color",
+      "--sidebar-border": "color",
+      "--font-sans": "font",
+      "--font-mono": "font",
+      "--fw-normal": "other",
+      "--fw-medium": "other",
+      "--fw-semibold": "other",
+      "--fw-bold": "other",
+      "--text-page-title": "font",
+      "--lh-page-title": "spacing",
+      "--text-hero-title": "font",
+      "--lh-hero-title": "spacing",
+      "--text-section-title": "font",
+      "--lh-section-title": "spacing",
+      "--text-body-primary": "font",
+      "--lh-body-primary": "spacing",
+      "--text-body-secondary": "font",
+      "--lh-body-secondary": "spacing",
+      "--text-small-meta": "font",
+      "--lh-small-meta": "spacing",
+      "--text-kpi-number": "font",
+      "--lh-kpi-number": "spacing",
+      "--text-caption": "font",
+      "--lh-caption": "spacing",
+      "--radius-sm": "radius",
+      "--radius-md": "radius",
+      "--radius-lg": "radius",
+      "--radius-xl": "radius",
+      "--radius-2xl": "radius",
+      "--radius-full": "radius",
+      "--space-1": "spacing",
+      "--space-2": "spacing",
+      "--space-3": "spacing",
+      "--space-4": "spacing",
+      "--space-5": "spacing",
+      "--space-6": "spacing",
+      "--space-8": "spacing",
+      "--space-10": "spacing",
+      "--space-12": "spacing",
+      "--container-max": "spacing",
+      "--sidebar-width": "spacing",
+      "--shadow-xs": "shadow",
+      "--shadow-sm": "shadow",
+      "--shadow-card": "shadow",
+      "--shadow-card-hover": "shadow",
+      "--shadow-floating": "shadow",
+      "--shadow-header": "shadow",
+      "--svc-praktika-bg": "color",
+      "--svc-praktika-fg": "color",
+      "--svc-momenty-bg": "color",
+      "--svc-momenty-fg": "color",
+      "--svc-zapiski-bg": "color",
+      "--svc-zapiski-fg": "color",
+      "--svc-shagi-bg": "color",
+      "--svc-shagi-fg": "color",
+      "--svc-stupeni-bg": "color",
+      "--svc-stupeni-fg": "color",
+      "--svc-grani-bg": "color",
+      "--svc-grani-fg": "color",
+      "--svc-krugi-bg": "color",
+      "--svc-krugi-fg": "color",
+      "--svc-svoi-bg": "color",
+      "--svc-svoi-fg": "color",
+      "--svc-dnevnik-bg": "color",
+      "--svc-dnevnik-fg": "color",
+      "--icon-squircle": "other",
+      "--icon-rounded": "other"
+    },
+    "fontFamilies": [
+      "Geist",
+      "Geist Mono"
+    ]
+  }
+}

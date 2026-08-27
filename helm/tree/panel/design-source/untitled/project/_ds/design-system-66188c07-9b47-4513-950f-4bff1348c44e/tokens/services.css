@@ -1,0 +1,21 @@
+/* СИМПАС — цвета сервисов.
+ * Дерево у всех продуктов одно. Сервис различает ТОЛЬКО пара «фон + дерево».
+ * Зелёный закреплён за осью практики (ПРАКТИКА, ШАГИ) — остальные сервисы уходят
+ * из зелёного, чтобы не спорить с мастер-цветом. Три тона взяты из трендовой
+ * карты 2025–26: Future Dusk, Cinnamon Slate, Mocha Mousse.
+ */
+:root {
+  --svc-praktika-bg: #1D4735;  --svc-praktika-fg: #F7F8F4;
+  --svc-momenty-bg: #4A4E78;  --svc-momenty-fg: #EDEBF2;
+  --svc-zapiski-bg: #C8604A;  --svc-zapiski-fg: #FBF3E3;
+  --svc-shagi-bg: #3B8F5A;  --svc-shagi-fg: #F7F8F4;
+  --svc-stupeni-bg: #CC9E50;  --svc-stupeni-fg: #143D2F;
+  --svc-grani-bg: #5C2F42;  --svc-grani-fg: #F5EAEF;
+  --svc-krugi-bg: #6A5F63;  --svc-krugi-fg: #F7F3F1;
+  --svc-svoi-bg: #A47864;  --svc-svoi-fg: #FAF5F0;
+  --svc-dnevnik-bg: #E7F0EA;  --svc-dnevnik-fg: #1D4735;
+
+  /* Скругление иконки приложения — доля от стороны */
+  --icon-squircle: 0.28; /* @kind other */
+  --icon-rounded: 0.18;  /* @kind other */
+}
