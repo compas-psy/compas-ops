@@ -27,14 +27,14 @@
 - [x] `/opt/helm-state/*`, `/etc/helm/{secrets,ssh,backup}` (0700)
 - [x] admin-пользователь `helm` + ключ + **второй независимый вход подтверждён** (`helm` → `sudo` → `root`)
 - [ ] firewall (22/80/443)
-- [ ] Docker
-- [ ] Caddy + TLS
+- [x] Docker + docker-compose plugin, daemon.json (bounded logs), hello-world подтверждён
+- [ ] Caddy + TLS — **отложено до P2**: Caddyfile зависит от helm-core (service_healthy) и panel/dist, которых ещё нет
 - [x] B7 подтверждён владельцем — доступ к консоли/rescue хостера есть
 - [x] password-login и root SSH отключены (`10-helm-hardening.conf`, reload проверен свежим подключением)
 - [ ] firewall (22/80/443)
 - [ ] bounded journald logs
-- [ ] Docker
-- [ ] Caddy + TLS
+- [x] Docker + docker-compose plugin, daemon.json (bounded logs), hello-world подтверждён
+- [ ] Caddy + TLS — **отложено до P2**: Caddyfile зависит от helm-core (service_healthy) и panel/dist, которых ещё нет
 
 ## Известные отклонения от live-server-first (ADR-017)
 

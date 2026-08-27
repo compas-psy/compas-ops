@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-08-28T00:45:00Z",
-  "phase": "P1",
-  "task": "firewall+journald",
+  "updated_at": "2026-08-28T00:50:00Z",
+  "phase": "P1-complete/P2-next",
+  "task": "docker-verified; caddy+tls deferred to P2 bring-up",
   "worker": "orchestrator",
   "model": "claude-sonnet-5",
   "status": "in_progress",
@@ -21,6 +21,19 @@
       "description": "scp/sftp-subsystem создаёт каталоги с world-writable правами despite umask 0022 в интерактивной сессии; причина не установлена",
       "mitigation": "ручная нормализация chmod после каждой scp-передачи",
       "severity": "medium"
+    },
+    {
+      "id": "F-260828-01",
+      "description": "printf с экранированными \\\" внутри, переданный аргументом ssh.exe из PowerShell (даже в одинарных кавычках снаружи), обрывается — Windows использует MSVC-style argv-парсинг для внешних программ. /etc/docker/daemon.json содержал только '{n' вместо валидного JSON.",
+      "mitigation": "содержимое файлов с кавычками внутри — только через repo → scp, не inline printf/heredoc через ssh с Windows-клиента",
+      "severity": "high"
+    }
+  ],
+  "deferred": [
+    {
+      "item": "Caddy + TLS (P1)",
+      "reason": "Caddyfile зависит от helm-core (service_healthy) и собранного panel/dist — ни того, ни другого ещё нет на сервере",
+      "resolves_at": "P2 bring-up: после сборки образа control-plane и миграций поднимается реальный docker-compose стек целиком"
     }
   ]
 }
