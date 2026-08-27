@@ -22,7 +22,7 @@
 - [x] Секреты B2–B4 (`openrouter_api_key`, `telegram_bot_token`, `telegram_owner_id`, `backup_credentials`) в `/root/helm-bootstrap`, владелец разместил сам — значения агенту не передавались
 - [ ] Спека `HELM_FINAL_v3.3_2026-08-27.md` в `/root/helm-bootstrap` — не подтверждена; не блокирует
 - [ ] OS update
-- [ ] Timezone → Europe/Helsinki
+- [ ] Timezone → Europe/Moscow
 - [ ] Каталоги §5, не унесённые git (skills/, prompts/, hermes/, n8n/exports/, config/models/)
 - [ ] `/opt/helm-state/*`, `/etc/helm/{secrets,ssh,backup}` (0700)
 - [ ] admin-пользователь + ключ + **проверка второго независимого входа**

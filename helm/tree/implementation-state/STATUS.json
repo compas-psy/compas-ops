@@ -11,7 +11,7 @@
     "ram_total": "11Gi",
     "disk_total": "99G",
     "timezone_before": "Etc/UTC",
-    "timezone_target": "Europe/Helsinki"
+    "timezone_target": "Europe/Moscow"
   },
   "blockers": [
     {
