@@ -1,0 +1,137 @@
+/* Токены HELM Panel.
+ *
+ * Источник — прототип Claude Design: он определяет собственное пространство
+ * --h-*, а не тянет продуктовую палитру СИМПАС целиком. Это верно и по
+ * §10.5.1: bundled _ds — визуальный reference, но он не имеет права вернуть
+ * в панель декоративность и брендовость, запрещённые брифом.
+ *
+ * Отличия от _ds сделаны намеренно:
+ * - _ds задаёт color-scheme: light. Бриф §5 требует тёмную/светлую по
+ *   системной настройке без переключателя в UI, поэтому здесь есть оба набора;
+ * - из палитры взят один accent (--h-acc, forest-800). Бриф §8: accent
+ *   сдержанный и не Telegram-синий — forest этому отвечает;
+ * - цветные фоны карточек, градиенты и тени не переносятся (бриф §2).
+ */
+
+:root {
+  /* Поверхности */
+  --h-bg: #F7F8F4;
+  --h-card: #ffffff;
+  --h-card2: #F2F4EF;
+  --h-border: #E4E9E3;
+
+  /* Текст: три ступени, дальше некуда */
+  --h-ink: #142018;
+  --h-mut: #5F6C64;
+  --h-faint: #8A9490;
+
+  /* Единственный accent — primary action и текущий выбор */
+  --h-acc: #1D4735;
+  --h-acc-ink: #ffffff;
+
+  /* Семантика. ok почти невидим: внимание должно уходить на warn/critical */
+  --h-ok: #3B8F5A;
+  --h-warn: #C97A16;
+  --h-warn-soft: #FBF1E4;
+  --h-crit: #C4453A;
+  --h-crit-soft: #FBEDEB;
+
+  /* Типографика: 4 размера, 2 веса (бриф §5) */
+  --h-fs-label: 10px;
+  --h-fs-body: 13px;
+  --h-fs-lead: 15px;
+  --h-fs-hero: 20px;
+  --h-fw-regular: 500;
+  --h-fw-bold: 700;
+  --h-track-label: 0.09em;
+
+  --h-sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+  --h-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+
+  --h-radius: 18px;
+  --h-radius-sm: 14px;
+  --h-row-min: 44px;      /* бриф §5: строки 40–44 px на телефоне */
+  /* Отступы блока — не высота строки. Их и ужимаем, чтобы «Сегодня»
+     умещалось на 390×844 в спокойном состоянии (§10.5.11), не трогая
+     минимальную высоту строк из брифа §5. */
+  --h-block-pad: 12px;
+  --h-block-gap: 8px;
+  --h-nav-h: 56px;
+
+  /* Движение только на смену состояния, 150–200 ms (бриф §5) */
+  --h-motion: 170ms;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --h-bg: #101512;
+    --h-card: #171D19;
+    --h-card2: #1E2521;
+    --h-border: #2A322D;
+
+    --h-ink: #E8EDE9;
+    --h-mut: #9AA5A0;
+    --h-faint: #6E7975;
+
+    /* В тёмной теме forest-800 не читается на тёмном — берём светлее */
+    --h-acc: #6FA98A;
+    --h-acc-ink: #0E1310;
+
+    --h-ok: #5FA97B;
+    --h-warn: #D99A45;
+    --h-warn-soft: #2E2618;
+    --h-crit: #D9695D;
+    --h-crit-soft: #2E1C1A;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 1ms !important; animation-duration: 1ms !important; }
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { margin: 0; padding: 0; min-height: 100%; }
+
+body {
+  background: var(--h-bg);
+  color: var(--h-ink);
+  font-family: var(--h-sans);
+  font-size: var(--h-fs-body);
+  font-weight: var(--h-fw-regular);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  /* Панель открывают с телефона: safe-area обязателен, иначе нижняя
+     навигация уезжает под домашний индикатор iPhone. */
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Ничего не анимируется при загрузке страницы (бриф §2). */
+
+:where(button, a, input, [tabindex]):focus-visible {
+  outline: 2px solid var(--h-acc);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.h-mono {
+  font-family: var(--h-mono);
+  font-size: 12px;
+  letter-spacing: -0.01em;
+}
+
+.h-label {
+  font-size: var(--h-fs-label);
+  font-weight: var(--h-fw-bold);
+  letter-spacing: var(--h-track-label);
+  text-transform: uppercase;
+  color: var(--h-faint);
+}
+
+.h-sr {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}

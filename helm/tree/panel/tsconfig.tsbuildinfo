@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/api/client.ts","./src/api/useBlock.ts","./src/components/passkey.ts","./src/components/primitives.tsx","./src/sections/ApprovalCard.tsx","./src/sections/Simple.tsx","./src/sections/Today.tsx"],"version":"5.7.2"}
