@@ -1,0 +1,38 @@
+[Unit]
+Description=HELM Guardian — независимый host-level watchdog
+Documentation=file:///opt/helm/docs/OPERATIONS.md
+# Намеренно нет After=docker.service и After=postgresql.service.
+# §30.10 требует, чтобы Guardian работал именно тогда, когда они мертвы.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/helm/guardian/guardian.py
+User=root
+Group=root
+
+# Guardian читает токен прямого алерта (§25.5) и пишет только своё состояние.
+ReadWritePaths=/var/lib/helm-guardian
+StateDirectory=helm-guardian
+StateDirectoryMode=0750
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+
+# Ограничения ресурсов: watchdog не должен сам стать причиной давления,
+# о котором он предупреждает.
+MemoryMax=256M
+CPUQuota=25%
+TimeoutStartSec=120
+
+StandardOutput=journal
+StandardError=journal

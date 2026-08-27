@@ -1,0 +1,13 @@
+[Unit]
+Description=Запуск helm-guardian каждые 5 минут (ТЗ §25.2)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+# Разброс, чтобы проверки не сходились с бэкапом и ротацией в одну минуту.
+RandomizedDelaySec=20
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
