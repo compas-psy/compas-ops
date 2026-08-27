@@ -1,0 +1,101 @@
+# Публичный периметр HELM (ТЗ §4.6).
+#
+# Правило чтения этого файла: всё, что не перечислено явно, наружу не
+# выходит. Поэтому здесь нет ни одного `reverse_proxy` без точного пути —
+# любой wildcard превратил бы internal API в публичный.
+#
+# Не публикуются никогда: PostgreSQL, LiteLLM, Hermes API/dashboard,
+# admin API Control Plane, редактор n8n, внутренняя БД SignalAI.
+# Редактор n8n открывается только SSH-туннелем.
+
+{
+	admin off
+	email admin@cmpas.ru
+	servers {
+		# Заголовок Server не сообщает версию: бесплатная разведка для
+		# сканера, нулевая польза для владельца.
+		trusted_proxies static private_ranges
+	}
+}
+
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Resource-Policy "same-origin"
+		-Server
+	}
+}
+
+helm.cmpas.ru {
+	import security_headers
+	encode zstd gzip
+
+	log {
+		output file /var/log/caddy/helm.log {
+			roll_size 20mb
+			roll_keep 5
+		}
+		# Тело запроса не логируется: в /auth/* приходят passkey-assertion,
+		# а в /hooks/* — полезная нагрузка вебхуков.
+		format json
+	}
+
+	# ── Panel API. Только этот префикс, без вложенных wildcard ──────────────
+	handle /api/panel/v1/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+
+	# ── Аутентификация панели (§10.5.6) ────────────────────────────────────
+	handle /auth/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+
+	# ── Явно зарегистрированные вебхуки. Перечисляются поимённо ────────────
+	handle /hooks/max {
+		reverse_proxy 127.0.0.1:8080
+	}
+
+	# ── Санитизированный статус Guardian (§10.5.9, §25.5) ──────────────────
+	# Отдаётся файлом, а не проксированием: он обязан работать, когда
+	# Control Plane лежит — именно ради этого случая он и существует.
+	handle /guardian/status.json {
+		root * /srv/guardian
+		header Cache-Control "no-store"
+		header Content-Type "application/json"
+		file_server
+	}
+
+	# ── Статика панели (§10.5.2, §10.5.3) ──────────────────────────────────
+	handle {
+		root * /srv/panel
+		header /assets/* Cache-Control "public, max-age=31536000, immutable"
+		header /index.html Cache-Control "no-store"
+		# CSP для самой страницы. connect-src 'self' не даёт панели ходить
+		# наружу, даже если такой код туда попадёт.
+		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+git.cmpas.ru {
+	import security_headers
+	encode zstd gzip
+	# Forgejo появляется в P6.5; до установки домен отвечает 503, а не
+	# проксирует в пустоту.
+	reverse_proxy 127.0.0.1:3000 {
+		health_uri /api/healthz
+	}
+}
+
+# Обращение по IP или неизвестному имени не должно раскрывать, что здесь
+# вообще что-то есть.
+:443 {
+	tls internal
+	respond 404
+}

@@ -1,0 +1,146 @@
+# Core-сервисы HELM (ТЗ §4.2).
+#
+# Версии образов пинуются (§33 «pin versions/images»): плавающий :latest
+# означает, что перезапуск контейнера в три часа ночи может принести другую
+# мажорную версию Postgres.
+#
+# Ни один порт не публикуется наружу. Публичный периметр — только Caddy
+# (§4.6): Postgres, LiteLLM, Hermes и админ-API Control Plane не выставляются.
+
+name: helm
+
+x-logging: &logging
+  # §25.6: ограниченные логи. Без этого journald и json-file съедают диск
+  # быстрее, чем растут данные.
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    <<: *restart
+    logging: *logging
+    environment:
+      POSTGRES_USER: helm
+      POSTGRES_DB: helm
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      # Локаль фиксируется: сортировка влияет на индексы, и её смена между
+      # версиями образа ломает уникальные индексы молча.
+      LANG: C.UTF-8
+      POSTGRES_INITDB_ARGS: "--locale=C.UTF-8 --encoding=UTF8"
+    secrets: [postgres_password]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    # Только на loopback (§4.6).
+    ports: ["127.0.0.1:5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U helm -d helm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    shm_size: 256mb
+    deploy:
+      resources:
+        limits:
+          # 12 ГБ на всё (§4.1), и апгрейд запрещён до метрик. Postgres —
+          # самый прожорливый сосед, поэтому его потолок задан явно.
+          memory: 3g
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-v1.55.8
+    <<: *restart
+    logging: *logging
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      LITELLM_MASTER_KEY_FILE: /run/secrets/litellm_master_key
+      DATABASE_URL_FILE: /run/secrets/litellm_database_url
+      OPENROUTER_API_KEY_FILE: /run/secrets/openrouter_api_key
+      STORE_MODEL_IN_DB: "True"
+    secrets: [litellm_master_key, litellm_database_url, openrouter_api_key]
+    volumes:
+      - ../config/models/litellm.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    ports: ["127.0.0.1:4000:4000"]
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits: {memory: 1g}
+
+  helm-core:
+    build:
+      context: ../control-plane
+      dockerfile: Dockerfile
+    image: helm-core:0.1.0
+    <<: *restart
+    logging: *logging
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      HELM_DATABASE_URL_FILE: /run/secrets/helm_database_url
+      HELM_POLICY_PATH: /opt/helm/config/policies/actions.yaml
+      HELM_OWNER_ID_FILE: /run/secrets/telegram_owner_id
+      HELM_PANEL_RP_ID: helm.cmpas.ru
+      HELM_PANEL_ORIGIN: https://helm.cmpas.ru
+      TZ: Europe/Helsinki
+    secrets: [helm_database_url, telegram_owner_id, hermes_service_hmac]
+    volumes:
+      - ../config:/opt/helm/config:ro
+    ports: ["127.0.0.1:8080:8080"]
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+    deploy:
+      resources:
+        limits: {memory: 768m}
+
+  caddy:
+    image: caddy:2.8-alpine
+    <<: *restart
+    logging: *logging
+    depends_on:
+      helm-core: {condition: service_healthy}
+    # Единственный сервис с публичными портами (§4.6).
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ../config/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../panel/dist:/srv/panel:ro
+      - /var/lib/helm-guardian/public-status.json:/srv/guardian/status.json:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    deploy:
+      resources:
+        limits: {memory: 256m}
+
+secrets:
+  postgres_password:    {file: /etc/helm/secrets/postgres_password}
+  litellm_master_key:   {file: /etc/helm/secrets/litellm_master_key}
+  litellm_database_url: {file: /etc/helm/secrets/litellm_database_url}
+  openrouter_api_key:   {file: /etc/helm/secrets/openrouter_api_key}
+  helm_database_url:    {file: /etc/helm/secrets/helm_database_url}
+  telegram_owner_id:    {file: /etc/helm/secrets/telegram_owner_id}
+  hermes_service_hmac:  {file: /etc/helm/secrets/hermes_service_hmac}
+
+volumes:
+  pgdata:       {name: helm_pgdata}
+  caddy_data:   {name: helm_caddy_data}
+  caddy_config: {name: helm_caddy_config}
