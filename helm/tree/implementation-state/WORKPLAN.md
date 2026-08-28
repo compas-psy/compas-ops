@@ -4,7 +4,7 @@
 каждой значимой задачи — это заменяет необходимость владельцу писать
 «продолжай».
 
-## Текущая фаза: P3 — LiteLLM (P1 и P2 закрыты на живом сервере, включая отложенный Caddy/TLS)
+## Текущая фаза: P3 — LiteLLM (OpenRouter доступен через прокси в Финляндию, конфиг написан, контейнер ещё не поднят)
 
 ## Пройдено офлайн (до переноса на сервер, session 0afed5d1)
 
@@ -68,6 +68,69 @@
 начинается с невидимого BOM-байта. `fetch().json()` в браузере штатно съедает BOM при UTF-8-декодировании,
 так что панель не должна на этом споткнуться; файл в любом случае временный — Guardian в P5 перезапишет
 его питоновским `json.dumps` (без BOM). Не исправлялось отдельно ради файла, который скоро исчезнет сам.
+
+## P3 — LiteLLM на живом сервере
+
+**Находка, определившая весь ход фазы:** OpenRouter блокирует этот VPS по
+IP/датацентру — `curl` к `openrouter.ai` (даже без авторизации) получал
+честный TLS-сертификат `openrouter.ai` (не MITM), но `HTTP/2 403` от
+`server: cloudflare` с телом `{"success": false, "error": "Access denied by
+security policy."}`. С обычной машины владельца тот же запрос — `200` с
+реальным каталогом. Не Россия целиком — конкретно диапазон этого хостера.
+`cf-ray` для возможного тикета в поддержку OpenRouter: `a322f17feeeaf102-DME`,
+28.08.2026 11:23:20 GMT.
+
+**Решение владельца:** обход только для трафика к OpenRouter (не общий VPN
+сервера) через собственный VPS в Финляндии владельца, протокол `mieru`.
+
+- [x] Секрет: пароль `mieru` пришёл файлом в чат — по правилу этого же
+      `CLAUDE.md §5.4` это означает «токен скомпрометирован, `/human`
+      задача»; ротация — решение владельца, агент её не форсирует. Значение
+      нигде не закоммичено — только `scp` напрямую на сервер.
+- [x] Клиент — `enfein/mbox` (`sing-box 1.13.19` + `mieru 3.36.0`, форк от
+      автора самого mieru; не Karing — тот GUI/Flutter, для headless
+      сервера не подходит). `.deb` с GitHub releases, ставит юзера
+      `sing-box` (uid 987, `CAP_DAC_READ_SEARCH`) и шаблонный юнит
+      `sing-box@.service`.
+- [x] Конфиг `/etc/sing-box/openrouter-proxy.json` (0600 root:root):
+      локальный `mixed`-inbound `127.0.0.1:18080`, маршрутизация — только
+      `openrouter.ai`/`*.openrouter.ai` через `mieru-out`, всё остальное
+      (apt/git/Telegram/Let's Encrypt) — `final: direct`. Не общий конфиг
+      владельца (тот заворачивал бы весь трафик и тянул неприменимые
+      корп-DNS/LAN правила) — написан заново под сервер.
+- [x] Сервис: `sing-box@openrouter-proxy.service`, `enable --now`.
+      `curl -x http://127.0.0.1:18080 https://openrouter.ai/api/v1/models`
+      → `200`.
+- [x] `docker-compose.yml`: `litellm` получил `network_mode: host` (та же
+      причина, что у `caddy` — `HTTPS_PROXY=127.0.0.1:18080` это loopback
+      ХОСТА) + `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`. Из-за смены сети
+      `litellm_database_url` пришлось поправить `@postgres:5432` →
+      `@127.0.0.1:5432` (Docker DNS `postgres` недоступен вне bridge-сети).
+- [x] Матрица кандидатов §15.6 сверена целиком с живым каталогом через
+      прокси — все ID совпали, кроме `moonshotai/kimi-k2.7-code` (в спеке):
+      актуальная версия в каталоге на 28.08.2026 — `kimi-k3` (снимок
+      `kimi-k3-20260715`). Есть и floating `kimi-latest`, но проект
+      пинует версии моделей (как и Docker-образы, `docker-compose.yml`
+      шапка) — не используется.
+- [x] `config/models/litellm.yaml` написан: provisional primary+fallback
+      для `helm-router`/`helm-cheap`/`helm-standard` (единственная тройка,
+      обязательная для Milestone A по §15.3 п.9); `helm-code`/`helm-review`/
+      `helm-board`/`helm-longhorizon` зарегистрированы одной моделью каждый
+      без выбора primary/fallback — это не требуется сейчас, остальные
+      кандидаты матрицы — в комментариях файла, не в конфиге (не создавать
+      случайную балансировку между непроверенными моделями).
+- [ ] **Не проверено эмпирически:** поддерживает ли образ litellm
+      (`ghcr.io/berriai/litellm:main-v1.55.8`) конвенцию `_FILE` для
+      `OPENROUTER_API_KEY_FILE`/`DATABASE_URL_FILE`/`LITELLM_MASTER_KEY_FILE`
+      так же, как официальный образ Postgres. Не факт по умолчанию (см.
+      `helm_core/config.py`: HELM пришлось реализовывать это вручную,
+      pydantic-settings сам не умеет) — первый запуск контейнера это
+      покажет.
+- [ ] Подъём контейнера `litellm`, проверка `/health/liveliness`
+- [ ] §15.3 п.10-12: реальный completion через `helm-standard`, доказательство
+      usage/cost logging, искусственный слом primary → доказательство fallback
+- [ ] Virtual keys для профилей Hermes (§15.3 п.7) — после того, как сам
+      LiteLLM подтверждён живым
 
 ## Известные отклонения от live-server-first (ADR-017)
 

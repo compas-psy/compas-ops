@@ -1,0 +1,97 @@
+# LiteLLM — диспетчер моделей (ТЗ §15). Алиасы — единственное, что видит
+# Hermes (§15.4): прямого OPENROUTER_API_KEY у Hermes нет и не будет.
+#
+# Все ID сверены с живым каталогом OpenRouter 28.08.2026 через локальный
+# прокси 127.0.0.1:18080 (см. WORKPLAN.md): этот VPS блокируется OpenRouter
+# по IP/датацентру напрямую (cloudflare 403 ещё до авторизации) — обход
+# только для этого трафика через sing-box+mieru в Финляндию, не общий
+# VPN сервера. HTTPS_PROXY/HTTP_PROXY заданы в docker-compose.yml только
+# для сервиса litellm.
+#
+# helm-router/helm-cheap/helm-standard — provisional primary+fallback по
+# §15.3 п.9, единственная тройка, для которой это требуется на Milestone A.
+# Остальные четыре алиаса ниже зарегистрированы одной моделью каждый —
+# намеренно без второй записи под тем же именем: LiteLLM балансирует между
+# записями с одинаковым model_name случайным образом, а решение о
+# primary/fallback для них спека (§15.3 п.9) сейчас не требует — это выбор
+# на момент, когда соответствующий профиль (P4 engineering/reviewer и
+# далее) реально начнёт ими пользоваться, не раньше.
+
+model_list:
+  - model_name: helm-router
+    litellm_params:
+      model: openrouter/deepseek/deepseek-v4-flash-0731
+      api_key: os.environ/OPENROUTER_API_KEY
+  - model_name: helm-router-fallback
+    litellm_params:
+      model: openrouter/openai/gpt-5.6-luna
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: helm-cheap
+    litellm_params:
+      model: openrouter/deepseek/deepseek-v4-flash-0731
+      api_key: os.environ/OPENROUTER_API_KEY
+  - model_name: helm-cheap-fallback
+    litellm_params:
+      model: openrouter/openai/gpt-5.6-luna
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: helm-standard
+    litellm_params:
+      model: openrouter/z-ai/glm-5
+      api_key: os.environ/OPENROUTER_API_KEY
+  - model_name: helm-standard-fallback
+    litellm_params:
+      model: openrouter/deepseek/deepseek-v4-pro-0813
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # Ниже — зарегистрированы для будущих фаз, primary/fallback не выбран
+  # (см. шапку файла). Один кандидат из матрицы §15.6 на алиас; остальные
+  # кандидаты — в комментарии, не в конфиге, чтобы не создавать случайную
+  # балансировку между непроверенными в бою моделями.
+
+  # helm-code, deep-кандидаты матрицы §15.6: z-ai/glm-5.3,
+  # anthropic/claude-sonnet-5, openai/gpt-5.6-sol,
+  # moonshotai/kimi-k3 (не kime-k2.7-code из спеки — устарела; в каталоге
+  # OpenRouter на 28.08.2026 актуальная выпущенная версия — k3, дата
+  # снимка kimi-k3-20260715; "kimi-latest" существует как плавающий
+  # алиас OpenRouter, но проект пинует версии моделей, а не следует за
+  # floating tag — как и везде в этом репозитории, docker-compose.yml).
+  # challenger: openai/gpt-5.6-terra.
+  - model_name: helm-code
+    litellm_params:
+      model: openrouter/z-ai/glm-5
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # helm-review, остальные кандидаты: anthropic/claude-sonnet-5,
+  # openai/gpt-5.6-sol; frontier: anthropic/claude-opus-5.
+  - model_name: helm-review
+    litellm_params:
+      model: openrouter/z-ai/glm-5.3
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # helm-board, остальные кандидаты: anthropic/claude-opus-5
+  # (independent_candidates), z-ai/glm-5.3 (economical_dissent);
+  # fallback по матрице: anthropic/claude-sonnet-5.
+  - model_name: helm-board
+    litellm_params:
+      model: openrouter/openai/gpt-5.6-sol
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # helm-longhorizon, остальные кандидаты: anthropic/claude-opus-5
+  # (frontier), anthropic/claude-fable-5 (exceptional).
+  - model_name: helm-longhorizon
+    litellm_params:
+      model: openrouter/z-ai/glm-5.3
+      api_key: os.environ/OPENROUTER_API_KEY
+
+router_settings:
+  fallbacks:
+    - helm-router: ["helm-router-fallback"]
+    - helm-cheap: ["helm-cheap-fallback"]
+    - helm-standard: ["helm-standard-fallback"]
+  num_retries: 1
+  timeout: 60
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

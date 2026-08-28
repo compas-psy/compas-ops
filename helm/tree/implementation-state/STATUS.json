@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-08-28T14:20:00Z",
-  "phase": "P2-complete/P3-next",
-  "task": "P2 + отложенный P1-пункт (Caddy/TLS) закрыты на живом сервере. Стек: postgres, helm-core, caddy — все Up/healthy. https://helm.cmpas.ru/ отдаёт панель (200, реальный сертификат Let's Encrypt), /guardian/status.json отдаёт санитизированный плейсхолдер, https://git.cmpas.ru/ честно 503 (Forgejo — P6.5, ещё не установлен). Следующий шаг — P3 LiteLLM (гейт: секрет openrouter_api_key уже лежит в /root/helm-bootstrap, владелец разместил сам).",
+  "updated_at": "2026-08-28T15:10:00Z",
+  "phase": "P3-in-progress",
+  "task": "P3: обнаружено и обойдено — OpenRouter блокирует IP этого VPS (cloudflare 403 по датацентру, не по России). Обход: sing-box+mieru туннель в Финляндию (systemd sing-box@openrouter-proxy, локальный inbound 127.0.0.1:18080, только для трафика litellm→openrouter.ai). Матрица кандидатов §15.6 сверена с живым каталогом (kimi исправлен на k3). litellm.yaml написан. docker-compose.yml: litellm → network_mode host + HTTPS_PROXY, litellm_database_url поправлен на 127.0.0.1. Не сделано: сам контейнер litellm ещё не поднят, _FILE-конвенция секретов для образа litellm не проверена эмпирически, §15.3 п.10-12 (реальный completion/fallback/usage-logging) не пройдены — без этого P3 не закрыт (жёсткий гейт §30.4).",
   "worker": "orchestrator",
   "model": "claude-sonnet-5",
   "status": "in_progress",
