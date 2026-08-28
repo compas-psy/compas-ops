@@ -37,8 +37,8 @@ def ts_column(**kw):
     """Время всегда с таймзоной.
 
     Naive timestamp здесь означал бы, что TTL одобрения (§8.4) считается
-    в неизвестном часовом поясе — на сервере с Europe/Helsinki для
-    owner-facing расписаний (§4.1) это расхождение в два-три часа.
+    в неизвестном часовом поясе — на сервере с Europe/Moscow для
+    owner-facing расписаний (ADR-019) это расхождение в несколько часов.
     """
     return mapped_column(DateTime(timezone=True), **kw)
 

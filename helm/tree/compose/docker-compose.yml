@@ -64,6 +64,11 @@ services:
       DATABASE_URL_FILE: /run/secrets/litellm_database_url
       OPENROUTER_API_KEY_FILE: /run/secrets/openrouter_api_key
       STORE_MODEL_IN_DB: "True"
+    # НАЙДЕНО НА P2 bring-up (helm-core): docker compose (не swarm)
+    # bind-mount'ит secrets с правами хоста (0600 root:root) как есть, не
+    # сбрасывает на 0444. Если litellm-образ работает не под root — здесь
+    # будет тот же PermissionError, что был у helm-core, и понадобится
+    # group_add с внутренним UID образа (проверить в P3, не угадывать).
     secrets: [litellm_master_key, litellm_database_url, openrouter_api_key]
     volumes:
       - ../config/models/litellm.yaml:/app/config.yaml:ro
@@ -95,8 +100,15 @@ services:
       HELM_OWNER_ID_FILE: /run/secrets/telegram_owner_id
       HELM_PANEL_RP_ID: helm.cmpas.ru
       HELM_PANEL_ORIGIN: https://helm.cmpas.ru
-      TZ: Europe/Helsinki
+      TZ: Europe/Moscow
     secrets: [helm_database_url, telegram_owner_id, hermes_service_hmac]
+    # docker compose (не swarm) монтирует secrets bind-mount'ом с теми же
+    # правами, что и на хосте (0600 root:root, §6.3) — не сбрасывает их на
+    # 0444, как это делал бы Swarm. Контейнер работает под UID 10001, не
+    # root (Dockerfile), поэтому без group_add чтение секрета падает
+    # PermissionError. GID числом, не именем: имя группы живёт только в
+    # /etc/group хоста и не резолвится через границу bind-mount.
+    group_add: ["10001"]
     volumes:
       - ../config:/opt/helm/config:ro
     ports: ["127.0.0.1:8080:8080"]
