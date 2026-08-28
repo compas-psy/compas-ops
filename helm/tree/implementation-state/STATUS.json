@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-08-28T11:30:00Z",
-  "phase": "P2-core-verified",
-  "task": "P2: helm-core live, healthy, externally reachable — GET /healthz от хоста возвращает 200 (не только внутренний Docker healthcheck, который проходил и до фикса). Найден и исправлен false-positive: uvicorn слушал 127.0.0.1 внутри контейнера (недостижим снаружи); заодно исправлен тот же класс бага в Caddyfile-ожиданиях (network_mode: host у caddy). Postgres + helm-core — единственные поднятые сервисы. Caddy/TLS, litellm (P3, нужен B2), Hermes (P4) — ещё не подняты, следующий шаг отдельно согласовать с владельцем.",
+  "updated_at": "2026-08-28T14:20:00Z",
+  "phase": "P2-complete/P3-next",
+  "task": "P2 + отложенный P1-пункт (Caddy/TLS) закрыты на живом сервере. Стек: postgres, helm-core, caddy — все Up/healthy. https://helm.cmpas.ru/ отдаёт панель (200, реальный сертификат Let's Encrypt), /guardian/status.json отдаёт санитизированный плейсхолдер, https://git.cmpas.ru/ честно 503 (Forgejo — P6.5, ещё не установлен). Следующий шаг — P3 LiteLLM (гейт: секрет openrouter_api_key уже лежит в /root/helm-bootstrap, владелец разместил сам).",
   "worker": "orchestrator",
   "model": "claude-sonnet-5",
   "status": "in_progress",
@@ -35,11 +35,18 @@
       "severity": "low"
     }
   ],
-  "deferred": [
+  "deferred": [],
+  "resolved_this_cycle": [
     {
       "item": "Caddy + TLS (P1)",
-      "reason": "Caddyfile зависит от helm-core (service_healthy) и собранного panel/dist — ни того, ни другого ещё нет на сервере",
-      "resolves_at": "P2 bring-up: после сборки образа control-plane и миграций поднимается реальный docker-compose стек целиком"
+      "note": "Поднят на живом сервере, реальные сертификаты Let's Encrypt для helm.cmpas.ru и git.cmpas.ru получены и работают"
     }
+  ],
+  "found_and_fixed_this_bring_up": [
+    "uvicorn --host 127.0.0.1 внутри control-plane контейнера: Docker healthcheck (исполняется внутри namespace) показывал healthy, но хост и Caddy получали connection refused — исправлено на 0.0.0.0",
+    "caddy на bridge-сети: Caddyfile ожидает loopback ХОСТА (127.0.0.1:PORT), в bridge-сети это loopback самого контейнера Caddy — исправлено network_mode: host",
+    "Caddyfile handle /guardian/status.json не срезает совпавший префикс URI (в отличие от handle_path) — file_server искал /srv/guardian/guardian/status.json вместо примонтированного /srv/guardian/status.json — исправлено на handle_path /guardian/*",
+    "panel/dist гитигнорится (верно, это billed-артефакт) и поэтому никогда не доезжал на сервер через git pull владельца — передан отдельно файлом и scp'нут вручную",
+    "caddy reload не работает при admin off в Caddyfile (сознательное решение — не открывать admin API) — правки Caddyfile требуют docker compose restart caddy, не reload"
   ]
 }

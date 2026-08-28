@@ -4,7 +4,7 @@
 каждой значимой задачи — это заменяет необходимость владельцу писать
 «продолжай».
 
-## Текущая фаза: P2 — Control Plane (ядро подтверждено на живом сервере, Caddy/TLS ещё не поднят)
+## Текущая фаза: P3 — LiteLLM (P1 и P2 закрыты на живом сервере, включая отложенный Caddy/TLS)
 
 ## Пройдено офлайн (до переноса на сервер, session 0afed5d1)
 
@@ -26,15 +26,15 @@
 - [x] Каталоги §5 созданы
 - [x] `/opt/helm-state/*`, `/etc/helm/{secrets,ssh,backup}` (0700)
 - [x] admin-пользователь `helm` + ключ + **второй независимый вход подтверждён** (`helm` → `sudo` → `root`)
-- [ ] firewall (22/80/443)
+- [x] firewall (22/80/443) — ufw active, default deny incoming, explicit allow на 22/80/443 (v4+v6); подтверждено 28.08 перед подъёмом Caddy
 - [x] Docker + docker-compose plugin, daemon.json (bounded logs), hello-world подтверждён
-- [ ] Caddy + TLS — **отложено до P2**: Caddyfile зависит от helm-core (service_healthy) и panel/dist, которых ещё нет
+- [x] Caddy + TLS — поднят на живом сервере, см. раздел "P2 — Control Plane" ниже
 - [x] B7 подтверждён владельцем — доступ к консоли/rescue хостера есть
 - [x] password-login и root SSH отключены (`10-helm-hardening.conf`, reload проверен свежим подключением)
-- [ ] firewall (22/80/443)
+- [x] firewall (22/80/443) — см. выше
 - [ ] bounded journald logs
 - [x] Docker + docker-compose plugin, daemon.json (bounded logs), hello-world подтверждён
-- [ ] Caddy + TLS — **отложено до P2**: Caddyfile зависит от helm-core (service_healthy) и panel/dist, которых ещё нет
+- [x] Caddy + TLS — см. выше
 
 ## P2 — Control Plane на живом сервере
 
@@ -42,18 +42,32 @@
 - [x] `post-migration.sql` применён: append-only lockdown на `task_events`, права `helm_app`
 - [x] `helm-core` поднят и подтверждён живым: `GET /healthz` с хоста → `200` (не только внутренний
       Docker healthcheck — тот проходил и до фикса, см. находку ниже)
-- [ ] Caddy + TLS — предпосылки изменились с прошлой записи: `helm-core` теперь реально healthy,
-      `panel/dist` уже на сервере (пришёл вместе с деревом). Новый известный пробел —
-      `/var/lib/helm-guardian/public-status.json`, на который у Caddy bind-mount: Guardian на
-      сервере ещё не установлен (P5 live), файла нет — Docker создаст на его месте пустой каталог.
-      Решение о том, поднимать ли Caddy/TLS сейчас с этим пробелом, за владельцем.
+- [x] Caddy + TLS — поднят, реальные сертификаты Let's Encrypt для `helm.cmpas.ru` и `git.cmpas.ru`
+      получены. `https://helm.cmpas.ru/` → `200` (панель), `/guardian/status.json` → санитизированный
+      плейсхолдер (Guardian сам ещё не установлен, это P5), `https://git.cmpas.ru/` → честные `503`
+      (Forgejo — P6.5, ещё не установлен, Caddyfile не проксирует в пустоту — работает как задумано)
 
-**Найдено и исправлено на этом bring-up:** `uvicorn --host 127.0.0.1` слушал loopback самого
-контейнера, а не хоста — Docker healthcheck (исполняется внутри namespace контейнера) показывал
-`healthy`, но `curl` с хоста получал connection refused. Тот же класс ошибки был и в `Caddyfile`
-(`reverse_proxy 127.0.0.1:PORT` предполагает loopback хоста) — без `network_mode: host` у `caddy`
-получил бы то же connection refused при первом запросе. Исправлено: `--host 0.0.0.0` в
-`control-plane/Dockerfile`, `network_mode: host` у `caddy` в `docker-compose.yml`.
+**Найдено и исправлено на этом bring-up:**
+1. `uvicorn --host 127.0.0.1` слушал loopback самого контейнера, а не хоста — Docker healthcheck
+   (исполняется внутри namespace контейнера) показывал `healthy`, но `curl` с хоста получал
+   connection refused. Исправлено: `--host 0.0.0.0` в `control-plane/Dockerfile`.
+2. Тот же класс ошибки в `Caddyfile`: `reverse_proxy 127.0.0.1:PORT` предполагает loopback хоста,
+   а в bridge-сети (как было в compose) это loopback самого контейнера Caddy. Исправлено:
+   `network_mode: host` у `caddy` в `docker-compose.yml`.
+3. `Caddyfile`: `handle /guardian/status.json` не срезает совпавший префикс из URI (в отличие от
+   `handle_path`) — `file_server` искал `/srv/guardian/guardian/status.json` вместо примонтированного
+   `/srv/guardian/status.json`. Исправлено: `handle_path /guardian/*`.
+4. `panel/dist` в `.gitignore` (верно — это billed-артефакт), поэтому обычный `git pull` на машине
+   владельца никогда его не привозил; `/opt/helm/panel/dist` на сервере оказался пустым. Собранная
+   офлайн панель (P7.5, уже прошла 27 проверок брифа) передана отдельным файлом и разложена вручную.
+5. `caddy reload` не работает, пока в `Caddyfile` стоит `admin off` (сознательное решение — не
+   открывать admin API): правки `Caddyfile` требуют `docker compose restart caddy`, не `reload`.
+
+**Известный некритичный хвост:** плейсхолдер `/var/lib/helm-guardian/public-status.json` создан
+через PowerShell `Set-Content -Encoding utf8`, которая добавляет BOM — ответ `/guardian/status.json`
+начинается с невидимого BOM-байта. `fetch().json()` в браузере штатно съедает BOM при UTF-8-декодировании,
+так что панель не должна на этом споткнуться; файл в любом случае временный — Guardian в P5 перезапишет
+его питоновским `json.dumps` (без BOM). Не исправлялось отдельно ради файла, который скоро исчезнет сам.
 
 ## Известные отклонения от live-server-first (ADR-017)
 
