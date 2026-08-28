@@ -33,5 +33,16 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA health
 REVOKE ALL ON SCHEMA public FROM helm_health;
 
 -- Роль приложения: append-only журнал (§7.2).
+--
+-- CREATE, а не только USAGE: в этой системе нет отдельной "миграционной"
+-- роли — Alembic (migrations/env.py) подключается тем же HELM_DATABASE_URL,
+-- что и runtime API, то есть от имени helm_app. Найдено на реальном P2
+-- bring-up: без CREATE `alembic upgrade head` падал InsufficientPrivilege
+-- прямо на "CREATE TABLE alembic_version". Для единоличной системы (не
+-- multi-tenant) разница между «может создавать таблицы» и «не может» для
+-- единственной runtime-роли не даёт реальной защиты — SQL injection
+-- предотвращается на уровне кода (параметризованные запросы SQLAlchemy),
+-- а не гранулярностью прав здесь (§2 простота: не вводим вторую роль ради
+-- защиты, которую и так даёт уровень выше).
 CREATE ROLE helm_app LOGIN;
-GRANT USAGE ON SCHEMA public TO helm_app;
+GRANT USAGE, CREATE ON SCHEMA public TO helm_app;
