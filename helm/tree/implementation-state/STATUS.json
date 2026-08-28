@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-08-28T00:50:00Z",
+  "updated_at": "2026-08-28T10:15:00Z",
   "phase": "P1-complete/P2-next",
-  "task": "docker-verified; caddy+tls deferred to P2 bring-up",
+  "task": "P2: postgres up, role passwords set, building control-plane image",
   "worker": "orchestrator",
   "model": "claude-sonnet-5",
   "status": "in_progress",
@@ -27,6 +27,12 @@
       "description": "printf с экранированными \\\" внутри, переданный аргументом ssh.exe из PowerShell (даже в одинарных кавычках снаружи), обрывается — Windows использует MSVC-style argv-парсинг для внешних программ. /etc/docker/daemon.json содержал только '{n' вместо валидного JSON.",
       "mitigation": "содержимое файлов с кавычками внутри — только через repo → scp, не inline printf/heredoc через ssh с Windows-клиента",
       "severity": "high"
+    },
+    {
+      "id": "F-260828-02",
+      "description": "Многословный аргумент в двойных кавычках bash, вложенный в одинарные кавычки PowerShell, теряет кавычки при передаче через ssh.exe на Windows — слова доходят до bash раздельно (word-split). То же самое с попыткой вложенных одинарных кавычек через POSIX-трюк '\"'\"'. Рабочая комбинация: внешние ДВОЙНЫЕ кавычки PowerShell + внутренние ОДИНАРНЫЕ кавычки bash для многословного текста + обратный апостроф перед $ для того, что должно достаться bash, а не PowerShell (`$(...) вместо $(...)). Октальный escape \\047 — рабочий способ получить одинарную кавычку внутри printf без конфликта с внешним уровнем.",
+      "mitigation": "для многословных SQL/shell-фрагментов через ssh с Windows-клиента: внешние \"...\", внутри — 'одинарные' для текста, `$(...) для bash-подстановок, -f - вместо -c где возможно",
+      "severity": "low"
     }
   ],
   "deferred": [
