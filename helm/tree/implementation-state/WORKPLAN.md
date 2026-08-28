@@ -4,7 +4,7 @@
 каждой значимой задачи — это заменяет необходимость владельцу писать
 «продолжай».
 
-## Текущая фаза: P4 — Hermes (P3 закрыт: гейт §30.4 пройден на живом сервере)
+## Текущая фаза: P4 — Hermes (установлен, подключён к LiteLLM, реальный сквозной ответ получен; профили/Telegram/helm-control плагин ещё не сделаны)
 
 ## Пройдено офлайн (до переноса на сервер, session 0afed5d1)
 
@@ -150,6 +150,66 @@ Python `urlparse` разбирал строку терпимо (ищет ПОС�
 в деталях кодирования с Prisma) — пароль роли `litellm` перегенерирован
 чисто в hex-алфавите (`openssl rand -hex 32`, без единого зарезервированного
 в URL символа) прямо на сервере, значение никуда не выводилось.
+
+## P4 — Hermes на живом сервере
+
+- [x] Установлен как пользователь `helm` (не root, не Docker — своим
+      способом: `hermes gateway install` умеет systemd/launchd сам) через
+      официальный `install.sh` (`curl | bash` от реального
+      `hermes-agent.nousresearch.com`, репозиторий `NousResearch/hermes-agent`
+      — то, на что реально ссылается спека, не выдумано)
+- [x] `Hermes Agent v0.20.6 (2026.8.27) · upstream eff97a8a`, `hermes doctor` чист
+- [x] **Известный риск снят эмпирически:** issue
+      [#26489](https://github.com/NousResearch/hermes-agent/issues/26489) —
+      зависание на 60-90с при `provider: custom` из-за проб Ollama-нативных
+      эндпоинтов на LiteLLM (там честный 404). На `v0.20.6` не воспроизвелось —
+      реальный запрос прошёл за 5-6 секунд, без таймаута.
+- [x] Провайдер настроен: `model.provider: custom`, `model.base_url:
+      http://127.0.0.1:4000/v1`, `model.default: helm-standard`,
+      `model.api_key` = `litellm_master_key` (временно мастер-ключ — для
+      финальной настройки нужны per-profile virtual keys, §15.3 п.7/§15.4)
+- [x] **Реальный сквозной запрос:** `hermes -z 'Reply with exactly one
+      word: pong.'` → `pong` за ~6 секунд. Полная цепочка Milestone A
+      (`Hermes → LiteLLM → OpenRouter → модель`) работает.
+
+**Найдено и обойдено:**
+1. Node.js из инсталлятора падал с `error while loading shared libraries:
+   libatomic.so.1` — на этом минимальном Ubuntu 24.04 пакета `libatomic1`
+   не было. Установлен через apt.
+2. `hermes-agent.nousresearch.com` (и, видимо, значительная часть
+   PyPI/npm-подобной инфраструктуры) тоже банит IP этого VPS — тот же класс
+   блокировки, что у OpenRouter, только через Vercel, не Cloudflare
+   (`x-vercel-mitigated: deny`). Вместо точечного добавления доменов в
+   `sing-box` (второй заблокированный сервис подряд — предвестник новых)
+   маршрутизация упрощена: `route.final` = `mieru-out` для ВСЕГО, что идёт
+   через локальный прокси-порт `18080` — на остальной трафик сервера
+   (apt/git/прямые соединения) это не влияет, они этот порт не используют.
+3. `.bashrc` в неинтерактивной ssh-сессии не выполняется дальше guard'а
+   `case $- in *i*) ;; *) return;; esac` — PATH из инсталлятора не
+   применяется через `source ~/.bashrc` при удалённых командах. Бинарник:
+   `/home/helm/.local/bin/hermes`.
+4. `OPENAI_API_KEY`/`OPENAI_BASE_URL` в `.env` не подхватились для
+   `model.provider: custom` (судя по документации конфига, это скорее для
+   `auxiliary`-моделей) — сработало явное документированное поле
+   `model.api_key` через `hermes config set`.
+
+**Отклонение от §5 плана (сознательное):** Hermes живёт в `~/.hermes`
+(домашняя директория пользователя `helm`), не в `/opt/helm/hermes/` —
+это жёстко зашитая конвенция самого инструмента (CLI, install.sh,
+документация — везде `~/.hermes`), переносить её боролись бы с
+инструментом без реальной выгоды.
+
+**Осталось до конца P4:**
+- [ ] Профили `chief`/`business`/`engineering`/`health`/`reviewer` (§11.2)
+- [ ] Virtual keys LiteLLM на профиль вместо общего master key (§15.3 п.7, §15.4)
+- [ ] Telegram gateway только у `chief` (§9.1) — нужен `TELEGRAM_BOT_TOKEN`
+      (есть в `/root/helm-bootstrap` на сервере) + `python-telegram-bot`
+      (сейчас не установлен, `hermes doctor` пометил как optional/missing)
+- [ ] Плагин `helm-control`: hook `pre_gateway_dispatch` (регистрация задачи
+      в Control Plane ДО первого LLM-вызова) + `pre_llm_call` (короткий
+      trusted-контекст `HELM_TASK_ID`/`DOMAIN_HINT`) — §9.3
+- [ ] A-DoD п.2-3: задача регистрируется в CP до LLM-вызова; при недоступном
+      CP Hermes не исполняет задачу (fail-closed)
 
 ## Известные отклонения от live-server-first (ADR-017)
 

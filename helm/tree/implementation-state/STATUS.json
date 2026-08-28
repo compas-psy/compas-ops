@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-08-28T15:35:00Z",
-  "phase": "P3-complete/P4-next",
-  "task": "P3 закрыт: гейт §30.4 пройден на живом сервере целиком — реальный completion (helm-standard: glm-5 → GMICloud, 'pong'), usage/cost logging доказан, искусственный слом primary → доказанный fallback (deepseek-v4-pro-0813 → Fireworks, тоже 'pong'), конфигурация возвращена в рабочее состояние. По пути: обойдена блокировка OpenRouter по IP этого VPS (sing-box+mieru в Финляндию, systemd sing-box@openrouter-proxy); образ litellm не поддерживает _FILE-конвенцию секретов — заменено entrypoint-обёрткой; секрет litellm_database_url содержал непроцентированные '/' в пароле — перегенерирован в hex. Осталось перед P4: virtual keys для профилей Hermes (намеренно не создавались — профилей ещё нет).",
+  "updated_at": "2026-08-28T17:10:00Z",
+  "phase": "P4-in-progress",
+  "task": "P4: Hermes Agent v0.20.6 установлен на сервере (пользователь helm, ~/.hermes — конвенция инструмента, не /opt/helm/hermes). Известный баг зависания (issue #26489, custom provider + LiteLLM) на этой версии не воспроизвёлся. Настроен provider: custom → LiteLLM (http://127.0.0.1:4000/v1), реальный сквозной запрос прошёл: Hermes → LiteLLM → OpenRouter → 'pong' за ~6с. sing-box-прокси в Финляндию расширен на весь трафик локального порта 18080 (не только openrouter.ai) — второй сервис (hermes-agent.nousresearch.com, через Vercel) тоже блокировал IP этого VPS. Осталось: профили (chief/business/engineering/health/reviewer), per-profile virtual keys вместо master key, Telegram gateway у chief, плагин helm-control (pre_gateway_dispatch + pre_llm_call) для регистрации задачи в Control Plane до LLM-вызова.",
   "worker": "orchestrator",
   "model": "claude-sonnet-5",
   "status": "in_progress",
