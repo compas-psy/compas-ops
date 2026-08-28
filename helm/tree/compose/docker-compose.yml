@@ -60,9 +60,6 @@ services:
     depends_on:
       postgres: {condition: service_healthy}
     environment:
-      LITELLM_MASTER_KEY_FILE: /run/secrets/litellm_master_key
-      DATABASE_URL_FILE: /run/secrets/litellm_database_url
-      OPENROUTER_API_KEY_FILE: /run/secrets/openrouter_api_key
       STORE_MODEL_IN_DB: "True"
       # НАЙДЕНО НА P3 bring-up: OpenRouter блокирует IP этого VPS
       # (cloudflare 403 "Access denied by security policy" ещё до
@@ -75,20 +72,29 @@ services:
       HTTPS_PROXY: http://127.0.0.1:18080
       HTTP_PROXY: http://127.0.0.1:18080
       NO_PROXY: 127.0.0.1,localhost
-    # НАЙДЕНО НА P2 bring-up (helm-core): docker compose (не swarm)
-    # bind-mount'ит secrets с правами хоста (0600 root:root) как есть, не
-    # сбрасывает на 0444. Если litellm-образ работает не под root — здесь
-    # будет тот же PermissionError, что был у helm-core, и понадобится
-    # group_add с внутренним UID образа (проверить в P3, не угадывать).
+    # НАЙДЕНО НА P3 bring-up: контейнер работает от root (проверено —
+    # group_add, в отличие от helm-core, не нужен), но образ litellm НЕ
+    # реализует конвенцию _FILE сам (в отличие от официального Postgres):
+    # переменные вида OPENROUTER_API_KEY_FILE молча игнорируются, litellm
+    # ищет OPENROUTER_API_KEY/DATABASE_URL/LITELLM_MASTER_KEY как есть.
+    # Контейнер стартовал и прошёл healthcheck без них — баг был не виден,
+    # пока не пришёл первый реальный completion-запрос (модели грузятся из
+    # config.yaml независимо от БД; без LITELLM_MASTER_KEY прокси, похоже,
+    # просто не проверяет авторизацию). Тот же класс проблемы, что уже
+    # решался для helm-core (helm_core/config.py), только не в своём коде —
+    # entrypoint-обёртка читает секреты сама и экспортирует их под именами,
+    # которые litellm реально ищет.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - export OPENROUTER_API_KEY=$(cat /run/secrets/openrouter_api_key) DATABASE_URL=$(cat /run/secrets/litellm_database_url) LITELLM_MASTER_KEY=$(cat /run/secrets/litellm_master_key); exec litellm --config /app/config.yaml --port 4000
     secrets: [litellm_master_key, litellm_database_url, openrouter_api_key]
     volumes:
       - ../config/models/litellm.yaml:/app/config.yaml:ro
-    command: ["--config", "/app/config.yaml", "--port", "4000"]
     # host, не bridge: HTTPS_PROXY=127.0.0.1:18080 выше — это loopback
     # ХОСТА, где слушает sing-box (см. network_mode: host у caddy —
-    # та же причина). Из-за этого DATABASE_URL_FILE обязан указывать на
-    # 127.0.0.1, не на service-имя postgres — Docker DNS недоступен без
-    # bridge-сети.
+    # та же причина). Из-за этого секрет litellm_database_url обязан
+    # указывать на 127.0.0.1, не на service-имя postgres — Docker DNS
+    # недоступен без bridge-сети.
     network_mode: host
     healthcheck:
       test: ["CMD", "python", "-c",
