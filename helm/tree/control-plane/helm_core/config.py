@@ -1,4 +1,4 @@
-"""Конфигурация. Значения секретов приходят из /etc/helm/secrets, не из кода."""
+"""Конфигурация. Значения секретов приходят из Docker secrets, не из кода."""
 
 from __future__ import annotations
 
@@ -9,7 +9,13 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-SECRETS_DIR = Path("/etc/helm/secrets")
+#: НАЙДЕНО НА P4 bring-up: реальный путь монтирования Docker secrets внутри
+#: контейнера — /run/secrets (стандарт Docker), не /etc/helm/secrets (это
+#: путь ХОСТА, где лежат исходники секретов до монтирования). До этой
+#: правки read_secret() внутри контейнера всегда бил в default="" — hermes
+#: _service_hmac резолвился в пустую строку, и HMAC на /internal/* фактически
+#: не проверял подпись (пустой секрет тривиально подделать).
+SECRETS_DIR = Path("/run/secrets")
 
 #: Поля Settings, для которых docker-compose.yml передаёт значение через
 #: Docker secret — переменной с суффиксом _FILE, содержащей путь к файлу,
