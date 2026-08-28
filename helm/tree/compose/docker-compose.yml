@@ -64,6 +64,17 @@ services:
       DATABASE_URL_FILE: /run/secrets/litellm_database_url
       OPENROUTER_API_KEY_FILE: /run/secrets/openrouter_api_key
       STORE_MODEL_IN_DB: "True"
+      # НАЙДЕНО НА P3 bring-up: OpenRouter блокирует IP этого VPS
+      # (cloudflare 403 "Access denied by security policy" ещё до
+      # авторизации — датацентровый диапазон, не Россия целиком: с обычной
+      # машины тот же запрос отдаёт 200). Обход — только для трафика к
+      # OpenRouter, через sing-box+mieru туннель в Финляндию
+      # (systemd unit sing-box@openrouter-proxy, локальный inbound
+      # 127.0.0.1:18080). NO_PROXY защищает собственный healthcheck
+      # контейнера, который бьёт в самого себя по HTTP.
+      HTTPS_PROXY: http://127.0.0.1:18080
+      HTTP_PROXY: http://127.0.0.1:18080
+      NO_PROXY: 127.0.0.1,localhost
     # НАЙДЕНО НА P2 bring-up (helm-core): docker compose (не swarm)
     # bind-mount'ит secrets с правами хоста (0600 root:root) как есть, не
     # сбрасывает на 0444. Если litellm-образ работает не под root — здесь
@@ -73,7 +84,12 @@ services:
     volumes:
       - ../config/models/litellm.yaml:/app/config.yaml:ro
     command: ["--config", "/app/config.yaml", "--port", "4000"]
-    ports: ["127.0.0.1:4000:4000"]
+    # host, не bridge: HTTPS_PROXY=127.0.0.1:18080 выше — это loopback
+    # ХОСТА, где слушает sing-box (см. network_mode: host у caddy —
+    # та же причина). Из-за этого DATABASE_URL_FILE обязан указывать на
+    # 127.0.0.1, не на service-имя postgres — Docker DNS недоступен без
+    # bridge-сети.
+    network_mode: host
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request;urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness')"]
