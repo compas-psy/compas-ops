@@ -129,10 +129,14 @@ services:
     logging: *logging
     depends_on:
       helm-core: {condition: service_healthy}
-    # Единственный сервис с публичными портами (§4.6).
-    ports:
-      - "80:80"
-      - "443:443"
+    # host, не bridge: Caddyfile проксирует на 127.0.0.1:PORT для каждого
+    # внутреннего сервиса — тот же loopback хоста, на который они публикуются
+    # (§4.6, "ни один порт не публикуется наружу"). В bridge-сети у Caddy
+    # был бы собственный loopback, не хоста, и reverse_proxy получал бы
+    # connection refused ко всем внутренним сервисам. Публично это ничего не
+    # меняет: Caddy и так единственный сервис с публичными портами, host
+    # networking просто даёт ему тот же loopback, что у остальных.
+    network_mode: host
     volumes:
       - ../config/Caddyfile:/etc/caddy/Caddyfile:ro
       - ../panel/dist:/srv/panel:ro
