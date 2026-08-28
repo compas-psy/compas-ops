@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-08-28T10:15:00Z",
-  "phase": "P1-complete/P2-next",
-  "task": "P2: postgres up, role passwords set, building control-plane image",
+  "updated_at": "2026-08-28T11:00:00Z",
+  "phase": "P2-in-progress",
+  "task": "P2: alembic upgrade head + post-migration.sql applied on live DB (17 tables incl. alembic_version, task_events append-only lockdown confirmed); next: verify /etc/helm/secrets contents for helm-core (helm_database_url, telegram_owner_id, hermes_service_hmac), then docker compose up -d helm-core",
   "worker": "orchestrator",
   "model": "claude-sonnet-5",
   "status": "in_progress",
