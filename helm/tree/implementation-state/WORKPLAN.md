@@ -4,7 +4,7 @@
 каждой значимой задачи — это заменяет необходимость владельцу писать
 «продолжай».
 
-## Текущая фаза: P1 — Host
+## Текущая фаза: P2 — Control Plane (ядро подтверждено на живом сервере, Caddy/TLS ещё не поднят)
 
 ## Пройдено офлайн (до переноса на сервер, session 0afed5d1)
 
@@ -35,6 +35,25 @@
 - [ ] bounded journald logs
 - [x] Docker + docker-compose plugin, daemon.json (bounded logs), hello-world подтверждён
 - [ ] Caddy + TLS — **отложено до P2**: Caddyfile зависит от helm-core (service_healthy) и panel/dist, которых ещё нет
+
+## P2 — Control Plane на живом сервере
+
+- [x] `alembic upgrade head` применён к реальной БД: 17 таблиц (16 + `alembic_version`)
+- [x] `post-migration.sql` применён: append-only lockdown на `task_events`, права `helm_app`
+- [x] `helm-core` поднят и подтверждён живым: `GET /healthz` с хоста → `200` (не только внутренний
+      Docker healthcheck — тот проходил и до фикса, см. находку ниже)
+- [ ] Caddy + TLS — предпосылки изменились с прошлой записи: `helm-core` теперь реально healthy,
+      `panel/dist` уже на сервере (пришёл вместе с деревом). Новый известный пробел —
+      `/var/lib/helm-guardian/public-status.json`, на который у Caddy bind-mount: Guardian на
+      сервере ещё не установлен (P5 live), файла нет — Docker создаст на его месте пустой каталог.
+      Решение о том, поднимать ли Caddy/TLS сейчас с этим пробелом, за владельцем.
+
+**Найдено и исправлено на этом bring-up:** `uvicorn --host 127.0.0.1` слушал loopback самого
+контейнера, а не хоста — Docker healthcheck (исполняется внутри namespace контейнера) показывал
+`healthy`, но `curl` с хоста получал connection refused. Тот же класс ошибки был и в `Caddyfile`
+(`reverse_proxy 127.0.0.1:PORT` предполагает loopback хоста) — без `network_mode: host` у `caddy`
+получил бы то же connection refused при первом запросе. Исправлено: `--host 0.0.0.0` в
+`control-plane/Dockerfile`, `network_mode: host` у `caddy` в `docker-compose.yml`.
 
 ## Известные отклонения от live-server-first (ADR-017)
 

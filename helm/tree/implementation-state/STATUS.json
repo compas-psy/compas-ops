@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-08-28T11:00:00Z",
-  "phase": "P2-in-progress",
-  "task": "P2: alembic upgrade head + post-migration.sql applied on live DB (17 tables incl. alembic_version, task_events append-only lockdown confirmed); next: verify /etc/helm/secrets contents for helm-core (helm_database_url, telegram_owner_id, hermes_service_hmac), then docker compose up -d helm-core",
+  "updated_at": "2026-08-28T11:30:00Z",
+  "phase": "P2-core-verified",
+  "task": "P2: helm-core live, healthy, externally reachable — GET /healthz от хоста возвращает 200 (не только внутренний Docker healthcheck, который проходил и до фикса). Найден и исправлен false-positive: uvicorn слушал 127.0.0.1 внутри контейнера (недостижим снаружи); заодно исправлен тот же класс бага в Caddyfile-ожиданиях (network_mode: host у caddy). Postgres + helm-core — единственные поднятые сервисы. Caddy/TLS, litellm (P3, нужен B2), Hermes (P4) — ещё не подняты, следующий шаг отдельно согласовать с владельцем.",
   "worker": "orchestrator",
   "model": "claude-sonnet-5",
   "status": "in_progress",
