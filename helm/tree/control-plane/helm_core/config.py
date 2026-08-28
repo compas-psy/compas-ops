@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -9,6 +10,37 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SECRETS_DIR = Path("/etc/helm/secrets")
+
+#: Поля Settings, для которых docker-compose.yml передаёт значение через
+#: Docker secret — переменной с суффиксом _FILE, содержащей путь к файлу,
+#: а не сам секрет напрямую (обычная практика Docker secrets, как
+#: POSTGRES_PASSWORD_FILE у официального образа Postgres).
+_FILE_BACKED_FIELDS = ("database_url", "owner_id")
+
+
+def _resolve_file_env_vars(prefix: str) -> None:
+    """Развернуть HELM_*_FILE в HELM_* до создания Settings.
+
+    pydantic-settings не реализует конвенцию `_FILE` сам — если этого не
+    сделать, `HELM_DATABASE_URL_FILE=/run/secrets/helm_database_url` тихо
+    игнорируется, а `database_url` откатывается на дефолт из кода, который
+    не подходит для контейнера. Раньше это не было замечено, потому что
+    Control Plane ни разу не запускался против реального docker-compose —
+    только против тестовой БД с URL, переданным напрямую через
+    HELM_TEST_DB/окружение теста.
+    """
+    for field in _FILE_BACKED_FIELDS:
+        file_var = f"{prefix}{field.upper()}_FILE"
+        plain_var = f"{prefix}{field.upper()}"
+        path = os.environ.get(file_var)
+        if not path or os.environ.get(plain_var):
+            continue
+        try:
+            os.environ[plain_var] = Path(path).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise RuntimeError(
+                f"{file_var}={path!r} указан, но файл не читается: {exc}"
+            ) from exc
 
 
 def read_secret(name: str, default: str | None = None) -> str:
@@ -48,4 +80,5 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
+    _resolve_file_env_vars("HELM_")
     return Settings()
