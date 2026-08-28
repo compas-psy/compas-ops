@@ -63,7 +63,11 @@ helm.cmpas.ru {
 	# ── Санитизированный статус Guardian (§10.5.9, §25.5) ──────────────────
 	# Отдаётся файлом, а не проксированием: он обязан работать, когда
 	# Control Plane лежит — именно ради этого случая он и существует.
-	handle /guardian/status.json {
+	# handle_path, не handle: handle не срезает совпавший префикс из URI,
+	# и file_server искал бы /srv/guardian/guardian/status.json вместо
+	# примонтированного /srv/guardian/status.json — 404 при исправной
+	# конфигурации. Найдено на реальном P2 bring-up.
+	handle_path /guardian/* {
 		root * /srv/guardian
 		header Cache-Control "no-store"
 		header Content-Type "application/json"
