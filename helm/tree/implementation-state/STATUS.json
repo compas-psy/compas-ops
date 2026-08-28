@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-08-28T15:10:00Z",
-  "phase": "P3-in-progress",
-  "task": "P3: обнаружено и обойдено — OpenRouter блокирует IP этого VPS (cloudflare 403 по датацентру, не по России). Обход: sing-box+mieru туннель в Финляндию (systemd sing-box@openrouter-proxy, локальный inbound 127.0.0.1:18080, только для трафика litellm→openrouter.ai). Матрица кандидатов §15.6 сверена с живым каталогом (kimi исправлен на k3). litellm.yaml написан. docker-compose.yml: litellm → network_mode host + HTTPS_PROXY, litellm_database_url поправлен на 127.0.0.1. Не сделано: сам контейнер litellm ещё не поднят, _FILE-конвенция секретов для образа litellm не проверена эмпирически, §15.3 п.10-12 (реальный completion/fallback/usage-logging) не пройдены — без этого P3 не закрыт (жёсткий гейт §30.4).",
+  "updated_at": "2026-08-28T15:35:00Z",
+  "phase": "P3-complete/P4-next",
+  "task": "P3 закрыт: гейт §30.4 пройден на живом сервере целиком — реальный completion (helm-standard: glm-5 → GMICloud, 'pong'), usage/cost logging доказан, искусственный слом primary → доказанный fallback (deepseek-v4-pro-0813 → Fireworks, тоже 'pong'), конфигурация возвращена в рабочее состояние. По пути: обойдена блокировка OpenRouter по IP этого VPS (sing-box+mieru в Финляндию, systemd sing-box@openrouter-proxy); образ litellm не поддерживает _FILE-конвенцию секретов — заменено entrypoint-обёрткой; секрет litellm_database_url содержал непроцентированные '/' в пароле — перегенерирован в hex. Осталось перед P4: virtual keys для профилей Hermes (намеренно не создавались — профилей ещё нет).",
   "worker": "orchestrator",
   "model": "claude-sonnet-5",
   "status": "in_progress",
