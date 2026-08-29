@@ -9,16 +9,18 @@
 # строки диагностики. Переписано без xargs на пустом вводе.
 set -uo pipefail
 
-HERMES_SRC=""
-CAND=$(python3 -c "import hermes_cli, os; print(os.path.dirname(os.path.dirname(hermes_cli.__file__)))" 2>/dev/null)
-if [ -n "$CAND" ]; then
-  HERMES_SRC="$CAND"
-else
-  GW_DIR=$(find / -maxdepth 8 -type d -name "gateway" -path "*hermes*" 2>/dev/null | head -1)
-  if [ -n "$GW_DIR" ]; then
-    HERMES_SRC=$(dirname "$GW_DIR")
-  fi
+# systemctl status hermes-gateway показывает реальный интерпретатор:
+# /home/helm/.hermes/hermes-agent/venv/bin/python -m hermes_cli.main —
+# hermes_cli живёт в venv, не в системном python3 (первый прогон этого
+# скрипта молча дал пустой import и упал на find-эвристике, зацепив
+# постороннюю папку "gateway" внутри hermes-agent/tests/).
+HERMES_PY=/home/helm/.hermes/hermes-agent/venv/bin/python3
+if [ ! -x "$HERMES_PY" ]; then
+  HERMES_PY=$(command -v python3)
 fi
+echo "HERMES_PY=$HERMES_PY"
+
+HERMES_SRC=$("$HERMES_PY" -c "import hermes_cli, os; print(os.path.dirname(os.path.dirname(hermes_cli.__file__)))" 2>/dev/null)
 echo "HERMES_SRC=${HERMES_SRC:-НЕ НАЙДЕНО}"
 
 if [ -z "$HERMES_SRC" ]; then
