@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-08-29T04:55:00Z",
+  "updated_at": "2026-08-29T05:52:00Z",
   "phase": "P4-in-progress",
-  "task": "P4: Telegram-гейтвей Hermes поднят как systemd-сервис (hermes-gateway.service), плагин helm-control (pre_gateway_dispatch + pre_llm_call) загружен и защищает вызов LLM Control-Plane-регистрацией по HMAC. A-DoD п.1 подтверждён живым сообщением в Telegram (@cmpas_board_bot): реальный ответ модели получен через полную цепочку Hermes → LiteLLM → OpenRouter. По пути исправлены: право на обход /etc/helm для группы helm-secrets, реальный механизм Telegram-прокси Hermes (TELEGRAM_PROXY, не generic HTTPS_PROXY), и падение litellm.APIError 'unexpected keyword argument reasoning_effort' (agent.reasoning_effort=none на стороне Hermes + litellm_settings.drop_params:true в litellm.yaml как защита на будущее). Осталось: профили business/engineering/health/reviewer, per-profile virtual keys вместо master key, явная проверка A-DoD п.2-3 на живом Telegram-пути (совпадение task_id + fail-closed при остановке Control Plane).",
+  "task": "P4: A-DoD п.1-2-3 (Milestone A) полностью подтверждены на живом Telegram-пути. Плагин helm-control изначально был подключён не к той системе хуков Hermes (~/.hermes/hooks — чисто уведомительная, не гейтит ничего) — переехал на настоящую ~/.hermes/plugins/ (PluginManager, plugin.yaml + register(ctx)), плюс два бага в payload (owner_id пуст на реальных Telegram-событиях, message_id это int не str) чинились по фактическому 422 от Control Plane, а не по догадке. Реальная задача создаётся в Control Plane (origin_channel=telegram) синхронно с реальным Telegram-сообщением ДО ответа модели (п.2); при остановленном helm-core модель не отвечает вообще (п.3, подтверждено остановкой контейнера на ~1 минуту и восстановлением). Осталось на P4: профили business/engineering/health/reviewer, per-profile virtual keys вместо master key.",
   "worker": "orchestrator",
   "model": "claude-sonnet-5",
   "status": "in_progress",
@@ -39,6 +39,12 @@
       "description": "Вход на сервер требует отдельного deploy-ключа (C:\\Users\\eliah\\.ssh\\helm_deploy_key), не дефолтных ключей пользователя (id_rsa/id_ed25519) — команда без -i получает чистый 'Permission denied (publickey)' без объяснения причины на клиенте. После сжатия контекста сессии агент один раз потерял эту деталь и потратил раунд на ложную гипотезу (испорченные права /home/helm/.ssh).",
       "mitigation": "любая ssh/scp-команда на этот сервер обязана содержать -i \"C:\\Users\\eliah\\.ssh\\helm_deploy_key\" явно; также: деплой-каталог /opt/helm на сервере — НЕ git-репозиторий (обновляется только точечным scp конкретных файлов, `git pull` там не работает)",
       "severity": "medium"
+    },
+    {
+      "id": "F-260829-02",
+      "description": "Hermes Agent имеет ДВЕ разные системы хуков с похожими именами и одинаковой директорией-конвенцией: ~/.hermes/hooks/<name>/ (HOOK.yaml+handler.py, gateway/hooks.py::HookRegistry) — чисто уведомительная, события через двоеточие (agent:start, session:end), никогда не блокирует; ~/.hermes/plugins/<name>/ (plugin.yaml+__init__.py с register(ctx), hermes_cli/plugins.py::PluginManager, opt-in через plugins.enabled) — единственная, которая реально дёргает pre_gateway_dispatch/pre_llm_call и умеет skip/rewrite/allow. Первая молча 'загружает' плагин под любым именем события без валидации — лог '[hooks] Loaded hook ...' ничего не гарантирует. Плюс: колбэки PluginManager обязаны быть синхронными (async def создаёт неawait-нутую корутину без единой ошибки в логе). Плюс: Python-логи gateway-процесса под systemd буферизуются без PYTHONUNBUFFERED=1 — журнал может часами не показывать реальные события.",
+      "mitigation": "любой новый gateway-хук с реальным gating (skip/rewrite/allow) — только через ~/.hermes/plugins/, plugin.yaml с hooks:, __init__.py с register(ctx): ctx.register_hook(name, callback), явный `hermes plugins enable <name>`, колбэк — обычный def, не async def; проверять реальное срабатывание не по стартовому логу загрузки, а по независимому side-effect (в этом случае — по логу самого helm-core, не по логу Hermes)",
+      "severity": "high"
     }
   ],
   "deferred": [],
@@ -48,8 +54,8 @@
       "note": "Поднят на живом сервере, реальные сертификаты Let's Encrypt для helm.cmpas.ru и git.cmpas.ru получены и работают"
     },
     {
-      "item": "A-DoD п.1 (Milestone A)",
-      "note": "Реальное сообщение в Telegram получило реальный ответ модели через полную цепочку Hermes → LiteLLM → OpenRouter"
+      "item": "A-DoD п.1-2-3 (Milestone A)",
+      "note": "п.1: реальное сообщение в Telegram получило реальный ответ модели через полную цепочку Hermes → LiteLLM → OpenRouter. п.2: задача создаётся в Control Plane (origin_channel=telegram) до ответа модели, task_id и время совпадают с реальным сообщением. п.3: при остановленном helm-core модель на реальное сообщение не отвечает вовсе — fail-closed подтверждён живой остановкой контейнера"
     }
   ],
   "found_and_fixed_this_bring_up": [
