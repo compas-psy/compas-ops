@@ -9,4 +9,4 @@
 # Запуск: sudo bash /tmp/check-hermes-unavailable.sh
 set -euo pipefail
 docker exec helm-postgres-1 psql -U helm -d helm -tAc \
-  "select event_type, payload_redacted from task_events where event_type = 'task.hermes_unavailable' order by id desc limit 3;"
+  "select timestamp, payload_redacted from task_events where event_type = 'task.hermes_unavailable' order by timestamp desc limit 5;"
