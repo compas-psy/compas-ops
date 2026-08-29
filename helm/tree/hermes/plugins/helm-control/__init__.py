@@ -137,6 +137,16 @@ def _on_pre_gateway_dispatch(event, gateway):
     try:
         result = _register_task(channel, external_message_id, owner_id, event.text)
     except Exception as exc:
+        # print(), не logger: gateway/run.py логирует только reason на INFO,
+        # который может быть отфильтрован уровнем логгера самого Hermes.
+        # print идёт в stdout напрямую и виден в journalctl независимо от
+        # уровня логирования — это то, чего не хватало для диагностики 422.
+        print(
+            f"[helm-control] register_task failed: channel={channel!r} "
+            f"external_message_id={external_message_id!r} owner_id={owner_id!r} "
+            f"error={exc}",
+            flush=True,
+        )
         try:
             asyncio.get_running_loop().create_task(
                 gateway.adapters[source.platform].send(
