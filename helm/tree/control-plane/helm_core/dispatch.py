@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Callable, Mapping
@@ -32,6 +33,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .models import OutboxMessage, utcnow
+
+logger = logging.getLogger(__name__)
 
 #: Задержки перед повторной попыткой по номеру попытки. После исчерпания
 #: списка сообщение переводится в FAILED: канал, который не принял
@@ -89,10 +92,17 @@ def deliver_pending(session: Session, senders: Mapping[str, Sender], *,
 
         try:
             sender(message.recipient, text)
-        except Exception:
-            # Текст ошибки не логируется здесь: в него провайдеры кладут
-            # эхо запроса, то есть само сообщение владельца. Причина
-            # видна вызывающему по счётчику попыток и статусу.
+        except Exception as exc:
+            # Полный текст исключения не логируется: провайдеры каналов
+            # (найдено на MAX 29.08.2026) кладут в тело ошибки эхо
+            # запроса — то есть сам текст сообщения владельца. Но тип
+            # исключения и HTTP-код, если он есть, ничего личного не
+            # несут и без них диагностика вслепую: только по счётчику
+            # попыток нельзя отличить «канал недоступен» от «формат
+            # запроса неверный», а разница решает, чинить код или ждать.
+            code = getattr(exc, "code", None)
+            logger.warning("dispatch: доставка не удалась, channel=%s тип=%s код=%s попытка=%d",
+                           message.channel, type(exc).__name__, code, message.attempts)
             if message.attempts >= MAX_ATTEMPTS:
                 message.status = "FAILED"
                 report.failed += 1

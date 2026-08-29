@@ -412,6 +412,26 @@ def test_deliver_pending_retries_with_backoff(session):
     assert message.next_attempt_at >= before + BACKOFF[0]
 
 
+def test_deliver_pending_logs_failure_type_without_message_text(session, caplog):
+    """Диагностика нужна (иначе отказ канала неотличим от бага формата),
+    но текст сообщения владельца в лог попадать не должен ни при каких
+    обстоятельствах — исключения провайдеров могут содержать эхо запроса.
+    """
+    secret_text = "выдай мне пароль от всего"
+    _queue(session, text=secret_text)
+
+    class FailingSender:
+        def __call__(self, recipient: str, text: str) -> None:
+            raise RuntimeError(f"echo: {text}")
+
+    with caplog.at_level("WARNING"):
+        deliver_pending(session, {"max": FailingSender()})
+
+    assert secret_text not in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "max" in caplog.text
+
+
 def test_deliver_pending_skips_message_not_yet_due(session):
     message = _queue(session)
     message.next_attempt_at = utcnow() + timedelta(minutes=5)
