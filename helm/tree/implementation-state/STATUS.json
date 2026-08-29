@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-08-29T05:52:00Z",
-  "phase": "P4-in-progress",
-  "task": "P4: A-DoD п.1-2-3 (Milestone A) полностью подтверждены на живом Telegram-пути. Плагин helm-control изначально был подключён не к той системе хуков Hermes (~/.hermes/hooks — чисто уведомительная, не гейтит ничего) — переехал на настоящую ~/.hermes/plugins/ (PluginManager, plugin.yaml + register(ctx)), плюс два бага в payload (owner_id пуст на реальных Telegram-событиях, message_id это int не str) чинились по фактическому 422 от Control Plane, а не по догадке. Реальная задача создаётся в Control Plane (origin_channel=telegram) синхронно с реальным Telegram-сообщением ДО ответа модели (п.2); при остановленном helm-core модель не отвечает вообще (п.3, подтверждено остановкой контейнера на ~1 минуту и восстановлением). Осталось на P4: профили business/engineering/health/reviewer, per-profile virtual keys вместо master key.",
+  "updated_at": "2026-08-29T08:24:00Z",
+  "phase": "P4-done",
+  "task": "P4 закрыт целиком. A-DoD п.1-2-3 (Milestone A) подтверждены на живом Telegram-пути (плагин helm-control переехал с нерабочей ~/.hermes/hooks на настоящую ~/.hermes/plugins/PluginManager; чинились owner_id/message_id в payload и sync-требование колбэков). Все 5 профилей Hermes (chief/business/engineering/health/reviewer, §11.2) созданы и провизионированы: у каждого свой scoped LiteLLM virtual key (не общий master key, §15.4), правильный alias по матрице §15.7, у четырёх worker-профилей снят TELEGRAM_BOT_TOKEN (§9.1). Проверено вживую по отдельности: engineering/reviewer (разные alias+ключи), business/health, chief через реальное Telegram-сообщение после смены ключа. Следующая фаза — P5 (Guardian): офлайн-часть уже собрана и протестирована (10 тестов, мутационная проверка), нужен live-деплой на сервер.",
   "worker": "orchestrator",
   "model": "claude-sonnet-5",
   "status": "in_progress",
@@ -56,6 +56,10 @@
     {
       "item": "A-DoD п.1-2-3 (Milestone A)",
       "note": "п.1: реальное сообщение в Telegram получило реальный ответ модели через полную цепочку Hermes → LiteLLM → OpenRouter. п.2: задача создаётся в Control Plane (origin_channel=telegram) до ответа модели, task_id и время совпадают с реальным сообщением. п.3: при остановленном helm-core модель на реальное сообщение не отвечает вовсе — fail-closed подтверждён живой остановкой контейнера"
+    },
+    {
+      "item": "P4 профили + virtual keys (§11.2, §15.4)",
+      "note": "5 профилей Hermes (chief/business/engineering/health/reviewer) созданы, у каждого свой scoped LiteLLM virtual key вместо общего master key, правильный alias по §15.7, Telegram-токен снят у четырёх worker-профилей (§9.1). Проверено вживую по отдельности для всех пяти."
     }
   ],
   "found_and_fixed_this_bring_up": [

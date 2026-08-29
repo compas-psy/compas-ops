@@ -4,7 +4,7 @@
 каждой значимой задачи — это заменяет необходимость владельцу писать
 «продолжай».
 
-## Текущая фаза: P4 — Hermes (Telegram-гейтвей и плагин `helm-control` подняты; **A-DoD п.1-2-3 полностью подтверждены на живом Telegram-пути**; остались профили `business`/`engineering`/`health`/`reviewer` и per-profile virtual keys)
+## Текущая фаза: **P4 закрыт.** Следующая — P5 (Guardian, live-деплой; офлайн-часть уже готова и протестирована)
 
 ## Пройдено офлайн (до переноса на сервер, session 0afed5d1)
 
@@ -319,17 +319,39 @@ Python `urlparse` разбирал строку терпимо (ищет ПОС�
    верифицирован — фикс подтверждён эмпирически (живой ответ в Telegram),
    не вычитыванием каждой ветки провайдер-плагина `custom`.
 
-**Осталось до конца P4:**
-- [ ] Профили `business`/`engineering`/`health`/`reviewer` (§11.2) —
-      `chief` (дефолтный профиль) настроен и подтверждён
-- [ ] Virtual keys LiteLLM на профиль вместо общего master key (§15.3 п.7, §15.4)
-- [ ] Мелкая находка не первой важности: собственное уведомление
-      `helm-control` в чат при недоступном Control Plane
-      (`asyncio.create_task`, fire-and-forget) не дошло до пользователя в
-      живом fail-closed тесте — само свойство fail-closed (сообщение не
-      доходит до модели) при этом подтверждено; стоит проверить, доживает
-      ли таск до выполнения, когда обработчик события уже возвращает
-      управление гейтвею.
+**P4 — профили и virtual keys (§11.2, §15.3 п.7, §15.4) — закрыто:**
+
+- [x] Профили `business`/`engineering`/`health`/`reviewer` созданы
+      (`hermes profile create <name> --clone-from default`,
+      `~/.hermes/profiles/<name>/`); `default` = `chief` (id профиля в
+      Hermes не переименовывался — жёстко зашитое имя инструмента,
+      см. отклонение выше).
+- [x] По одному virtual key на профиль в LiteLLM (`/key/generate`, scoped
+      к своему alias — не общий `litellm_master_key`):
+      `chief→helm-standard`, `business→helm-standard`,
+      `engineering→helm-code`, `health→helm-standard`,
+      `reviewer→helm-review` (alias mapping — §11.2/§15.7). Ключи — в
+      `/etc/helm/secrets/hermes_<profile>_litellm_key` (0640
+      root:helm-secrets). Скрипт: `scripts/provision_hermes_profiles.sh`.
+- [x] У всех четырёх worker-профилей `TELEGRAM_BOT_TOKEN`/
+      `TELEGRAM_ALLOWED_USERS` обнулены в `.env` (§9.1: только `chief`
+      имеет Telegram gateway; `--clone-from` копирует `.env` целиком,
+      включая токен, который спека worker-профилям не разрешает).
+- [x] Проверено вживую по отдельности: `engineering`/`reviewer` (разные
+      alias, разные ключи) — `hermes -p <profile> -z '...'` → `pong`;
+      `business`/`health` (тот же alias, что у chief) — аналогично;
+      `chief` — реальное Telegram-сообщение после переключения с
+      master key на свой scoped key («Тест 12» → нормальный ответ).
+
+**Мелкая находка не первой важности:** собственное уведомление
+`helm-control` в чат при недоступном Control Plane (`asyncio.create_task`,
+fire-and-forget) не дошло до пользователя в живом fail-closed тесте — само
+свойство fail-closed (сообщение не доходит до модели) при этом подтверждено;
+стоит проверить, доживает ли таск до выполнения, когда обработчик события
+уже возвращает управление гейтвею. Также: `hermes config set model.api_key`
+печатает в свой вывод частично замаскированное значение ключа (первые/
+последние 4 символа) — не полноценная утечка секрета (это UX самого CLI,
+не наш код), но стоит иметь в виду при будущих ротациях через этот путь.
 
 ## Известные отклонения от live-server-first (ADR-017)
 
