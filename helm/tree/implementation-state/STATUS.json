@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-08-29T09:45:00Z",
-  "phase": "milestone-a-almost-done",
-  "task": "P4, P5, A-DoD п.4-6 все закрыты. Осталось до Milestone A только п.9 (reboot VPS). A-DoD п.4-6: найден и исправлен реальный баг — propose() не проверял уровень и всегда создавал PENDING (execute_direct() для GREEN/YELLOW не вызывался НИ ОДНИМ HTTP-роутом, только тестами в обход propose()); теперь propose() сам исполняет GREEN/YELLOW через execute_approved(). Вторая находка тем же смоук-тестом: /internal/approvals/{id}/decision не ловил PreconditionFailed, отдавал голый 500 вместо 409. Оба фикса подтверждены и офлайн-тестами (57 pytest локально против настоящего Postgres16+pgvector в песочнице agent'а) и живым HTTP+HMAC на сервере (scripts/test_action_flow.sh): GREEN/YELLOW исполняются сразу, RED остаётся PENDING и блокирует чужую identity, повторный propose() не исполняет дважды. P5: Guardian живой, backup/restore через restic+rclone/Яндекс Диск подтверждён (A-DoD п.10). Владелец распорядился: backup двухэтапный, Forgejo repos войдут в P6.5.",
+  "updated_at": "2026-08-29T10:05:00Z",
+  "phase": "milestone-a-done",
+  "task": "Milestone A закрыт целиком — все 10 пунктов A-DoD подтверждены живьём на сервере, не только офлайн-тестами (включая реальный sudo reboot: все сервисы поднялись сами, живое Telegram-сообщение после ребута получило реальный ответ). По пути найдены и исправлены два реальных бага Control Plane (propose() не auto-исполнял GREEN/YELLOW; decision() отдавал 500 вместо 409 на PreconditionFailed). После закрытия A: реальный spend за день интенсивной отладки — $0.154/24 вызова, почти весь на helm-standard (GLM-5), ни одного вызова на дорогие модели, каскад fallback не раскручивается. По решению владельца: поставлен бюджетный потолок $5/день на все 5 LiteLLM virtual keys (max_budget/budget_duration, защита от runaway перед реальным использованием); роутинг chief→helm-standard (фиксированный per-profile, не per-message) оставлен как есть — динамическая эскалация дёшево/дорого отложена до Milestone B/C. Следующий шаг — Milestone B (Panel/Telegram OIDC/passkey, MAX fallback, n8n, Forgejo, GitHub CI).",
   "worker": "orchestrator",
   "model": "claude-sonnet-5",
   "status": "in_progress",
@@ -80,6 +80,10 @@
     {
       "item": "A-DoD п.4-6 GREEN/YELLOW/RED approval flow",
       "note": "Два реальных бага найдены живым смоук-тестом и исправлены: propose() не auto-исполнял GREEN/YELLOW (execute_direct нигде не вызывался из HTTP), decision() отдавал 500 вместо 409 на PreconditionFailed. Подтверждено и офлайн-тестами (57 pytest), и живым HTTP+HMAC на сервере."
+    },
+    {
+      "item": "Milestone A — A-DoD п.9 (reboot) и полное закрытие",
+      "note": "sudo reboot на живом сервере; все сервисы (4 контейнера, hermes-gateway, sing-box-прокси, оба systemd-таймера) поднялись сами без ручного вмешательства; живое Telegram-сообщение после ребута получило реальный ответ модели. Все 10 пунктов A-DoD закрыты живыми проверками."
     }
   ],
   "found_and_fixed_this_bring_up": [
