@@ -19,7 +19,15 @@ echo "== 0. Файлы-фикстуры на месте в raw/ =="
 sudo mkdir -p "$VAULT"
 sudo cp "$FIXTURES/sample.docx" "$VAULT/smoke-test.docx"
 sudo cp "$FIXTURES/sample_broken_font.pdf" "$VAULT/smoke-test-broken.pdf"
-sudo chown -R helm:helm /opt/helm-knowledge
+# НАЙДЕНО живым тестом: chown -R на ВЕСЬ /opt/helm-knowledge при каждом
+# прогоне переприсваивает владельца файлам, которые в ПРЕДЫДУЩИЙ раз
+# создал воркер (UID 10002) — обратно на хостового helm (UID 1000).
+# При повторном прогоне с тем же содержимым файла (тот же SHA256, тот
+# же детерминированный source_path) воркер натыкается на файл, который
+# ему больше не принадлежит, только доступен по группе (644 — group
+# только читает) — PermissionError на записи L1 SOURCE, не на чтении
+# raw/. chown только вот эти два ЮЖЕ файла, не всё дерево.
+sudo chown helm:helm "$VAULT/smoke-test.docx" "$VAULT/smoke-test-broken.pdf"
 
 echo "== 1. Регистрируем оба файла через helm-knowledge-worker (там смонтирован /opt/helm-knowledge) =="
 cd /opt/helm/compose
@@ -44,8 +52,15 @@ with Session(engine) as session:
         print(f"{name}: source_id={result.source.id} job_id={result.job.id if result.job else None} created={result.created}")
 PYEOF
 
-echo "== 2. Ждём воркер (опрос раз в 5с, даём 30с с запасом) =="
-sleep 30
+echo "== 2. Ждём воркер (первый запуск Docling может качать модели с huggingface.co — даём до 3 минут) =="
+for _ in $(seq 1 18); do
+  PENDING=$(sudo docker exec helm-postgres-1 psql -U helm -d helm -tAc \
+    "select count(*) from knowledge_ingest_jobs j join knowledge_sources s on s.id = j.source_id
+     where s.original_filename in ('smoke-test.docx','smoke-test-broken.pdf')
+       and j.status in ('PENDING','RUNNING')")
+  [ "$PENDING" = "0" ] && break
+  sleep 10
+done
 
 echo "== 3. Статус задач =="
 sudo docker exec helm-postgres-1 psql -U helm -d helm -c \

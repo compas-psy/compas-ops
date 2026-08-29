@@ -109,6 +109,31 @@ def test_process_job_success_creates_chunks_and_marks_done(session, tmp_path, mo
     assert [c.text for c in chunks] == ["Решение: используем Postgres."]
 
 
+def test_process_job_failure_after_successful_parse_marks_failed_not_crash(session, tmp_path, monkeypatch):
+    """НАЙДЕНО на живом смоук-тесте 29.08.2026: раньше try/except в
+    process_job() оборачивал только parse_file() — исключение на ЛЮБОМ
+    шаге после (запись L1 SOURCE на диск упала PermissionError на
+    реальном сервере) улетало необработанным в run_forever(), валило
+    процесс, транзакция откатывалась (job снова PENDING), Docker
+    поднимал контейнер заново — и тот падал на ТОЙ ЖЕ задаче: вечный
+    краш-луп вместо FAILED на одной плохой задаче."""
+    job = _make_pending_job(session, tmp_path, "doc.txt")
+    monkeypatch.setattr(worker_module, "parse_file",
+                        lambda path: _FakeParseResult(text="Решение: используем Postgres.",
+                                                      parser="markitdown", quality_ok=True))
+
+    def _raise_write(self, *a, **kw):
+        raise PermissionError("permission denied (тест)")
+
+    monkeypatch.setattr(Path, "write_text", _raise_write)
+
+    process_job(session, job)  # не должно поднять исключение наружу
+    session.flush()
+
+    assert job.status == KnowledgeIngestStatus.FAILED
+    assert "permission denied" in job.error
+
+
 def test_process_job_quality_fail_marks_needs_review_without_chunks(session, tmp_path, monkeypatch):
     job = _make_pending_job(session, tmp_path, "bad.pdf")
     monkeypatch.setattr(worker_module, "parse_file",

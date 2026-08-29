@@ -51,7 +51,19 @@ def claim_next_job(session: Session) -> KnowledgeIngestJob | None:
 
 
 def process_job(session: Session, job: KnowledgeIngestJob) -> None:
-    """Разобрать один job. Не коммитит — вызывающий код решает транзакцию."""
+    """Разобрать один job. Не коммитит — вызывающий код решает транзакцию.
+
+    НАЙДЕНО на живом смоук-тесте 29.08.2026: раньше try/except оборачивал
+    только parse_file() — исключение из ЛЮБОГО шага после него (запись
+    L1 SOURCE на диск, создание chunks) улетало необработанным из
+    process_job() прямо в run_forever(), валило весь процесс, транзакция
+    откатывалась (job возвращался в PENDING), Docker
+    (restart: unless-stopped) поднимал контейнер заново — и тот тут же
+    падал на ТОЙ ЖЕ задаче. Один плохой job уводил воркер в вечный
+    краш-луп вместо того, чтобы просто получить FAILED и уступить место
+    следующему. Один try/except на всё тело — единственный правильный
+    контракт для функции, которую вызывающий код обязан не крашить.
+    """
     source = session.get(KnowledgeSource, job.source_id)
     if source is None:
         job.status = KnowledgeIngestStatus.FAILED
@@ -60,42 +72,48 @@ def process_job(session: Session, job: KnowledgeIngestJob) -> None:
 
     try:
         result = parse_file(Path(source.raw_path))
+        source.parser = result.parser
+
+        if not result.quality_ok:
+            source.status = KnowledgeStatus.NEEDS_REVIEW
+            job.status = KnowledgeIngestStatus.NEEDS_REVIEW
+            return
+
+        # L1 SOURCE (§14.1): нормализованный Markdown — реальный файл, не
+        # только запись в БД, чтобы Vault оставался открываемым обычным
+        # Obsidian-совместимым клиентом (§14.2), не только через Postgres.
+        Path(source.source_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(source.source_path).write_text(result.text, encoding="utf-8")
+
+        for ordinal, chunk_text in enumerate(split_chunks(result.text)):
+            session.add(KnowledgeChunk(
+                source_id=source.id, ordinal=ordinal, text=chunk_text,
+                tsv=func.to_tsvector("russian", chunk_text),
+            ))
+        job.status = KnowledgeIngestStatus.DONE
     except Exception as exc:
         job.status = KnowledgeIngestStatus.FAILED
         job.error = f"{type(exc).__name__}: {exc}"
         logger.warning("knowledge ingest job %s failed: %s", job.id, job.error)
-        return
-
-    source.parser = result.parser
-
-    if not result.quality_ok:
-        source.status = KnowledgeStatus.NEEDS_REVIEW
-        job.status = KnowledgeIngestStatus.NEEDS_REVIEW
-        return
-
-    # L1 SOURCE (§14.1): нормализованный Markdown — реальный файл, не
-    # только запись в БД, чтобы Vault оставался открываемым обычным
-    # Obsidian-совместимым клиентом (§14.2), не только через Postgres.
-    Path(source.source_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(source.source_path).write_text(result.text, encoding="utf-8")
-
-    for ordinal, chunk_text in enumerate(split_chunks(result.text)):
-        session.add(KnowledgeChunk(
-            source_id=source.id, ordinal=ordinal, text=chunk_text,
-            tsv=func.to_tsvector("russian", chunk_text),
-        ))
-    job.status = KnowledgeIngestStatus.DONE
 
 
 def run_forever(session_factory) -> None:  # pragma: no cover — процесс-луп
+    """Внешний try/except — на случай сбоя ВНЕ process_job (например,
+    обрыв соединения с БД): один плохой цикл не должен ронять процесс и
+    уводить контейнер в краш-луп, симметрично тому же уроку, что и
+    process_job() выше — просто на уровень выше."""
     logger.info("knowledge ingest worker started")
     while True:
-        with session_factory() as session:
-            job = claim_next_job(session)
-            if job is None:
+        try:
+            with session_factory() as session:
+                job = claim_next_job(session)
+                if job is None:
+                    session.commit()
+                    time.sleep(POLL_INTERVAL_SECONDS)
+                    continue
+                process_job(session, job)
                 session.commit()
-                time.sleep(POLL_INTERVAL_SECONDS)
-                continue
-            process_job(session, job)
-            session.commit()
-            logger.info("knowledge ingest job %s -> %s", job.id, job.status)
+                logger.info("knowledge ingest job %s -> %s", job.id, job.status)
+        except Exception:
+            logger.exception("knowledge ingest worker: необработанная ошибка цикла")
+            time.sleep(POLL_INTERVAL_SECONDS)
