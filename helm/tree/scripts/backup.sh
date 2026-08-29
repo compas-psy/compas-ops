@@ -1,7 +1,15 @@
 #!/bin/bash
 # Ежедневный бэкап (§26.1): PostgreSQL (все БД), Control Plane config,
-# LiteLLM config, профили/state/kanban Hermes — в restic-репозиторий на
-# Яндекс Диске. Запускается от root (helm-backup.service).
+# LiteLLM config, профили/state/kanban Hermes, данные Forgejo (§18.7) и
+# выгрузка workflow n8n (§17.5) — в restic-репозиторий на Яндекс Диске.
+# Запускается от root (helm-backup.service).
+#
+# Оговорка про репозитории Forgejo: копируются на живом сервисе, без
+# остановки. Объекты git неизменяемы, поэтому риск ограничен одним
+# случаем — push ровно в момент копирования, когда ref уже обновлён, а
+# объект ещё не скопирован. Такой репозиторий восстанавливается из
+# GitHub-зеркала (§18.4) или из снапшота следующего дня; останавливать
+# Forgejo ради этого окна дороже, чем оно стоит.
 #
 # Не бэкапится: сам установленный Hermes (~/.hermes/hermes-agent —
 # переустанавливается по пинованной версии из install.sh), кэши
@@ -27,9 +35,32 @@ mkdir -p "$WORKDIR/hermes-sqlite"
 sqlite3 /home/helm/.hermes/kanban.db ".backup '$WORKDIR/hermes-sqlite/kanban.db'"
 sqlite3 /home/helm/.hermes/state.db ".backup '$WORKDIR/hermes-sqlite/state.db'"
 
+# 3. Выгрузка workflow n8n (§17.5, §23: «23:30 daily backup + n8n export»).
+#    Неудача выгрузки не должна валить бэкап: n8n может лежать, а
+#    Postgres и Hermes при этом обязаны быть сохранены.
+if ! python3 /opt/helm/scripts/n8n-workflows.py export; then
+  echo "ВНИМАНИЕ: выгрузка workflow n8n не удалась, бэкап продолжается"
+fi
+
+# 4. Каталог данных Forgejo (§18.7: repos + config + attachments/PR
+#    metadata). БД Forgejo отдельно не нужна — она в том же кластере
+#    Postgres и уже попала в pg_dumpall выше.
+#
+#    Путь резолвится через docker, а не пишется константой: расположение
+#    каталога volume зависит от data-root демона, и захардкоженный
+#    /var/lib/docker/... молча перестал бы существовать при его смене —
+#    restic пропустил бы несуществующий путь, а бэкап считался бы удачным.
+FORGEJO_DATA=$(docker volume inspect -f '{{.Mountpoint}}' helm_forgejo_data)
+if [ ! -d "$FORGEJO_DATA" ]; then
+  echo "каталог данных Forgejo не найден: $FORGEJO_DATA" >&2
+  exit 1
+fi
+
 restic backup \
   "$WORKDIR/postgres-dumpall.sql" \
   "$WORKDIR/hermes-sqlite" \
+  "$FORGEJO_DATA" \
+  /opt/helm/n8n/exports \
   /opt/helm/config \
   /opt/helm/guardian \
   "$SECRETS_DIR" \

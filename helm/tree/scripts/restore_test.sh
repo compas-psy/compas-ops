@@ -58,5 +58,42 @@ if [ "$PROFILE_COUNT" -lt 4 ]; then
   exit 1
 fi
 
+echo "== проверяю восстановленные репозитории Forgejo (§18.7) =="
+# Распоряжение владельца от 29.08.2026: restore-test обязан проверять
+# минимум один репозиторий Forgejo — refs, tags, HEAD.
+#
+# git запускается в одноразовом контейнере, а не на хосте: на хосте его
+# может не быть вовсе (деплой здесь scp-based, не git-based), и проверка
+# молча выродилась бы в «команда не найдена».
+BARE_REPO=$(find "$RESTORE_DIR" -type d -name '*.git' -path '*/repositories/*' | head -1)
+if [ -z "$BARE_REPO" ]; then
+  # До миграции (§18.3) репозиториев ещё нет — это не провал бэкапа.
+  # Проверка включится сама, как только они появятся.
+  echo "restore test: репозиториев Forgejo в снапшоте нет — миграция ещё не выполнена"
+else
+  REPO_NAME=$(basename "$BARE_REPO")
+  GIT="docker run --rm -v $BARE_REPO:/repo:ro -w /repo \
+       --entrypoint git codeberg.org/forgejo/forgejo:15.0.3"
+
+  if ! $GIT --git-dir=/repo rev-parse HEAD >/dev/null 2>&1; then
+    echo "FAIL: HEAD не разрешается в репозитории ${REPO_NAME}" >&2
+    exit 1
+  fi
+  REF_COUNT=$($GIT --git-dir=/repo show-ref | wc -l)
+  if [ "$REF_COUNT" -lt 1 ]; then
+    echo "FAIL: в репозитории ${REPO_NAME} не восстановлено ни одного ref" >&2
+    exit 1
+  fi
+  # fsck без --full: проверяет связность объектов, на которые указывают
+  # refs, — ровно тот случай порчи, который возможен при копировании
+  # живого репозитория (ref обновлён, объект не скопирован).
+  if ! $GIT --git-dir=/repo fsck --connectivity-only --no-progress >/dev/null 2>&1; then
+    echo "FAIL: git fsck нашёл повреждения в ${REPO_NAME}" >&2
+    exit 1
+  fi
+  TAG_COUNT=$($GIT --git-dir=/repo tag -l | wc -l)
+  echo "restore test: ${REPO_NAME} — refs: ${REF_COUNT}, tags: ${TAG_COUNT}, HEAD цел, fsck чист"
+fi
+
 touch /var/lib/helm-guardian/last-restore-test
 echo "RESTORE TEST PASSED"
