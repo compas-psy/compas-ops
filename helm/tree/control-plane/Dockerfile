@@ -11,7 +11,7 @@ COPY pyproject.toml ./
 RUN pip install --no-cache-dir \
       "fastapi==0.115.6" "uvicorn[standard]==0.34.0" "sqlalchemy==2.0.36" \
       "alembic==1.14.0" "psycopg[binary]==3.2.3" "pydantic==2.10.4" \
-      "pydantic-settings==2.7.0" "pyyaml==6.0.2"
+      "pydantic-settings==2.7.0" "pyyaml==6.0.2" "webauthn==3.0.0"
 
 COPY helm_core ./helm_core
 COPY migrations ./migrations
