@@ -21,7 +21,7 @@ SECRETS_DIR = Path("/run/secrets")
 #: Docker secret — переменной с суффиксом _FILE, содержащей путь к файлу,
 #: а не сам секрет напрямую (обычная практика Docker secrets, как
 #: POSTGRES_PASSWORD_FILE у официального образа Postgres).
-_FILE_BACKED_FIELDS = ("database_url", "owner_id")
+_FILE_BACKED_FIELDS = ("database_url", "owner_id", "max_owner_id")
 
 
 def _resolve_file_env_vars(prefix: str) -> None:
@@ -72,6 +72,14 @@ class Settings(BaseSettings):
 
     #: Telegram id владельца. Единственная identity, чьи решения принимаются.
     owner_id: str = ""
+
+    #: Числовой id владельца в MAX. Это ДРУГОЕ число, чем `owner_id`:
+    #: мессенджеры не разделяют пространство идентификаторов. Нужен, чтобы
+    #: вебхук MAX мог отличить владельца от постороннего (§10.1 п.2);
+    #: задачи при этом регистрируются под канонической identity `owner_id`,
+    #: иначе cross-channel дедуп (§10.4) не сработал бы никогда — хэш
+    #: намерения считается вместе с owner_id.
+    max_owner_id: str = ""
 
     #: RP ID для WebAuthn (§10.5.7). Привязан к домену намеренно: credential,
     #: выданный для helm.cmpas.ru, не сработает нигде больше.

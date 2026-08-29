@@ -18,7 +18,9 @@ COMPOSE = ROOT / "compose" / "docker-compose.yml"
 
 #: §4.6 «Не публиковать»: PostgreSQL, LiteLLM, Hermes API/dashboard,
 #: admin API Control Plane, редактор n8n, внутренняя БД SignalAI.
-NEVER_PUBLIC_PORTS = {5432, 4000, 5678, 3306, 6379}
+#: 8090 — локальный chief API Hermes (плагин max-bridge, §10.2 «127.0.0.1
+#: only»): по нему сообщение попадает прямо к модели минуя всё остальное.
+NEVER_PUBLIC_PORTS = {5432, 4000, 5678, 3306, 6379, 8090}
 
 #: Единственные публичные пути (§4.6).
 ALLOWED_PUBLIC_PREFIXES = (
@@ -138,6 +140,20 @@ def test_internal_api_is_not_routed():
     """/internal/* не должен встречаться в публичной конфигурации вовсе."""
     body = "\n".join(caddy_directives())
     assert "/internal" not in body, "internal API попал в публичный периметр"
+
+
+def test_never_public_ports_are_not_proxied():
+    """Ни один из закрытых портов не должен стоять целью reverse_proxy.
+
+    В первую очередь про 8090: локальный chief API Hermes (§10.2) отдаёт
+    сообщение прямо модели, минуя регистрацию задачи и дедуп, — публичный
+    маршрут на него обошёл бы весь Control Plane целиком.
+    """
+    for line in caddy_directives():
+        if not line.startswith("reverse_proxy"):
+            continue
+        for port in NEVER_PUBLIC_PORTS:
+            assert f":{port}" not in line, f"закрытый порт {port} проксируется: {line}"
 
 
 def test_only_named_webhooks_are_public():

@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from ..ingest import IngestService, NotOwner
 from ..models import ModelRun, Task, TaskEvent, TaskStatus, utcnow
+from ..outbox import enqueue
 from .deps import get_session
 from .security import require_service_auth
 
@@ -53,6 +54,31 @@ def inbound(message: InboundMessage, request: Request,
     session.commit()
     return {"task_id": str(result.task.id), "created": result.created,
             "dedup_reason": result.dedup_reason, "status": result.task.status}
+
+
+class OutboundMessage(BaseModel):
+    channel: str = Field(min_length=1, max_length=32)
+    recipient: str = Field(min_length=1, max_length=128)
+    #: Стабильный ключ повтора: при повторной доставке того же ответа
+    #: (ретрай плагина, рестарт Hermes) сообщение не задваивается.
+    reference: str = Field(min_length=1, max_length=128)
+    text: str = Field(min_length=1)
+
+
+@router.post("/outbound", status_code=status.HTTP_201_CREATED)
+def outbound(message: OutboundMessage,
+             session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Ответ chief-агента в очередь исходящих (§10.3).
+
+    Hermes не ходит в MAX API напрямую: очередь даёт ровно-однократность
+    (§30.2 «outbox no duplicate») и переживает недоступность канала, а
+    прямая отправка из плагина — нет.
+    """
+    result = enqueue(session, channel=message.channel, recipient=message.recipient,
+                     reference=message.reference,
+                     payload_reference={"text": message.text})
+    session.commit()
+    return {"outbox_id": str(result.message.id), "created": result.created}
 
 
 class TaskEventIn(BaseModel):

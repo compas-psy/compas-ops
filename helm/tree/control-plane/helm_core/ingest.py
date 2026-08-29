@@ -31,9 +31,16 @@ from sqlalchemy.orm import Session
 from .models import ChannelEvent, Task, TaskEvent, TaskStatus, utcnow
 
 #: Окно, внутри которого одинаковый текст из РАЗНЫХ каналов считается одним
-#: намерением. Значение выбрано под сценарий «написал в Telegram, не увидел
-#: ответа, продублировал в MAX»: это минуты, не часы.
-CROSS_CHANNEL_WINDOW = timedelta(minutes=10)
+#: намерением. Ровно 2 минуты — значение из ТЗ §10.4 («within 2 minutes»), не
+#: подобранное. НАЙДЕНО 29.08.2026: здесь стояло 10 минут, внесённых более
+#: ранним офлайн-проходом без ADR и без обоснования; расхождение со спекой
+#: молча расширяло окно схлопывания впятеро.
+CROSS_CHANNEL_WINDOW = timedelta(minutes=2)
+
+#: §10.4: «Явная команда /force создаёт новую task». Префикс снимается с
+#: текста до всего остального: он адресован Control Plane, а не модели, и
+#: не должен ни попадать в chief-агента, ни влиять на хэш намерения.
+FORCE_PREFIX = "/force"
 
 _WHITESPACE = re.compile(r"\s+")
 
@@ -46,6 +53,23 @@ def normalize_text(text: str) -> str:
     разные вещи, и последнее — вопрос, а не команда.
     """
     return _WHITESPACE.sub(" ", text.strip()).casefold()
+
+
+def strip_force_prefix(text: str) -> tuple[str, bool]:
+    """Снять ведущий /force. Возвращает (текст без префикса, был ли префикс).
+
+    Префикс распознаётся только в начале сообщения и только как отдельное
+    слово: «/forcemajeure» — обычный текст, «/force собери отчёт» — команда.
+    Голый «/force» без текста командой не считается: снимать дедупликацию
+    не с чего, а пустой текст дальше по цепочке всё равно не пройдёт.
+    """
+    stripped = text.strip()
+    if not stripped.casefold().startswith(FORCE_PREFIX):
+        return text, False
+    rest = stripped[len(FORCE_PREFIX):]
+    if not rest[:1].isspace() or not rest.strip():
+        return text, False
+    return rest.strip(), True
 
 
 def normalized_hash(owner_id: str, text: str) -> str:
@@ -63,6 +87,10 @@ class IngestResult:
     created: bool
     #: Почему задача не создана заново — для audit и для отладки дедупликации.
     dedup_reason: str | None = None
+    #: Текст после снятия управляющего префикса — именно он идёт в модель.
+    #: Хранится только в памяти вызывающего: Control Plane не держит
+    #: содержимое переписки владельца (§10.2).
+    text: str = ""
 
 
 class IngestService:
@@ -76,10 +104,14 @@ class IngestService:
         if owner_id != self.owner_id:
             raise NotOwner(f"отправитель {owner_id!r} не владелец")
 
+        text, forced = strip_force_prefix(text)
         now = utcnow()
         n_hash = normalized_hash(owner_id, text)
 
-        # (1) Та же доставка того же сообщения.
+        # (1) Та же доставка того же сообщения. Применяется ВСЕГДА, в том
+        #     числе к /force: §10.4 называет external_message_id «hard
+        #     idempotency key», и переотправка апдейта транспортом — это не
+        #     повторная просьба владельца, а тот же самый его запрос.
         same_delivery = self.session.scalar(
             select(ChannelEvent).where(
                 ChannelEvent.channel == channel,
@@ -88,10 +120,12 @@ class IngestService:
         )
         if same_delivery is not None and same_delivery.task_id is not None:
             return IngestResult(self.session.get(Task, same_delivery.task_id),
-                                created=False, dedup_reason="same_external_message_id")
+                                created=False, dedup_reason="same_external_message_id",
+                                text=text)
 
-        # (2) Тот же текст из другого канала в пределах окна.
-        cross = self.session.scalar(
+        # (2) Тот же текст из другого канала в пределах окна. /force это
+        #     правило и снимает — единственное, которое он снимает.
+        cross = None if forced else self.session.scalar(
             select(ChannelEvent)
             .where(
                 ChannelEvent.owner_id == owner_id,
@@ -109,7 +143,8 @@ class IngestService:
                 task_id=task.id, actor="control-plane", event_type="task.cross_channel_duplicate",
                 payload_redacted={"channel": channel, "original_channel": cross.channel},
             ))
-            return IngestResult(task, created=False, dedup_reason="cross_channel_duplicate")
+            return IngestResult(task, created=False,
+                                dedup_reason="cross_channel_duplicate", text=text)
 
         # (3) Всё остальное — новая задача, включая намеренный повтор
         #     владельца в том же канале.
@@ -126,9 +161,10 @@ class IngestService:
         self._record_event(channel, external_message_id, owner_id, n_hash, task.id)
         self.session.add(TaskEvent(
             task_id=task.id, actor="control-plane", event_type="task.registered",
-            payload_redacted={"channel": channel},
+            payload_redacted={"channel": channel, "forced": forced} if forced
+            else {"channel": channel},
         ))
-        return IngestResult(task, created=True)
+        return IngestResult(task, created=True, text=text)
 
     def _record_event(self, channel: str, external_message_id: str, owner_id: str,
                       n_hash: str, task_id: uuid.UUID) -> None:
