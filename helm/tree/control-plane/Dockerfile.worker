@@ -23,10 +23,6 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
 
 WORKDIR /opt/helm/knowledge-worker
 
-RUN pip install --no-cache-dir \
-      "sqlalchemy==2.0.36" "psycopg[binary]==3.2.3" "pydantic==2.10.4" \
-      "pydantic-settings==2.7.0"
-
 # CPU-only torch ЯВНО через официальный индекс PyTorch — без этой строки
 # `pip install docling` сам подтягивает обычный torch и берёт CUDA-сборку
 # (~1.2GB лишних nvidia_*-пакетов на сервере без GPU — проверено
@@ -38,6 +34,20 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 # и ненужные, извлечение аудио делает GigaAM, не MarkItDown).
 RUN pip install --no-cache-dir "markitdown[docx,pptx,xlsx,xls,pdf,outlook]==0.1.7"
 RUN pip install --no-cache-dir docling
+
+# sqlalchemy/psycopg — БЕЗ версии pydantic/pydantic-settings рядом с
+# ними: НАЙДЕНО живым тестом на сервере — если запинить pydantic ДО
+# docling (как было в первой версии этого файла), pip не станет её
+# апгрейдить (формально совместимо по диапазону версий), и docling
+# падает на первом же файле `PydanticSerializationError: Circular
+# reference detected` внутри собственного _get_pipeline() — это баг
+# несовместимости версий docling-core с pydantic 2.10.4, не файла.
+# pydantic/pydantic-settings обязаны прийти из зависимостей docling
+# (проверено в песочнице разработки: docling тянет pydantic 2.13.5 и
+# требует pydantic-settings>=2.14.0 — конфликт исчезает, когда версии
+# не фиксируются вручную заранее).
+RUN pip install --no-cache-dir "sqlalchemy==2.0.36" "psycopg[binary]==3.2.3"
+RUN pip install --no-cache-dir -U pydantic-settings
 
 COPY helm_core ./helm_core
 
