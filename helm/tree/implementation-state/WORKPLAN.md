@@ -4,7 +4,7 @@
 каждой значимой задачи — это заменяет необходимость владельцу писать
 «продолжай».
 
-## Текущая фаза: P4 — Hermes (установлен, подключён к LiteLLM, реальный сквозной ответ получен; профили/Telegram/helm-control плагин ещё не сделаны)
+## Текущая фаза: P4 — Hermes (Telegram-гейтвей и плагин `helm-control` подняты; A-DoD п.1 подтверждён живым сообщением в Telegram; остались профили `business`/`engineering`/`health`/`reviewer`, per-profile virtual keys, явная проверка fail-closed для A-DoD п.2-3)
 
 ## Пройдено офлайн (до переноса на сервер, session 0afed5d1)
 
@@ -199,17 +199,74 @@ Python `urlparse` разбирал строку терпимо (ищет ПОС�
 документация — везде `~/.hermes`), переносить её боролись бы с
 инструментом без реальной выгоды.
 
+**Telegram gateway + `helm-control` — поднято, A-DoD п.1 подтверждён:**
+
+- [x] `hermes gateway install --system` → `hermes-gateway.service` (systemd,
+      юзер `helm`), `TELEGRAM_BOT_TOKEN`/`TELEGRAM_ALLOWED_USERS` в `~/.hermes/.env`
+- [x] Плагин `helm-control` (`~/.hermes/hooks/helm-control/`): `HOOK.yaml` +
+      `handler.py`, события `pre_gateway_dispatch` (регистрация задачи в
+      Control Plane ДО LLM-вызова, fail-closed при недоступном CP — шлёт
+      `{"action":"skip"}` и явное сообщение в чат, не пропуская дальше) и
+      `pre_llm_call` (передаёт `HELM_TASK_ID` коротким контекстом). Загрузка
+      подтверждена логом гейтвея: `[hooks] Loaded hook 'helm-control' for
+      events: ['pre_gateway_dispatch', 'pre_llm_call']`
+- [x] **A-DoD п.1 подтверждён живым сообщением**: реальное сообщение
+      владельца в Telegram (`@cmpas_board_bot`, «Трест») получило реальный
+      ответ модели («Привет! 👋 Чем могу помочь?») через полную цепочку
+      Hermes → LiteLLM → OpenRouter
+- [ ] A-DoD п.2-3 — регистрация в CP доказана только прямым HMAC-подписанным
+      curl на `/internal/inbound` (`201`, реальный `task_id`); ещё не
+      проверено на живом Telegram-сообщении (совпадает ли `task_id` в CP с
+      реальным сообщением) и fail-closed ещё не продемонстрирован остановкой
+      CP посреди потока
+
+**Найдено и исправлено при подъёме Telegram/плагина:**
+
+6. Плагин падал при чтении `/etc/helm/secrets/hermes_service_hmac`: сам
+   файл был `0750 root:helm-secrets` (верно), но каталог `/etc/helm`
+   — `0700 root:root`, без `x` для группы `helm-secrets` обход каталога
+   невозможен (classic Unix: на каждый компонент пути нужен `x`).
+   Исправлено точечно: `chgrp helm-secrets /etc/helm && chmod g+x /etc/helm`
+   (только execute, без read — соседи `/etc/helm/ssh`, `/etc/helm/backup`
+   не раскрываются). Пользователь `helm` также добавлен в группу
+   `helm-secrets` (`usermod -aG`) — не ослабляет реальную границу доверия:
+   `helm` и так имеет passwordless sudo, то есть уже эквивалентен root.
+7. `HTTPS_PROXY`/`HTTP_PROXY` (обычные env-переменные) не влияют на
+   Telegram-соединение Hermes — платформенный адаптер использует
+   собственный сетевой слой, не generic httpx-детект прокси по env.
+   Настоящий механизм — `TELEGRAM_PROXY` (отдельная переменная,
+   `resolve_proxy_url("TELEGRAM_PROXY", ...)` в `gateway/platforms/base.py`)
+   + `HERMES_TELEGRAM_DISABLE_FALLBACK_IPS=1` (пропускает DNS-over-HTTPS
+   резолв запасных IP). Найдено чтением реального установленного исходника
+   на сервере, не документации.
+8. **Первое реальное сообщение упало**: `litellm.APIError: OpenrouterException
+   - AsyncCompletions.create() got an unexpected keyword argument
+   'reasoning_effort'`, одинаково на `helm-standard` и его fallback.
+   Причина verified в исходнике Hermes: `agent.reasoning_effort` по
+   умолчанию не задан (пустая строка) → `hermes_constants.py` резолвит
+   это в `medium` с предупреждением и отправляет `reasoning_effort` как
+   top-level kwarg через провайдер `custom`; закреплённая
+   `litellm:main-v1.55.8` не принимает этот параметр на пути OpenRouter
+   вообще ни при каком значении. Исправлено на стороне Hermes —
+   `hermes config set agent.reasoning_effort none` (`~/.hermes/config.yaml`
+   → `reasoning_effort: null`); живое сообщение сразу после этой правки
+   прошло без ошибки. Дополнительно в `config/models/litellm.yaml` включён
+   `litellm_settings.drop_params: true` (официальный механизм LiteLLM —
+   тихо отбрасывать параметры, которые не поддерживает провайдер) как
+   защита на будущее: другая модель/провайдер за `custom`-профилем Hermes
+   может прислать другой незнакомый LiteLLM параметр. Точный участок кода
+   Hermes, из-за которого `null` не долетает до запроса (в отличие от
+   пустой строки, которая долетала как `medium`), построчно не
+   верифицирован — фикс подтверждён эмпирически (живой ответ в Telegram),
+   не вычитыванием каждой ветки провайдер-плагина `custom`.
+
 **Осталось до конца P4:**
-- [ ] Профили `chief`/`business`/`engineering`/`health`/`reviewer` (§11.2)
+- [ ] Профили `business`/`engineering`/`health`/`reviewer` (§11.2) —
+      `chief` (дефолтный профиль) настроен и подтверждён
 - [ ] Virtual keys LiteLLM на профиль вместо общего master key (§15.3 п.7, §15.4)
-- [ ] Telegram gateway только у `chief` (§9.1) — нужен `TELEGRAM_BOT_TOKEN`
-      (есть в `/root/helm-bootstrap` на сервере) + `python-telegram-bot`
-      (сейчас не установлен, `hermes doctor` пометил как optional/missing)
-- [ ] Плагин `helm-control`: hook `pre_gateway_dispatch` (регистрация задачи
-      в Control Plane ДО первого LLM-вызова) + `pre_llm_call` (короткий
-      trusted-контекст `HELM_TASK_ID`/`DOMAIN_HINT`) — §9.3
-- [ ] A-DoD п.2-3: задача регистрируется в CP до LLM-вызова; при недоступном
-      CP Hermes не исполняет задачу (fail-closed)
+- [ ] A-DoD п.2-3: подтвердить совпадение `task_id` на живом Telegram-пути
+      (не только прямым curl) и продемонстрировать fail-closed остановкой
+      Control Plane посреди потока
 
 ## Известные отклонения от live-server-first (ADR-017)
 

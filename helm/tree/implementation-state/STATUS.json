@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-08-28T17:10:00Z",
+  "updated_at": "2026-08-29T04:55:00Z",
   "phase": "P4-in-progress",
-  "task": "P4: Hermes Agent v0.20.6 установлен на сервере (пользователь helm, ~/.hermes — конвенция инструмента, не /opt/helm/hermes). Известный баг зависания (issue #26489, custom provider + LiteLLM) на этой версии не воспроизвёлся. Настроен provider: custom → LiteLLM (http://127.0.0.1:4000/v1), реальный сквозной запрос прошёл: Hermes → LiteLLM → OpenRouter → 'pong' за ~6с. sing-box-прокси в Финляндию расширен на весь трафик локального порта 18080 (не только openrouter.ai) — второй сервис (hermes-agent.nousresearch.com, через Vercel) тоже блокировал IP этого VPS. Осталось: профили (chief/business/engineering/health/reviewer), per-profile virtual keys вместо master key, Telegram gateway у chief, плагин helm-control (pre_gateway_dispatch + pre_llm_call) для регистрации задачи в Control Plane до LLM-вызова.",
+  "task": "P4: Telegram-гейтвей Hermes поднят как systemd-сервис (hermes-gateway.service), плагин helm-control (pre_gateway_dispatch + pre_llm_call) загружен и защищает вызов LLM Control-Plane-регистрацией по HMAC. A-DoD п.1 подтверждён живым сообщением в Telegram (@cmpas_board_bot): реальный ответ модели получен через полную цепочку Hermes → LiteLLM → OpenRouter. По пути исправлены: право на обход /etc/helm для группы helm-secrets, реальный механизм Telegram-прокси Hermes (TELEGRAM_PROXY, не generic HTTPS_PROXY), и падение litellm.APIError 'unexpected keyword argument reasoning_effort' (agent.reasoning_effort=none на стороне Hermes + litellm_settings.drop_params:true в litellm.yaml как защита на будущее). Осталось: профили business/engineering/health/reviewer, per-profile virtual keys вместо master key, явная проверка A-DoD п.2-3 на живом Telegram-пути (совпадение task_id + fail-closed при остановке Control Plane).",
   "worker": "orchestrator",
   "model": "claude-sonnet-5",
   "status": "in_progress",
@@ -33,6 +33,12 @@
       "description": "Многословный аргумент в двойных кавычках bash, вложенный в одинарные кавычки PowerShell, теряет кавычки при передаче через ssh.exe на Windows — слова доходят до bash раздельно (word-split). То же самое с попыткой вложенных одинарных кавычек через POSIX-трюк '\"'\"'. Рабочая комбинация: внешние ДВОЙНЫЕ кавычки PowerShell + внутренние ОДИНАРНЫЕ кавычки bash для многословного текста + обратный апостроф перед $ для того, что должно достаться bash, а не PowerShell (`$(...) вместо $(...)). Октальный escape \\047 — рабочий способ получить одинарную кавычку внутри printf без конфликта с внешним уровнем.",
       "mitigation": "для многословных SQL/shell-фрагментов через ssh с Windows-клиента: внешние \"...\", внутри — 'одинарные' для текста, `$(...) для bash-подстановок, -f - вместо -c где возможно",
       "severity": "low"
+    },
+    {
+      "id": "F-260829-01",
+      "description": "Вход на сервер требует отдельного deploy-ключа (C:\\Users\\eliah\\.ssh\\helm_deploy_key), не дефолтных ключей пользователя (id_rsa/id_ed25519) — команда без -i получает чистый 'Permission denied (publickey)' без объяснения причины на клиенте. После сжатия контекста сессии агент один раз потерял эту деталь и потратил раунд на ложную гипотезу (испорченные права /home/helm/.ssh).",
+      "mitigation": "любая ssh/scp-команда на этот сервер обязана содержать -i \"C:\\Users\\eliah\\.ssh\\helm_deploy_key\" явно; также: деплой-каталог /opt/helm на сервере — НЕ git-репозиторий (обновляется только точечным scp конкретных файлов, `git pull` там не работает)",
+      "severity": "medium"
     }
   ],
   "deferred": [],
@@ -40,6 +46,10 @@
     {
       "item": "Caddy + TLS (P1)",
       "note": "Поднят на живом сервере, реальные сертификаты Let's Encrypt для helm.cmpas.ru и git.cmpas.ru получены и работают"
+    },
+    {
+      "item": "A-DoD п.1 (Milestone A)",
+      "note": "Реальное сообщение в Telegram получило реальный ответ модели через полную цепочку Hermes → LiteLLM → OpenRouter"
     }
   ],
   "found_and_fixed_this_bring_up": [
