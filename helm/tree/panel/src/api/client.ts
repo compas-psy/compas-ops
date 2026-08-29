@@ -40,6 +40,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (response.status === 401) {
+    // Нет валидной сессии — единственное осмысленное действие панели: начать
+    // вход заново. Показывать «сессия истекла» и ждать повторного нажатия
+    // некуда, раздела для этого в панели нет (бриф §3).
+    window.location.href = '/auth/telegram/start'
     throw new ApiError(401, 'Сессия истекла')
   }
   if (!response.ok) {

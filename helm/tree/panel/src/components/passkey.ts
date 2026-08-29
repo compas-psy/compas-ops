@@ -6,6 +6,8 @@
  * хранит его нигде. Никакого «запомнить на 30 дней» (§10.5.8).
  */
 
+import { fromBase64Url, toBase64Url } from '../api/codec'
+
 export class PasskeyCancelled extends Error {}
 
 interface ChallengeResponse {
@@ -14,19 +16,6 @@ interface ChallengeResponse {
   rp_id: string
   allow_credentials: { id: string; type: 'public-key' }[]
   timeout_ms: number
-}
-
-function fromBase64Url(value: string): Uint8Array {
-  const padded = value.replace(/-/g, '+').replace(/_/g, '/')
-  const binary = atob(padded.padEnd(padded.length + ((4 - (padded.length % 4)) % 4), '='))
-  return Uint8Array.from(binary, (char) => char.charCodeAt(0))
-}
-
-function toBase64Url(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer)
-  let binary = ''
-  for (const byte of bytes) binary += String.fromCharCode(byte)
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
 /**

@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-08-29T10:05:00Z",
-  "phase": "milestone-a-done",
-  "task": "Milestone A закрыт целиком — все 10 пунктов A-DoD подтверждены живьём на сервере, не только офлайн-тестами (включая реальный sudo reboot: все сервисы поднялись сами, живое Telegram-сообщение после ребута получило реальный ответ). По пути найдены и исправлены два реальных бага Control Plane (propose() не auto-исполнял GREEN/YELLOW; decision() отдавал 500 вместо 409 на PreconditionFailed). После закрытия A: реальный spend за день интенсивной отладки — $0.154/24 вызова, почти весь на helm-standard (GLM-5), ни одного вызова на дорогие модели, каскад fallback не раскручивается. По решению владельца: поставлен бюджетный потолок $5/день на все 5 LiteLLM virtual keys (max_budget/budget_duration, защита от runaway перед реальным использованием); роутинг chief→helm-standard (фиксированный per-profile, не per-message) оставлен как есть — динамическая эскалация дёшево/дорого отложена до Milestone B/C. Следующий шаг — Milestone B (Panel/Telegram OIDC/passkey, MAX fallback, n8n, Forgejo, GitHub CI).",
+  "updated_at": "2026-08-29T11:20:00Z",
+  "phase": "milestone-b-panel-auth-written-not-deployed",
+  "task": "Milestone A закрыт целиком (см. resolved_this_cycle). Milestone B начат с Panel auth backend (§10.5.6-§10.5.8.2): написано и протестировано офлайн (73 passed, 1 pre-existing failed), НЕ развёрнуто на сервере. По пути выяснилось, что предыдущее заявление 'backend авторизации не существует вообще' было неверным (find -iname *auth* не нашёл классы в общем tables.py) — таблицы, deps.py (session+step-up) и весь Panel API уже существовали и уже применены на живой БД; реально написаны только helm_core/api/auth.py (Telegram OIDC + первый enrollment + passkey-логин + серверная часть step-up), panel/src/Login.tsx, scripts/panel-passkey-recover.py (§10.5.8.2). Блокирует живой e2e-тест: секреты не размещены на сервере, образ не пересобран, владелец ещё не прошёл BotFather Web Login, discovery-документ Telegram не проверен вживую (агентская песочница не имеет туда сетевого доступа).",
   "worker": "orchestrator",
   "model": "claude-sonnet-5",
   "status": "in_progress",
@@ -16,6 +16,18 @@
   },
   "blockers": [],
   "open_findings": [
+    {
+      "id": "F-260829-05",
+      "description": "hmac.compare_digest роняет TypeError (не False) на не-ASCII символах в str-аргументе — если сравнивать значение, пришедшее прямо от клиента (query-param, cookie), без .encode(), атакующий получает 500 вместо честного 401 отправкой кириллицы/emoji в это поле.",
+      "mitigation": "перед compare_digest всегда .encode() оба аргумента, если хотя бы один взят из внешнего входа напрямую (не из собственного HMAC/base64-вывода)",
+      "severity": "medium"
+    },
+    {
+      "id": "F-260829-06",
+      "description": "psql -v name=value + :'name' в SQL, переданном через -c, НЕ подставляется вовсе — 'syntax error at or near \":\"'. Та же подстановка через stdin (echo \"...\" | psql -v ... , без -c) работает штатно. Не задокументировано интуитивно очевидным способом, проверено эмпирически.",
+      "mitigation": "параметризованные host-side psql-скрипты — SQL через stdin, не через -c, если используется :'var'-подстановка",
+      "severity": "low"
+    },
     {
       "id": "F-260827-01",
       "description": "scp/sftp-subsystem создаёт каталоги с world-writable правами despite umask 0022 в интерактивной сессии; причина не установлена",

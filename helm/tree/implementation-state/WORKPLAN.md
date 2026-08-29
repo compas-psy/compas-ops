@@ -4,7 +4,72 @@
 каждой значимой задачи — это заменяет необходимость владельцу писать
 «продолжай».
 
-## Текущая фаза: **Milestone A закрыт целиком (A-DoD п.1-10 подтверждены живьём).** Следующая — Milestone B.
+## Текущая фаза: **Milestone A закрыт целиком (A-DoD п.1-10 подтверждены живьём).** В работе — Milestone B: Panel auth backend.
+
+## Milestone B — Panel auth backend (§10.5.6-§10.5.8.2), написан и протестирован офлайн, НЕ развёрнут на сервере
+
+**Найдено при старте задачи**: заявление предыдущего шага «backend для
+авторизации не существует вообще» было неверным — проверка велась только
+`find -iname "*auth*"`, что не нашло классы, лежащие в общем `tables.py`.
+На деле уже существовали (написаны раньше, офлайн): все 4 таблицы
+(`panel_sessions`, `webauthn_credentials`, `panel_enrollment_tokens`,
+`panel_stepup_challenges`) — **и уже в исходной Alembic-миграции, уже
+применённой на живом сервере** (P2 bring-up "16+alembic_version=17 таблиц"
+уже включал их, миграция не нужна); `deps.py` (`require_panel_session`,
+`require_stepup` с привязкой challenge→action_hash по §10.5.8.1); весь
+Panel API на чтение/запись (`panel.py`); фронтенд step-up ассершна
+(`passkey.ts`, контракт `/auth/passkey/assert/options|verify`) — уже
+фиксировал форму ответа/запроса для меня, не наоборот.
+
+**Реально отсутствовало и написано сейчас**:
+- `helm_core/api/auth.py` — Telegram OIDC (Authorization Code + PKCE,
+  discovery по `oauth.telegram.org/.well-known/openid-configuration`,
+  RS256/JWKS через `PyJWT`), первый enrollment passkey (§10.5.7),
+  passkey-логин (когда credential уже есть), серверная часть step-up
+  (`/auth/passkey/assert/*`, под уже готовый контракт `passkey.ts`).
+  Переходное состояние между OIDC и passkey-церемонией — подписанная
+  HMAC-cookie на 10 минут (`helm_auth_pending`), не отдельная таблица.
+- `panel/src/Login.tsx` + `panel/src/api/codec.ts` (общий base64url-кодек,
+  вынесен из `passkey.ts`, теперь используется в обоих местах) — экран
+  «Войти через Telegram», экран ввода enrollment-токена + WebAuthn
+  registration ceremony, экран WebAuthn login ceremony. `client.ts`: 401 от
+  Panel API теперь сразу уводит на `/auth/telegram/start` (раздела
+  «сессия истекла, нажмите куда-то» в панели нет и не должно быть).
+- `scripts/panel-passkey-recover.py` (§10.5.8.2, деплоится как
+  `/opt/helm/scripts/panel-passkey-recover`) — root-only, revoke сессий +
+  выборочный revoke passkey + новый enrollment-токен (TTL 30 мин, печатается
+  РОВНО ОДИН РАЗ, никогда не логируется) + аудиторская запись (без токена)
+  в `/var/log/helm/panel-recovery.log`. Тот же скрипт используется и для
+  самого первого bootstrap-enrollment — отдельного механизма не нужно.
+  Работает через `docker exec helm-postgres-1 psql` (как остальные
+  host-side скрипты), не через отдельный psycopg на хосте; параметры — через
+  `-v`+`:'var'` (psql сам экранирует), НЕ через `-c` (проверено — `-c` не
+  делает `:'var'`-подстановку вовсе, только stdin/`-f`).
+- Новые секреты (docker-compose.yml + `helm-core`): `panel_auth_cookie_secret`
+  (генерируется сейчас, не зависит от внешних сервисов),
+  `telegram_oidc_client_id`/`telegram_oidc_client_secret` (из BotFather →
+  Bot Settings → Web Login, отдельно от токена бота).
+- Новые зависимости control-plane: `httpx==0.28.1` (теперь core, не только
+  dev), `pyjwt[crypto]==2.13.0`, `webauthn==3.0.0` — версии проверены через
+  PyPI JSON API, не угаданы; API `webauthn` 3.0.0 проверен установкой и
+  `inspect.signature` в песочнице, а не по памяти (мажорный бамп с 2.x).
+- `tests/test_panel_auth.py` — 16 тестов, полный набор `73 passed, 1 failed`
+  (падение — старый долг F-260829-04, не это изменение). Найдено и
+  исправлено по пути: `hmac.compare_digest` роняет `TypeError` (не 401) на
+  не-ASCII входе от клиента — `state`/подпись cookie теперь всегда `.encode()`
+  перед сравнением.
+
+**Не сделано / блокирует живой e2e-тест**:
+- Секреты не размещены на сервере, control-plane образ не пересобран,
+  `docker-compose.yml`/`panel/dist` не доставлены на сервер.
+- Владелец ещё не прошёл BotFather → Bot Settings → Web Login (добавить
+  `https://helm.cmpas.ru`, убрать, переоткрыть панель — до появления пункта
+  «OpenID Connect Login» — и получить Client ID/Client Secret).
+- Discovery-документ Telegram (`oauth.telegram.org`) не проверен вживую:
+  агентская песочница не имеет туда сетевого доступа (egress-прокси отдаёт
+  403 на `oauth.telegram.org`/`core.telegram.org` даже для обычного curl) —
+  код читает discovery динамически, а не хардкодит URL, но первая живая
+  проверка будет только с реального сервера.
 
 ## A-DoD п.9 — reboot VPS (закрыто)
 
