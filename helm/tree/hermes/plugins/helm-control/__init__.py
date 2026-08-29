@@ -54,6 +54,7 @@ import hashlib
 import hmac
 import json
 import time
+import urllib.error
 import urllib.request
 
 CONTROL_PLANE_URL = "http://127.0.0.1:8080/internal/inbound"
@@ -96,8 +97,16 @@ def _register_task(channel: str, external_message_id: str, owner_id: str, text: 
             "X-Helm-Signature": sig,
         },
     )
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
-        return json.loads(resp.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        # Тело ответа несёт причину отказа (422 — какое поле не прошло
+        # валидацию, 403 — не тот owner_id) — без него exc сам по себе
+        # говорит только код статуса, диагностика вслепую.
+        raise RuntimeError(
+            f"HTTP {exc.code} от Control Plane: {exc.read().decode(errors='replace')}"
+        ) from exc
 
 
 def handle(event=None, gateway=None, session_store=None, **kwargs):
@@ -113,9 +122,16 @@ def _on_pre_gateway_dispatch(event, gateway):
 
     source = event.source
     channel = source.platform.value if source and source.platform else "system"
+    # НАЙДЕНО на живом тесте: Control Plane отвечал 422 на каждое реальное
+    # Telegram-сообщение. Причина — event.message_id у Telegram это int
+    # (родной тип платформы), а InboundMessage.external_message_id в
+    # Control Plane — str; Pydantic в этом режиме не приводит int к str
+    # молча. str() ниже — не форматирование ради вкуса, а обязательное
+    # приведение типа перед отправкой.
     owner_id = str(event.user_id) if event.user_id is not None else ""
-    external_message_id = event.message_id or (
-        channel + ":" + owner_id + ":" + str(time.time())
+    external_message_id = (
+        str(event.message_id) if event.message_id
+        else channel + ":" + owner_id + ":" + str(time.time())
     )
 
     try:
