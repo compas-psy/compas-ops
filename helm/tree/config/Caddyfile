@@ -91,8 +91,14 @@ helm.cmpas.ru {
 		header Content-Security-Policy "default-src 'self'; script-src 'self' https://telegram.org; frame-src https://oauth.telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://telegram.org; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
 		# same-origin (из security_headers) рвёт window.opener между
 		# всплывающим окном oauth.telegram.org и этой страницей — виджет не
-		# может сообщить родителю о завершении входа.
-		header Cross-Origin-Opener-Policy "unsafe-none"
+		# может сообщить родителю о завершении входа. Блочная форма (не
+		# однострочная `header Field "value"`) обязательна: security_headers
+		# компилируется с "deferred":true (применяется последним из всех),
+		# однострочная форма — нет, поэтому её тут же перезаписывало обратно
+		# на same-origin. Проверено на живом сервере через autosave.json.
+		header {
+			Cross-Origin-Opener-Policy "unsafe-none"
+		}
 		rewrite * /index.html
 		file_server
 	}
