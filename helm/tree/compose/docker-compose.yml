@@ -166,6 +166,42 @@ services:
       resources:
         limits: {memory: 768m}
 
+  helm-knowledge-worker:
+    # P8.5.2: отдельный контейнер от helm-core — см.
+    # helm_core/knowledge/parsers.py docstring. Docling тянет ~5.7GB
+    # (torch, OCR-модели) и при разборе скана/сложного PDF может дать
+    # заметный скачок RAM; тяжёлый разбор не должен иметь возможность
+    # повлиять на процесс, отвечающий на живые вебхуки MAX/Telegram.
+    build:
+      context: ../control-plane
+      dockerfile: Dockerfile.worker
+    image: helm-knowledge-worker:0.1.0
+    <<: *restart
+    logging: *logging
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      HELM_DATABASE_URL_FILE: /run/secrets/helm_database_url
+      TZ: Europe/Moscow
+    secrets: [helm_database_url]
+    group_add: ["10001"]
+    volumes:
+      # Тот же абсолютный путь внутри и снаружи контейнера: raw_path,
+      # записанный register_file_for_ingest() на хосте (будущий P8.5.7),
+      # обязан резолвиться без трансляции путей.
+      - /opt/helm-knowledge:/opt/helm-knowledge
+    # Нет ни ports, ни healthcheck HTTP — это не веб-сервис, опрашивает
+    # knowledge_ingest_jobs циклом (worker.py::run_forever), наружу
+    # ничего не слушает.
+    deploy:
+      resources:
+        # Первая прикидка, не измеренный на живом сервере предел —
+        # уточняется по факту (docs/KNOWLEDGE_MODELS.md, живой прогон
+        # реального Docling-разбора на VPS, недоступно из песочницы
+        # разработки: HuggingFace для загрузки моделей заблокирован
+        # политикой egress-прокси этой среды).
+        limits: {memory: 3g}
+
   n8n:
     image: n8nio/n8n:2.36.8
     <<: *restart

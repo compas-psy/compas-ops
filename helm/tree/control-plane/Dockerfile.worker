@@ -1,0 +1,46 @@
+# HELM Knowledge worker (P8.5.2) — отдельный образ и контейнер от Control
+# Plane API. Причина: `helm_core/knowledge/parsers.py` docstring — Docling
+# тянет ~5.7GB (torch, OCR-модели) и при разборе скана/сложного PDF может
+# дать заметный скачок RAM; тяжёлый разбор не должен делить процесс с
+# живыми вебхуками MAX/Telegram (лимит helm-core — 768MB).
+#
+# Проверено эмпирически в песочнице разработки (не гипотеза): worker.py/
+# worker_main.py/ingest.py/parsers.py реально импортируются без fastapi,
+# uvicorn, alembic, webauthn, pyyaml — эти пакеты воркеру не нужны вовсе,
+# он не FastAPI-приложение.
+FROM python:3.12.8-slim-bookworm AS base
+
+RUN useradd --system --create-home --uid 10002 helm-worker
+
+# opencv-python (транзитивная зависимость Docling/RapidOCR) на Debian
+# slim требует эти системные библиотеки — без них падает на первом же
+# `import cv2`, а не молча. ffmpeg — явное требование спеки (§14.7) под
+# будущий аудио-пайплайн (P8.5.3, ещё не реализован) — ставится сразу,
+# чтобы не пересобирать образ.
+RUN apt-get update && apt-get install --no-install-recommends -y \
+      ffmpeg libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/helm/knowledge-worker
+
+RUN pip install --no-cache-dir \
+      "sqlalchemy==2.0.36" "psycopg[binary]==3.2.3" "pydantic==2.10.4" \
+      "pydantic-settings==2.7.0"
+
+# CPU-only torch ЯВНО через официальный индекс PyTorch — без этой строки
+# `pip install docling` сам подтягивает обычный torch и берёт CUDA-сборку
+# (~1.2GB лишних nvidia_*-пакетов на сервере без GPU — проверено
+# эмпирически в песочнице разработки установкой без этого флага).
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+# MarkItDown — только нужные extras (§14.6: "only required extras"), не
+# [all] (тянет Azure cloud SDK и youtube/audio-transcription — облачные
+# и ненужные, извлечение аудио делает GigaAM, не MarkItDown).
+RUN pip install --no-cache-dir "markitdown[docx,pptx,xlsx,xls,pdf,outlook]==0.1.7"
+RUN pip install --no-cache-dir docling
+
+COPY helm_core ./helm_core
+
+USER helm-worker
+
+CMD ["python3", "-m", "helm_core.knowledge.worker_main"]

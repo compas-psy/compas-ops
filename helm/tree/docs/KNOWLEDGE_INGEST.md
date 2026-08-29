@@ -4,56 +4,99 @@
 реализовано сегодня (29.08.2026) и что явно отложено — не пересказ
 спеки как факта.
 
-## Что есть сегодня: `ingest_text()`
+## Путь 1: `ingest_text()` — готовый текст, без файла
 
 `helm_core/knowledge/ingest.py::ingest_text(session, *, domain, text,
-original_filename=None, sensitivity="internal", trust="extracted")`.
+original_filename=None, sensitivity="internal", trust="extracted",
+vault_root=...)`.
 
-Единственный вход — прямой вызов из Python (нет HTTP-эндпоинта, нет
-транспорта из Telegram/MAX). Делает три вещи:
+Прямой вызов из Python (нет HTTP-эндпоинта, нет транспорта). SHA256-дедуп
++ разбиение на чанки по абзацам + `to_tsvector('russian', ...)` на
+стороне БД. `raw_path`/`source_path` — **ожидаемое** расположение файла,
+ничего физически на диск не пишет. Использовался для смоук-тестов Probe
+(P8.5.1/4/5) до появления реального парсинга файлов.
 
-1. **SHA256-дедуп** (§14.5: «повторный файл с тем же SHA256 не
-   обрабатывается заново, связывается с существующим source»): хэш от
-   `text.encode("utf-8")`, при совпадении с уже существующим
-   `knowledge_sources.sha256` возвращает существующий source, не создаёт
-   дубль.
-2. **Разбиение на чанки по абзацам** (`\n\s*\n+`) — не структурные чанки
-   Docling (таблицы/страницы), но детерминированно и достаточно для FTS.
-3. **`to_tsvector('russian', chunk_text)` на стороне БД** для каждого
-   чанка — конфигурация словаря живёт в Postgres, не дублируется в коде
-   приложения.
+## Путь 2: `register_file_for_ingest()` + `worker.py` — реальный файл (P8.5.2)
 
-`raw_path`/`source_path` в `knowledge_sources` записываются как
-**ожидаемое** расположение файла (`/opt/helm-knowledge/raw/<domain>/
-<sha256>.txt`, `.../sources/<sha256>.md`) — это НЕ файл, реально
-записанный на диск. Запись RAW на диск — часть P8.5.2, ещё не сделана.
-
-## Чего нет: parser router (§14.6)
-
-Спекой описан двухступенчатый бесплатный роутер:
+Асинхронный pipeline для файла, уже лежащего на диске:
 
 ```text
-Fast path  — MarkItDown: TXT/MD/HTML, DOCX, PPTX, XLSX/XLS, CSV, EPUB,
-             MSG, ZIP, простые текстовые PDF
-Quality path — Docling: сложные/табличные PDF, сканы, изображения,
-             документы где fast path теряет структуру
+register_file_for_ingest()          worker.py (отдельный процесс)
+  SHA256, дедуп                       claim_next_job() — FOR UPDATE SKIP
+  создать knowledge_sources           LOCKED, PENDING → RUNNING
+  создать knowledge_ingest_jobs       process_job():
+  (status=PENDING)                      parse_file() — MarkItDown/Docling
+  → немедленный возврат                 chunk + index (§14.9)
+                                         записать L1 SOURCE .md на диск
+                                         DONE | NEEDS_REVIEW | FAILED
 ```
 
-Ни MarkItDown, ни Docling не установлены и не вызываются нигде в коде.
-`ingest_text()` принимает уже готовый текст — извлечение текста из
-реального файла (PDF, DOCX, книга по психологии и т.п.) сегодня не
-реализовано вообще. Это P8.5.2: установка пакетов + прогон fixture-
-матрицы документов на живом сервере (офлайн не делается — пакеты и их
-поведение на реальных файлах нужно видеть вживую, не предполагать).
+Реализовано и покрыто тестами (`tests/test_knowledge_worker.py`, 8
+тестов): дедуп по SHA256 (файл с тем же содержимым не создаёт новый
+job), захват задачи с блокировкой строки, все три исхода обработки
+(успех → chunks + `status=DONE`; провал quality gate → `NEEDS_REVIEW`
+без chunks, §14.6 «не создавать уверенные knowledge facts»; исключение
+парсера → `FAILED` с текстом ошибки в `job.error`).
 
-Parser quality gate (§14.6: непустой текст, доля распознанных
-страниц, abnormal replacement characters, длина относительно исходника
-→ если ниже порога, эскалация на Docling → если Docling тоже FAIL,
-`status=NEEDS_REVIEW`) — тоже не реализован; `KnowledgeStatus` уже
-содержит значение `NEEDS_REVIEW` в модели (добавлено заранее под этот
-контракт), но ничто пока в него не переводит записи.
+### Parser router (§14.6) — `helm_core/knowledge/parsers.py`
 
-## Чего нет: attachments / spool (§14.5.1)
+```text
+Fast path (MarkItDown) → quality gate → OK? вернуть
+                                       → провал? Quality path (Docling)
+```
+
+**Реализовано и проверено на реальных файлах** (не мок):
+`tests/test_knowledge_parsers.py`, 11 тестов против настоящих
+DOCX/PPTX/XLSX/CSV/TXT/PDF-фикстур (`tests/fixtures/knowledge/`), через
+реально установленный MarkItDown (`markitdown[docx,pptx,xlsx,xls,pdf,
+outlook]`, без `[all]` — §14.6 «only required extras», не тянет Azure
+cloud SDK).
+
+Quality gate (calibrated эмпирически, не «на глаз»):
+- непустой текст (< 20 символов — провал)
+- доля `�` (символ замены Unicode) выше 5% — провал
+- **доля доминирующей буквы выше 25%** — найдено живым тестом: PDF,
+  нарисованный шрифтом без нужных глифов (например Helvetica без
+  кириллицы), даёт не `�`, а валидный, но полностью испорченный
+  текст (реальный случай: кириллица схлопнулась в повторяющееся
+  `'nnnnnnn'`). Замер на реальных документах дал 0.105–0.154, на
+  сломанном — 0.346 — порог 0.25 лежит чисто между ними.
+
+Docling-путь (эскалация) в коде есть и по API-сигнатуре корректен
+(`DocumentConverter().convert(path).document.export_to_markdown()`,
+подтверждено чтением реальной установленной библиотеки), но **не
+проверен живым запуском**: Docling требует загрузки моделей layout/OCR
+с huggingface.co при первом использовании — недоступно из песочницы
+разработки (egress-прокси блокирует не-PyPI хосты организационной
+политикой). Первый живой прогон на сервере (с настоящим интернетом)
+покажет, работает ли эскалация так, как ожидается — это тестами не
+покрыто, честно, не выдаётся за проверенное.
+
+### Контейнеризация — `Dockerfile.worker`, `docker-compose.yml::helm-knowledge-worker`
+
+Отдельный от `helm-core` контейнер (архитектурное решение владельца
+29.08.2026): Docling тянет **~5.7GB** зависимостей (torch, OCR-модели —
+измерено установкой в реальный venv), и при разборе скана/сложного PDF
+может дать заметный скачок RAM. Тяжёлый разбор не должен иметь
+возможность повлиять на процесс, отвечающий на живые вебхуки
+MAX/Telegram (лимит `helm-core` — 768MB).
+
+Найдено и учтено при сборке образа воркера:
+- `torch` ставится ЯВНО через `--index-url https://download.pytorch.org/
+  whl/cpu` — иначе `pip install docling` сам тянет обычный torch и берёт
+  CUDA-сборку (лишние ~1.2GB `nvidia_*`-пакетов на сервере без GPU,
+  подтверждено установкой без этого флага).
+- `opencv-python` (транзитивная зависимость Docling/RapidOCR) на Debian
+  slim требует системные библиотеки (`libgl1`, `libglib2.0-0`, `libsm6`,
+  `libxext6`, `libxrender1`) — без них падает на первом же `import cv2`.
+
+**Не проверено вживую**: сама сборка образа (`docker build`) — Docker
+Hub недоступен из песочницы разработки (та же egress-политика). Первый
+живой `docker compose build helm-knowledge-worker` на сервере — первая
+реальная проверка, что apt-пакетов достаточно и торч ставится нужной
+сборкой.
+
+## Чего нет: attachments / spool (§14.5.1) — P8.5.7
 
 Контракт спеки для входящих вложений Telegram/MAX:
 
@@ -62,41 +105,36 @@ Telegram file message
 → chief gateway/plugin получает bytes/path через Bot API
 → запись в защищённый ingest spool (/opt/helm-state/knowledge-spool/,
   owner-only, bounded size, atomic rename)
-→ SHA256
-→ atomic move в /opt/helm-knowledge/raw/<domain>/
-→ создание knowledge_ingest_job
-→ немедленное подтверждение владельцу
-→ асинхронный parse
+→ SHA256 → atomic move в /opt/helm-knowledge/raw/<domain>/
+→ register_file_for_ingest() → немедленное подтверждение владельцу
+→ асинхронный parse (уже реализовано, см. выше)
 ```
 
 Каталог spool создан (`scripts/knowledge-bootstrap.sh`), но ничего в
 него не пишет — ни `helm-control` (Telegram), ни `/hooks/max` (MAX)
-сегодня не обрабатывают вложения, только текст. `knowledge_ingest_jobs`
-— таблица есть (P8.5.1), но ни одна строка в неё не пишется никаким
-кодом. Это P8.5.7, явно зависит от готового parser router (P8.5.2) —
-раньше делать нечего.
+сегодня не обрабатывают вложения, только текст. Это следующий шаг
+(P8.5.7): доставка файла от Telegram/MAX до `register_file_for_ingest()`
+— сама функция и всё, что после неё, уже готовы и протестированы.
 
-## Чего нет: аудио — GigaAM (§14.7)
+## Чего нет: аудио — GigaAM (§14.7) — P8.5.3
 
 ```text
 audio/video → ffmpeg normalize → VAD/segmentation → GigaAM
 → transcript с таймстампами → transcript.md → chunks/index
 ```
 
-Не установлено, не вызывается. Требует выбора конкретной версии GigaAM
-(v3/e2e line, актуальной на дату установки) живым бенчмарком на
-реальном русском аудио, на живом сервере — спека прямо запрещает
-хардкодить версию до этого. См. `docs/KNOWLEDGE_MODELS.md`.
-
-Контракт при появлении: `concurrency=1`, модель выгружается из RAM
-после использования (не резидентна на 12GB VPS), Guardian не запускает
-ASR при CRITICAL memory pressure, транскрипт получает `trust=extracted`
-(не `owner_verified` автоматически).
+`ffmpeg` уже ставится в `Dockerfile.worker` (явное требование спеки,
+поставлено заранее, чтобы не пересобирать образ дважды), но GigaAM не
+установлен и не вызывается. Требует выбора конкретной версии (v3/e2e
+line, актуальной на дату установки) живым бенчмарком на реальном
+русском аудио — спека прямо запрещает хардкодить версию до этого. См.
+`docs/KNOWLEDGE_MODELS.md`.
 
 ## Тесты
 
-`tests/test_knowledge_probe.py::test_ingest_same_text_does_not_duplicate`,
-`test_ingest_splits_paragraphs_into_chunks` — покрывают ровно то, что
-реализовано (дедуп, чанкинг). Fixture-матрица §30.8.5 (DOCX/PPTX/XLSX/
-сложный PDF/скан/аудио/дубликат/prompt-injection документ) недостижима
-без парсеров и ASR — появится вместе с P8.5.2/8.5.3, не раньше.
+`tests/test_knowledge_parsers.py` (11), `tests/test_knowledge_worker.py`
+(8), `tests/test_knowledge_probe.py` (13, включая `ingest_text()`) —
+157/157 зелёных вместе с остальным control-plane. Fixture-матрица
+§30.8.5 полностью (сложный/табличный PDF, скан, аудио,
+prompt-injection документ) недостижима без живой проверки Docling/
+GigaAM на сервере — появится вместе с этим прогоном, не раньше.

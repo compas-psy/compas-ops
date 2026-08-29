@@ -15,12 +15,12 @@ pack, когда локального ответа объективно недо
 |---|---|
 | P8.5.1 Storage (схема БД, каталоги, backup) | ✅ задеплоено, подтверждено живьём |
 | P8.5.4/5 частично — лексический Probe (Z0/Z1/NEEDS_REASONING), wiring в `/hooks/max` и `helm-control` | ✅ задеплоено, подтверждено живьём (см. `docs/KNOWLEDGE_RETRIEVAL.md`) |
-| P8.5.2 Parsers/attachment path | ❌ не реализовано |
+| P8.5.2 Parsers/attachment path — parser router + async worker (job queue, quality gate, эскалация) | ⚠️ код готов, протестирован на реальных MarkItDown-фикстурах; Docling-эскалация и сама сборка Docker-образа воркера НЕ проверены живьём (нужен реальный интернет — недоступен из песочницы разработки) — см. `docs/KNOWLEDGE_INGEST.md` |
 | P8.5.3 GigaAM (ASR) | ❌ не реализовано |
 | P8.5.4 остаток — pg_trgm, dense/embeddings, pgvector, rank fusion | ❌ не реализовано |
 | P8.5.5 остаток — Z2 (опциональный локальный генератор) | ❌ не реализовано (спекой разрешено оставить выключенным) |
 | P8.5.6 Graphify challenger | ❌ не реализовано |
-| P8.5.7 Telegram/MAX ingress вложений | ❌ не реализовано (зависит от P8.5.2/3) |
+| P8.5.7 Telegram/MAX ingress вложений (spool → RAW → register_file_for_ingest) | ❌ не реализовано (async-парсинг, к которому оно ведёт, — уже готов, P8.5.2 выше) |
 | P8.5.8 Panel строка Knowledge | ❌ не реализовано (бессмысленно без данных) |
 
 Подробности реализации — в `docs/KNOWLEDGE_INGEST.md` (что и как попадает
@@ -41,12 +41,13 @@ L3 INFERENCE  выводы/гипотезы — никогда не станов
 При конфликте приоритет: `RAW/live primary source > SOURCE extraction >
 owner-approved KNOWLEDGE > derived KNOWLEDGE > INFERENCE`.
 
-Сейчас реализован только путь L0→L1 в минимальном виде: `ingest_text()`
-пишет `knowledge_sources` + `knowledge_chunks` с текстом и provenance-
-метаданными, но НЕ пишет файлы на диск (RAW-запись — часть P8.5.2) и не
-создаёт L2 knowledge notes (consolidation — тоже P8.5.2+, спека explicitly
-разрешает ingest'у остановиться на `RAW + SOURCE + chunks + indexes` без
-LLM-вызова).
+Путь L0→L1 реализован двумя способами: `ingest_text()` (готовый текст,
+НЕ пишет файлы на диск — только `knowledge_sources`+`knowledge_chunks`)
+и `register_file_for_ingest()` + `worker.py` (реальный файл на диске →
+async parse → реальный L1 SOURCE `.md`-файл + chunks, см.
+`docs/KNOWLEDGE_INGEST.md`). L2 knowledge notes (consolidation) не
+создаются ни там, ни там — спека explicitly разрешает ingest'у
+остановиться на `RAW + SOURCE + chunks + indexes` без LLM-вызова.
 
 ## Каталоги (§14.2)
 
