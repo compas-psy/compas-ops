@@ -27,7 +27,17 @@ WORKDIR /opt/helm/knowledge-worker
 # `pip install docling` сам подтягивает обычный torch и берёт CUDA-сборку
 # (~1.2GB лишних nvidia_*-пакетов на сервере без GPU — проверено
 # эмпирически в песочнице разработки установкой без этого флага).
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+#
+# torchvision — ОБЯЗАТЕЛЬНО той же командой, с того же индекса: НАЙДЕНО
+# живым тестом на сервере — установка одного torch здесь и torchvision
+# отдельно (как транзитивная зависимость docling с обычного PyPI)
+# дала несовместимую пару сборок (разные ABI) и уронила Docling с
+# `RuntimeError: operator torchvision::nms does not exist` при первой
+# же попытке импортировать transformers.AutoImageProcessor — классическая
+# ошибка рассинхрона torch/torchvision, а не проблема самого файла или
+# кода. torch и torchvision обязаны приходить из ОДНОЙ команды install
+# с ОДНОГО индекса, чтобы pip подобрал совместимую пару версий.
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
 # MarkItDown — только нужные extras (§14.6: "only required extras"), не
 # [all] (тянет Azure cloud SDK и youtube/audio-transcription — облачные
