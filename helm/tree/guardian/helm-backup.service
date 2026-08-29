@@ -1,0 +1,14 @@
+[Unit]
+Description=HELM daily backup (Postgres + config + Hermes state → Яндекс Диск через restic/rclone)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/helm/scripts/backup.sh
+User=root
+Group=root
+TimeoutStartSec=1800
+
+StandardOutput=journal
+StandardError=journal
