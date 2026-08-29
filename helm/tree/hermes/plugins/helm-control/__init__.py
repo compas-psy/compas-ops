@@ -110,6 +110,39 @@ def _register_task(channel: str, external_message_id: str, owner_id: str, text: 
         ) from exc
 
 
+def _log_send_outcome(task: "asyncio.Task") -> None:
+    """done_callback для fire-and-forget send() — иначе провал невидим.
+
+    НАЙДЕНО 29.08.2026 на живом тесте: реальный `TelegramAdapter.send()`
+    (plugins/platforms/telegram/adapter.py) принимает `chat_id`/`content`,
+    а не `chat_id`/`text` — вызов с `text=` падал `TypeError` в момент
+    создания корутины, и голый `except Exception: pass` вокруг
+    `create_task(...)` проглатывал её без единой строки в логе. Задача
+    выглядела зарегистрированной и Probe отвечал 200, а сообщение
+    владельцу так никогда и не приходило. `add_done_callback` — не
+    декоративная надстройка, а единственный способ увидеть эту ошибку
+    вообще, раз await здесь невозможен (синхронный колбэк).
+    """
+    try:
+        result = task.result()
+    except Exception as exc:
+        print(f"[helm-control] send() упал: {exc!r}", flush=True)
+        return
+    if not getattr(result, "success", True):
+        print(f"[helm-control] send() вернул неуспех: {result!r}", flush=True)
+
+
+def _send_reply(gateway, source, content: str) -> None:
+    """Fire-and-forget ответ владельцу — колбэк синхронный, await недоступен."""
+    try:
+        task = asyncio.get_running_loop().create_task(
+            gateway.adapters[source.platform].send(chat_id=source.chat_id, content=content)
+        )
+        task.add_done_callback(_log_send_outcome)
+    except Exception as exc:
+        print(f"[helm-control] не удалось создать задачу send(): {exc!r}", flush=True)
+
+
 def _probe_local_answer(text: str) -> dict | None:
     """Free-first Knowledge Probe (ТЗ §14.11, v3.4), ДО обращения к LLM.
 
@@ -187,15 +220,7 @@ def _on_pre_gateway_dispatch(event, gateway):
             f"error={exc}",
             flush=True,
         )
-        try:
-            asyncio.get_running_loop().create_task(
-                gateway.adapters[source.platform].send(
-                    text="HELM Control Plane недоступен. Задача не запущена.",
-                    chat_id=source.chat_id,
-                )
-            )
-        except Exception:
-            pass
+        _send_reply(gateway, source, "HELM Control Plane недоступен. Задача не запущена.")
         return {"action": "skip", "reason": "control_plane_unavailable: " + str(exc)}
 
     if source and source.chat_id:
@@ -203,15 +228,7 @@ def _on_pre_gateway_dispatch(event, gateway):
 
     probe_result = _probe_local_answer(event.text)
     if probe_result and probe_result.get("outcome") == "LOCAL_ANSWER":
-        try:
-            asyncio.get_running_loop().create_task(
-                gateway.adapters[source.platform].send(
-                    text=probe_result["answer_text"],
-                    chat_id=source.chat_id,
-                )
-            )
-        except Exception:
-            pass
+        _send_reply(gateway, source, probe_result["answer_text"])
         return {"action": "skip", "reason": "knowledge_probe_local_answer"}
 
     return None
