@@ -84,6 +84,11 @@ helm.cmpas.ru {
 		# отдельно пускают telegram.org: сам виджет входа (§10.5.6) — сторонний
 		# <script>, который рисует кнопку через iframe с oauth.telegram.org.
 		header Content-Security-Policy "default-src 'self'; script-src 'self' https://telegram.org; frame-src https://oauth.telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://telegram.org; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
+		# Cross-Origin-Opener-Policy: same-origin (из security_headers, глобально)
+		# рвёт связь window.opener между всплывающим окном oauth.telegram.org и
+		# этой страницей — виджет не может сообщить родителю о завершении входа.
+		# Ослабляем только на /login, не на всю панель.
+		header /login Cross-Origin-Opener-Policy "unsafe-none"
 		try_files {path} /index.html
 		file_server
 	}
