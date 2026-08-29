@@ -31,7 +31,7 @@ sudo chown helm:helm "$VAULT/smoke-test.docx" "$VAULT/smoke-test-broken.pdf"
 
 echo "== 1. Регистрируем оба файла через helm-knowledge-worker (там смонтирован /opt/helm-knowledge) =="
 cd /opt/helm/compose
-sudo docker compose exec -T helm-knowledge-worker python3 - <<'PYEOF'
+sudo docker compose exec -T helm-knowledge-worker python3 - > "$TMP1" <<'PYEOF'
 from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -51,12 +51,21 @@ with Session(engine) as session:
         session.commit()
         print(f"{name}: source_id={result.source.id} job_id={result.job.id if result.job else None} created={result.created}")
 PYEOF
+cat "$TMP1"
+# НАЙДЕНО живым тестом: старый запрос статуса матчил по original_filename,
+# который НЕ уникален — leftover-строка с прошлого (не до конца
+# убранного) прогона делила то же имя файла и путала статус-проверку
+# ниже. Берём source_id ИМЕННО этой регистрации, не имя файла.
+DOCX_SOURCE_ID=$(grep '^smoke-test.docx:' "$TMP1" | sed 's/.*source_id=\([^ ]*\).*/\1/')
+PDF_SOURCE_ID=$(grep '^smoke-test-broken.pdf:' "$TMP1" | sed 's/.*source_id=\([^ ]*\).*/\1/')
+echo "DOCX_SOURCE_ID=$DOCX_SOURCE_ID"
+echo "PDF_SOURCE_ID=$PDF_SOURCE_ID"
 
 echo "== 2. Ждём воркер (первый запуск Docling может качать модели с huggingface.co — даём до 3 минут) =="
 for _ in $(seq 1 18); do
   PENDING=$(sudo docker exec helm-postgres-1 psql -U helm -d helm -tAc \
-    "select count(*) from knowledge_ingest_jobs j join knowledge_sources s on s.id = j.source_id
-     where s.original_filename in ('smoke-test.docx','smoke-test-broken.pdf')
+    "select count(*) from knowledge_ingest_jobs j
+     where j.source_id in ('$DOCX_SOURCE_ID', '$PDF_SOURCE_ID')
        and j.status in ('PENDING','RUNNING')")
   [ "$PENDING" = "0" ] && break
   sleep 10
@@ -66,13 +75,13 @@ echo "== 3. Статус задач =="
 sudo docker exec helm-postgres-1 psql -U helm -d helm -c \
   "select s.original_filename, s.parser, s.status as source_status, j.status as job_status, j.error
    from knowledge_ingest_jobs j join knowledge_sources s on s.id = j.source_id
-   where s.original_filename in ('smoke-test.docx', 'smoke-test-broken.pdf')
+   where j.source_id in ('$DOCX_SOURCE_ID', '$PDF_SOURCE_ID')
    order by j.created_at"
 
 echo
 echo "== 4. Ожидания: smoke-test.docx -> DONE (markitdown), файл L1 SOURCE существует =="
 sudo docker exec helm-postgres-1 psql -U helm -d helm -tAc \
-  "select s.source_path from knowledge_sources s where s.original_filename = 'smoke-test.docx'" > "$TMP1"
+  "select source_path from knowledge_sources where id = '$DOCX_SOURCE_ID'" > "$TMP1"
 SOURCE_PATH=$(cat "$TMP1")
 echo "source_path=$SOURCE_PATH"
 sudo test -f "$SOURCE_PATH" && echo "OK: L1 SOURCE файл существует" || echo "FAIL: L1 SOURCE файл не найден"
