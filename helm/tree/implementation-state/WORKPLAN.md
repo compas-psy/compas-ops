@@ -4,7 +4,17 @@
 каждой значимой задачи — это заменяет необходимость владельцу писать
 «продолжай».
 
-## Текущая фаза: **P4 закрыт.** Следующая — P5 (Guardian, live-деплой; офлайн-часть уже готова и протестирована)
+## Текущая фаза: **P4 закрыт.** P5 (Guardian) развёрнут и работает live. Backup — в процессе (restic/rclone поверх Яндекс Диска, WebDAV 401 — диагностируется).
+
+## Распоряжение владельца: backup — двухэтапный, P5 не покрывает всё (зафиксировано 29.08.2026)
+
+**P5 backup покрывает только:** PostgreSQL (все БД кластера), `/opt/helm/config`, `/opt/helm/guardian`, `/etc/helm/secrets`, состояние/профили/kanban Hermes. **Не считать backup-подсистему завершённой для системы в целом** — это первый этап, не финал.
+
+**В P6.5, после установки Forgejo:**
+1. Импортировать репозитории: `cmpas.ru`, `zapiski`, `compas-voice`, `compas-ops`, `signalAI-mobileApp`, `helm-infra`.
+2. Включить в тот же encrypted restic offsite-бэкап (не отдельный механизм): Forgejo repositories, Forgejo DB/config, используемые PR metadata/attachments.
+3. GitHub mirror остаётся ДОПОЛНИТЕЛЬНОЙ внешней копией — не заменяет restic offsite backup.
+4. После расширения backup — restore-test минимум одного Forgejo repository с проверкой `refs`/`tags`/`HEAD`, отдельно от Postgres-restore-теста P5.
 
 ## Пройдено офлайн (до переноса на сервер, session 0afed5d1)
 
