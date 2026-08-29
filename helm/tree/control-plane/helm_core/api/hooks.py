@@ -67,6 +67,9 @@ ATTACHMENT_DOWNLOAD_FAILED_NOTICE = (
 )
 ATTACHMENT_TOO_LARGE_NOTICE = "Файл слишком большой — не сохранён."
 ATTACHMENT_MISSING_NOTICE = "Файл потерян на сервере — пришлите, пожалуйста, ещё раз."
+ATTACHMENT_MOVE_FAILED_NOTICE = (
+    "Не получилось сохранить файл — попробуйте выбрать домен ещё раз."
+)
 ATTACHMENT_CANCELLED_NOTICE = "Хорошо, не сохраняю."
 
 
@@ -224,6 +227,16 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
                     payload_reference={"text": ATTACHMENT_MISSING_NOTICE})
             session.commit()
             return {"status": "attachment_missing"}
+        if resolved.status == "failed":
+            # Файл остаётся в spool, pending НЕ снят — можно повторить
+            # выбор домена без повторной отправки файла (message_id
+            # следующей попытки будет новым, record_channel_event_once её
+            # не заблокирует).
+            enqueue(session, channel="max", recipient=inbound.chat_id,
+                    reference=f"attachment-move-failed:{resolved.pending.id}:{inbound.message_id}",
+                    payload_reference={"text": ATTACHMENT_MOVE_FAILED_NOTICE})
+            session.commit()
+            return {"status": "attachment_move_failed"}
         # status == "invalid": повторяем меню — reference несёт message_id,
         # иначе повторный неверный ответ не долетел бы (exactly-once по
         # reference в outbox, а pending.id один и тот же на все попытки).

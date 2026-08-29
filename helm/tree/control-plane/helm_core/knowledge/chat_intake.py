@@ -29,7 +29,9 @@ chief. FIFO по `created_at` внутри канала — редкий слу�
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
+import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +50,8 @@ from .ingest import DEFAULT_VAULT_ROOT, RegisterFileResult, register_file_for_in
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
 DEFAULT_SPOOL_ROOT = "/opt/helm-state/knowledge-spool"
+
+logger = logging.getLogger(__name__)
 
 _DOMAINS = list(KnowledgeDomain)
 _CANCEL_SENTINEL = "__cancel__"
@@ -123,7 +127,7 @@ def stage_attachment(session: Session, *, channel: str, data: bytes,
 
 @dataclass
 class ResolveOutcome:
-    status: Literal["not_pending", "cancelled", "invalid", "missing", "ingested"]
+    status: Literal["not_pending", "cancelled", "invalid", "missing", "failed", "ingested"]
     result: RegisterFileResult | None = None
     pending: KnowledgePendingAttachment | None = None
 
@@ -164,8 +168,28 @@ def resolve_pending_domain(session: Session, *, channel: str, reply_text: str,
     raw_dir = Path(vault_root) / "raw" / domain
     raw_dir.mkdir(parents=True, exist_ok=True)
     raw_path = raw_dir / f"{pending.sha256}{spool_path.suffix}"
-    os.replace(spool_path, raw_path)  # атомарный rename — тот же физический
-                                       # диск, что и spool (§14.5.1)
+    # НАЙДЕНО живым тестом 29.08.2026: spool (/opt/helm-state) и Vault
+    # (/opt/helm-knowledge) на реальном сервере — РАЗНЫЕ файловые системы,
+    # `os.replace()` падает `OSError: [Errno 18] Invalid cross-device
+    # link` — атомарный rename попросту не работает между точками
+    # монтирования, независимо от прав. §14.5.1 требует "atomic rename"
+    # не ради самого rename, а ради гарантии "raw_path либо не существует,
+    # либо содержит ПОЛНЫЙ файл, никогда не частичный" — та же гарантия
+    # достигается копированием во временный файл НА ЦЕЛЕВОЙ файловой
+    # системе (raw_dir) с последующим os.replace ВНУТРИ неё (это уже
+    # гарантированно один диск) и удалением исходника только после
+    # успешного rename. Работает одинаково что на одном диске, что на
+    # разных — больше не полагаемся на топологию монтирования сервера.
+    tmp_path = raw_dir / f".{pending.sha256}{spool_path.suffix}.part-{uuid.uuid4().hex}"
+    try:
+        shutil.copyfile(spool_path, tmp_path)
+        os.replace(tmp_path, raw_path)
+        spool_path.unlink()
+    except OSError:
+        logger.exception("chat_intake: не удалось перенести вложение %s в %s",
+                         spool_path, raw_path)
+        tmp_path.unlink(missing_ok=True)
+        return ResolveOutcome(status="failed", pending=pending)
 
     # §14.15: ЗАПИСКИ — "not indexed into general namespaces" — client
     # content принудительно client_restricted независимо от того, что

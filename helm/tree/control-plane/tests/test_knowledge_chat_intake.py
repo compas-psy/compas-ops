@@ -6,6 +6,7 @@
 вложение в spool до следующей попытки или явной отмены.
 """
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -179,6 +180,33 @@ def test_resolve_pending_domain_does_not_cross_channels(session, tmp_path):
 
     assert outcome.status == "not_pending"
     assert session.query(KnowledgePendingAttachment).count() == 1
+
+
+def test_resolve_pending_domain_cross_device_move_failure_keeps_pending_for_retry(
+    session, tmp_path, monkeypatch
+):
+    """НАЙДЕНО живым тестом 29.08.2026: spool и Vault на реальном сервере —
+    разные файловые системы, `os.replace()` падает `OSError: Invalid
+    cross-device link`. Фикс — copy-в-tmp-на-целевом-диске + os.replace
+    внутри неё; здесь проверяем ЛЮБОЙ сбой на этом шаге (любой OSError,
+    не только конкретно EXDEV) не роняет процесс и не теряет вложение —
+    pending остаётся, следующая попытка того же домена может сработать."""
+    pending = stage_attachment(session, channel="telegram", data=b"content",
+                               original_filename="report.pdf", mime_type="application/pdf",
+                               spool_root=str(tmp_path / "spool"))
+    spool_path = Path(pending.spool_path)
+
+    def _raise(*_args, **_kwargs):
+        raise OSError("boom")
+    monkeypatch.setattr(shutil, "copyfile", _raise)
+
+    outcome = resolve_pending_domain(session, channel="telegram", reply_text="engineering",
+                                     vault_root=str(tmp_path / "vault"))
+
+    assert outcome.status == "failed"
+    assert spool_path.exists(), "исходный файл в spool не должен пропасть при сбое переноса"
+    assert session.query(KnowledgePendingAttachment).count() == 1
+    assert session.query(KnowledgeSource).count() == 0
 
 
 def test_resolve_pending_domain_missing_spool_file_is_handled_not_crashed(session, tmp_path):
