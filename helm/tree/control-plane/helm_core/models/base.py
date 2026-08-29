@@ -95,6 +95,11 @@ class KnowledgeDomain(enum.StrEnum):
     VENTURES = "ventures"
     ENGINEERING = "engineering"
     SIGNALAI_DOCS = "signalai-docs"
+    #: Добавлено решением владельца 29.08.2026: внешняя справочная
+    #: литература (книги по психологии и т.п.), отдельно от
+    #: SIMPAS_PRACTICE — та про рабочую практику самого SIMPAS, не про
+    #: библиотеку сторонних источников.
+    LIBRARY = "library"
 
 
 class KnowledgeSensitivity(enum.StrEnum):

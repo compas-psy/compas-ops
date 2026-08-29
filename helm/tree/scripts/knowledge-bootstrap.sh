@@ -33,6 +33,7 @@ mkdir -p \
   "$VAULT/raw/ventures" \
   "$VAULT/raw/engineering" \
   "$VAULT/raw/signalai-docs" \
+  "$VAULT/raw/library" \
   "$VAULT/sources" \
   "$VAULT/concepts" \
   "$VAULT/entities" \
