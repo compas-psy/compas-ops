@@ -25,10 +25,20 @@
 		X-Frame-Options "DENY"
 		Referrer-Policy "no-referrer"
 		Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()"
-		Cross-Origin-Opener-Policy "same-origin"
 		Cross-Origin-Resource-Policy "same-origin"
 		-Server
 	}
+}
+
+# Cross-Origin-Opener-Policy НЕ входит в security_headers (в отличие от
+# остальных) намеренно: header-директива на уровне всего сайта компилируется
+# с "deferred":true (применяется последней из всей цепочки, после любых
+# вложенных handle-блоков) — переопределить её изнутри handle нельзя в
+# принципе, не баг, а поведение Caddy (проверено вживую через autosave.json).
+# Поэтому COOP задаётся явно в каждом handle ниже — везде "same-origin",
+# кроме /login, которому нужен "unsafe-none" для Telegram Login Widget.
+(coop_locked) {
+	header Cross-Origin-Opener-Policy "same-origin"
 }
 
 helm.cmpas.ru {
@@ -47,16 +57,19 @@ helm.cmpas.ru {
 
 	# ── Panel API. Только этот префикс, без вложенных wildcard ──────────────
 	handle /api/panel/v1/* {
+		import coop_locked
 		reverse_proxy 127.0.0.1:8080
 	}
 
 	# ── Аутентификация панели (§10.5.6) ────────────────────────────────────
 	handle /auth/* {
+		import coop_locked
 		reverse_proxy 127.0.0.1:8080
 	}
 
 	# ── Явно зарегистрированные вебхуки. Перечисляются поимённо ────────────
 	handle /hooks/max {
+		import coop_locked
 		reverse_proxy 127.0.0.1:8080
 	}
 
@@ -68,6 +81,7 @@ helm.cmpas.ru {
 	# примонтированного /srv/guardian/status.json — 404 при исправной
 	# конфигурации. Найдено на реальном P2 bring-up.
 	handle_path /guardian/* {
+		import coop_locked
 		root * /srv/guardian
 		header Cache-Control "no-store"
 		header Content-Type "application/json"
@@ -75,36 +89,23 @@ helm.cmpas.ru {
 	}
 
 	# ── Экран входа (§10.5.6): отдельный handle, не матчер внутри общего ────
-	# Казалось бы, что достаточно `header /login ...` внутри общего handle{}
-	# ниже — но это не сработало на живом тесте: header-директива с матчером
-	# внутри handle, конфликтующая по имени поля с header'ом из security_headers
-	# на уровне сайта, надёжно не переопределяет значение (известная особенность
-	# Caddy на стыке header+handle, caddyserver/caddy#7598). header без матчера
-	# прямо в СВОЁМ handle-блоке — переопределяет надёжно, поэтому у /login
-	# отдельный блок, а не условие внутри общего.
+	# Ему нужен свой, ослабленный COOP (Telegram Login Widget сообщает о
+	# завершении входа через window.opener из всплывающего окна
+	# oauth.telegram.org — same-origin эту связь рвёт) и своя, чуть более
+	# широкая CSP (единственное место, где грузится сторонний
+	# <script src="https://telegram.org/..."> самого виджета).
 	handle /login {
+		header Cross-Origin-Opener-Policy "unsafe-none"
 		root * /srv/panel
 		header Cache-Control "no-store"
-		# CSP шире, чем у остального SPA: экран входа — единственное место,
-		# где нужен сторонний <script src="https://telegram.org/..."> самого
-		# виджета (рисует кнопку через iframe с oauth.telegram.org).
 		header Content-Security-Policy "default-src 'self'; script-src 'self' https://telegram.org; frame-src https://oauth.telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://telegram.org; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
-		# same-origin (из security_headers) рвёт window.opener между
-		# всплывающим окном oauth.telegram.org и этой страницей — виджет не
-		# может сообщить родителю о завершении входа. Блочная форма (не
-		# однострочная `header Field "value"`) обязательна: security_headers
-		# компилируется с "deferred":true (применяется последним из всех),
-		# однострочная форма — нет, поэтому её тут же перезаписывало обратно
-		# на same-origin. Проверено на живом сервере через autosave.json.
-		header {
-			Cross-Origin-Opener-Policy "unsafe-none"
-		}
 		rewrite * /index.html
 		file_server
 	}
 
 	# ── Статика панели (§10.5.2, §10.5.3) ──────────────────────────────────
 	handle {
+		import coop_locked
 		root * /srv/panel
 		header /assets/* Cache-Control "public, max-age=31536000, immutable"
 		header /index.html Cache-Control "no-store"
@@ -116,6 +117,7 @@ helm.cmpas.ru {
 
 git.cmpas.ru {
 	import security_headers
+	import coop_locked
 	encode zstd gzip
 	# Forgejo появляется в P6.5; до установки домен отвечает 503, а не
 	# проксирует в пустоту.
