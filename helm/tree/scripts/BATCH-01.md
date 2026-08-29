@@ -53,10 +53,15 @@ ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "test -d /opt/h
 переписку. Третий секрет, `max_owner_id`, кладётся нулём — настоящее
 число узнаётся на шаге 2.3.
 
+Секрет обязательно шестнадцатеричный (`openssl rand -hex`), а не
+base64: MAX принимает ограниченный алфавит и отвергает `/` и `+` с
+ошибкой `proto.payload`, ВОЗВРАЩАЯ присланный секрет открытым в тексте
+ошибки (найдено вживую 29.08.2026).
+
 **2.1. Положить секреты и поднять новый образ:**
 
 ```powershell
-ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "echo 'ТОКЕН_БОТА' | sudo tee /etc/helm/secrets/max_bot_token > /dev/null && openssl rand -base64 24 | sudo tee /etc/helm/secrets/max_webhook_secret > /dev/null && echo '0' | sudo tee /etc/helm/secrets/max_owner_id > /dev/null && sudo chown root:helm-secrets /etc/helm/secrets/max_bot_token /etc/helm/secrets/max_webhook_secret /etc/helm/secrets/max_owner_id && sudo chmod 640 /etc/helm/secrets/max_bot_token /etc/helm/secrets/max_webhook_secret /etc/helm/secrets/max_owner_id && cd /opt/helm/compose && sudo docker compose build helm-core && sudo docker compose up -d helm-core && sleep 15 && sudo docker compose ps helm-core"
+ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "echo 'ТОКЕН_БОТА' | sudo tee /etc/helm/secrets/max_bot_token > /dev/null && openssl rand -hex 32 | sudo tee /etc/helm/secrets/max_webhook_secret > /dev/null && echo '0' | sudo tee /etc/helm/secrets/max_owner_id > /dev/null && sudo chown root:helm-secrets /etc/helm/secrets/max_bot_token /etc/helm/secrets/max_webhook_secret /etc/helm/secrets/max_owner_id && sudo chmod 640 /etc/helm/secrets/max_bot_token /etc/helm/secrets/max_webhook_secret /etc/helm/secrets/max_owner_id && cd /opt/helm/compose && sudo docker compose build helm-core && sudo docker compose up -d helm-core && sleep 15 && sudo docker compose ps helm-core"
 ```
 
 В команде подставляется одно значение — `ТОКЕН_БОТА`.
