@@ -107,6 +107,35 @@ helm-control на хосте Hermes → bootstrap каталогов под вс
 подтверждения (`knowledge-probe-smoke-test-cleanup.sh`),
 `knowledge_answer_runs` обнулены.
 
+### P8.5.2 — parser router + async worker: код готов, деплой не выполнен
+
+Владелец выбрал архитектуру: отдельный контейнер
+`helm-knowledge-worker`, не встраивать парсинг в `helm-core` (лимит
+768MB — тяжёлый Docling-разбор мог бы уронить live-обработку вебхуков
+MAX/Telegram).
+
+Реализовано и протестировано на Python-уровне в песочнице разработки
+(19 новых тестов, 157 всего зелёных — подробности `docs/
+KNOWLEDGE_INGEST.md`): `helm_core/knowledge/parsers.py` (MarkItDown
+fast path → quality gate → эскалация на Docling; quality gate
+калиброван на реальных фикстурах, включая новый найденный живьём
+критерий — доля доминирующей буквы, ловит испорченный текст из-за
+шрифта без кириллицы), `helm_core/knowledge/{ingest,worker}.py`
+(`register_file_for_ingest()` + `claim_next_job()`/`process_job()`,
+пишет L1 SOURCE `.md` на диск), `Dockerfile.worker` +
+`docker-compose.yml::helm-knowledge-worker` (CPU-only torch явно через
+`--index-url .../whl/cpu` — иначе CUDA-сборка лишние ~1.2GB; opencv
+нужен `libgl1`+3 пакета на Debian slim).
+
+**Честно не проверено**: сборка Docker-образа и реальная
+Docling-эскалация — Docker Hub и huggingface.co недоступны из
+egress-политики песочницы разработки. `knowledge-worker-deploy-
+runbook.md` + `knowledge-worker-smoke-test.sh` готовы для первой живой
+проверки на сервере.
+
+Не сделано, зависит от этого шага: P8.5.7 (Telegram/MAX ingress
+вложений — сама доставка файла до `register_file_for_ingest()`).
+
 ## Инвентаризация репозиториев (§18.3 шаг 1) — выполнена 29.08.2026
 
 Результат и четыре находки — `implementation-state/MIGRATION-LOG.md`.
