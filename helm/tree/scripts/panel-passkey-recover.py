@@ -155,7 +155,7 @@ def main() -> None:
     print()
     print(f"Действителен {ENROLLMENT_TTL_MINUTES} минут. Передайте его владельцу лично —")
     print("не через Telegram/MAX (§10.5.8.2). Он откроет /login?step=enroll после")
-    print("повторного входа через Telegram OIDC.")
+    print("повторного входа через Telegram Login Widget.")
 
 
 if __name__ == "__main__":

@@ -200,7 +200,12 @@ def telegram_callback(request: Request, session: Session = Depends(get_session))
     except ValueError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"Telegram не подтвердил вход: {exc}") from exc
 
-    owner_id = f"tg:{claims.get('id')}"
+    # Без префикса "tg:": Hermes (helm-control) шлёт в /internal/inbound
+    # голый str(chat_id) (hermes/plugins/helm-control/__init__.py), и
+    # settings.owner_id читается из того же секрета telegram_owner_id без
+    # какой-либо нормализации (ingest.py сравнивает как есть). Виджет тоже
+    # обязан сравнивать с тем же голым числом, а не изобретать свой формат.
+    owner_id = str(claims.get("id"))
     if owner_id != settings.owner_id:
         # Не создаём вообще никакого состояния для не-владельца — ни сессии,
         # ни pending-cookie на попытку enrollment.

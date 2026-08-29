@@ -25,11 +25,18 @@ from helm_core.app import create_app
 from helm_core.config import Settings
 from helm_core.models import Base, PanelEnrollmentToken, PanelSession, WebauthnCredential, utcnow
 
-from conftest import DB_URL, OWNER_ID, POLICY_PATH
+from conftest import DB_URL, POLICY_PATH
 
 BOT_TOKEN = "test-bot-token"
+#: Без префикса "tg:" — Telegram Login Widget присылает голый числовой id
+#: (hermes/plugins/helm-control тоже шлёт str(chat_id) без префикса в
+#: /internal/inbound), settings.owner_id сравнивается как есть, без
+#: нормализации (ingest.py). Это НЕ то же самое, что OWNER_ID="tg:100500" в
+#: conftest.py — та константа используется другими тестами для владельца
+#: внутренних Control Plane вызовов (/internal/*), а не Telegram-виджета.
+OWNER_ID = "100500"
 NOT_OWNER_SUB = "999999"
-OWNER_SUB = OWNER_ID.split(":", 1)[1]
+OWNER_SUB = OWNER_ID
 STEP_CRED_B64 = _b64u(b"step-cred")
 CRED_X_B64 = _b64u(b"cred-x")
 PLACEHOLDER_B64 = _b64u(b"placeholder")
