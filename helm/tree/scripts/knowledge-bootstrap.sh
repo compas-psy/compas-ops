@@ -71,9 +71,21 @@ find "$VAULT" -type d -exec chmod g+s {} +
 # Spool для входящих вложений Telegram/MAX (§14.5.1): "owner-only
 # permissions, bounded size, atomic rename". Отдельно от /opt/helm-knowledge,
 # потому что это временный буфер до SHA256+atomic move в raw/, а не Vault.
+#
+# P8.5.7: пишут сюда ДВА разных процесса под ДВУМЯ разными UID — Hermes
+# (хостовый процесс, UID helm) для Telegram, и контейнер helm-core (UID
+# 10001, чужой) для MAX (`/hooks/max` сам скачивает вложение и кладёт в
+# spool — см. helm_core/knowledge/chat_intake.py). Буквальный chmod 700
+# здесь означал бы, что helm-core физически не может писать — тот же
+# паттерн, что уже понадобился для $VAULT (770 + setgid + group_add),
+# применяем и здесь, а не оставляем 700 «для owner-only» дословно: смысл
+# owner-only — «недоступно посторонним процессам на хосте», не «доступно
+# ровно одному UID» — вложение всё равно физически покидает spool только
+# после atomic move в $VAULT/raw/<domain>/, тот же ACL-периметр.
 mkdir -p "$SPOOL"
 chown helm:helm "$SPOOL"
-chmod 700 "$SPOOL"
+chmod 770 "$SPOOL"
+chmod g+s "$SPOOL"
 
 echo "готово:"
 find "$VAULT" -maxdepth 2 -type d | sort

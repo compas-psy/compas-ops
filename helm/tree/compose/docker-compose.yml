@@ -137,7 +137,13 @@ services:
     # root (Dockerfile), поэтому без group_add чтение секрета падает
     # PermissionError. GID числом, не именем: имя группы живёт только в
     # /etc/group хоста и не резолвится через границу bind-mount.
-    group_add: ["10001"]
+    # 1001 — ДОБАВЛЕНО для P8.5.7 (вложения MAX, helm_core/knowledge/
+    # chat_intake.py): тот же GID хостового helm, что уже даёт
+    # helm-knowledge-worker доступ к /opt/helm-knowledge (см. этот сервис
+    # ниже) — здесь тот же каталог, плюс spool, читает И пишет helm-core,
+    # а не воркер, но группа/права те же (770 + setgid, knowledge-
+    # bootstrap.sh).
+    group_add: ["10001", "1001"]
     volumes:
       - ../config:/opt/helm/config:ro
       # Корень Минцифры для вызовов MAX Bot API (§10.3): сертификат
@@ -147,6 +153,13 @@ services:
       # MAX (helm_core/channels/max.py::ssl_context), не подменяет
       # остальные корни контейнера.
       - /etc/ssl/ru-ca:/etc/ssl/ru-ca:ro
+      # P8.5.7: `/hooks/max` сам скачивает вложение и кладёт в spool, потом
+      # atomic move в raw/<domain>/ (chat_intake.py) — тот же физический
+      # диск нужен для обоих путей внутри контейнера (os.replace не
+      # умеет между разными точками монтирования, §14.5.1 требует
+      # именно atomic rename, не copy+delete).
+      - /opt/helm-state/knowledge-spool:/opt/helm-state/knowledge-spool
+      - /opt/helm-knowledge:/opt/helm-knowledge
     # Позволяет контейнеру достучаться до Hermes API (§10.2) — host-сервис
     # hermes-gateway.service, не контейнер. 127.0.0.1 внутри этого
     # контейнера означает сам контейнер, а не хост (найдено живьём
@@ -194,8 +207,9 @@ services:
     group_add: ["10001", "1001"]
     volumes:
       # Тот же абсолютный путь внутри и снаружи контейнера: raw_path,
-      # записанный register_file_for_ingest() на хосте (будущий P8.5.7),
-      # обязан резолвиться без трансляции путей.
+      # записанный register_file_for_ingest() из helm-core (P8.5.7,
+      # helm_core/knowledge/chat_intake.py) или самим воркером в P8.5.2-
+      # тестах, обязан резолвиться без трансляции путей.
       - /opt/helm-knowledge:/opt/helm-knowledge
     # Нет ни ports, ни healthcheck HTTP — это не веб-сервис, опрашивает
     # knowledge_ingest_jobs циклом (worker.py::run_forever), наружу

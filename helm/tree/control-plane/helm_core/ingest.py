@@ -77,6 +77,33 @@ def normalized_hash(owner_id: str, text: str) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def record_channel_event_once(session: Session, *, channel: str, external_message_id: str,
+                              owner_id: str) -> bool:
+    """True — эта доставка уже была (повтор вебхука), False — новая.
+
+    Отдельно от `IngestService.register()`: вложения (P8.5.7) не создают
+    `Task` и не имеют текста для `normalized_hash` обычного dedup-пути, но
+    ретрай вебхука на них так же реален (скачивание файла может быть
+    медленным) — без этого повтор доставки создавал бы второе вложение в
+    spool на КАЖДЫЙ ретрай. `normalized_hash` здесь — не сравнение
+    намерений (для файла оно не имеет смысла), только заполнение NOT NULL
+    колонки детерминированным значением, которое не совпадёт с реальным
+    хэшем текста (префикс `attachment:`).
+    """
+    existing = session.scalar(
+        select(ChannelEvent).where(ChannelEvent.channel == channel,
+                                   ChannelEvent.external_message_id == external_message_id)
+    )
+    if existing is not None:
+        return True
+    session.add(ChannelEvent(
+        channel=channel, external_message_id=external_message_id, owner_id=owner_id,
+        normalized_hash=hashlib.sha256(f"attachment:{external_message_id}".encode()).hexdigest(),
+    ))
+    session.flush()
+    return False
+
+
 class NotOwner(PermissionError):
     """Сообщение не от владельца — задача не заводится (§30.2)."""
 

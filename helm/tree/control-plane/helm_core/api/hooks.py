@@ -28,14 +28,21 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.datastructures import State
 
-from ..channels.max import WEBHOOK_SECRET_HEADER, parse_message_created, verify_webhook_secret
+from ..channels.max import (
+    MaxAttachmentUnsupported, WEBHOOK_SECRET_HEADER, download_attachment,
+    parse_attachment, parse_message_created, verify_webhook_secret,
+)
 from ..hermes_bridge import HermesUnavailable
-from ..ingest import IngestService
+from ..ingest import IngestService, record_channel_event_once
+from ..knowledge.chat_intake import (
+    AttachmentTooLarge, format_domain_menu, resolve_pending_domain, stage_attachment,
+)
 from ..knowledge.probe import probe, query_hash
-from ..models import KnowledgeAnswerRun, TaskEvent
+from ..models import KnowledgeAnswerRun, KnowledgePendingAttachment, TaskEvent
 from ..outbox import enqueue
 from .deps import get_session
 
@@ -50,6 +57,17 @@ HERMES_DOWN_NOTICE = (
     "HELM принял сообщение, но агент сейчас недоступен. "
     "Задача зарегистрирована и будет выполнена после восстановления."
 )
+
+#: P8.5.7. `download_attachment()`/`parse_attachment()` не подтверждены
+#: живым тестом (см. их docstring в channels/max.py) — этот текст владелец
+#: увидит, если реальная форма MAX-вложения разойдётся с ожидаемой.
+ATTACHMENT_DOWNLOAD_FAILED_NOTICE = (
+    "Не смог скачать вложение — попробуйте прислать ещё раз или сообщите "
+    "об ошибке."
+)
+ATTACHMENT_TOO_LARGE_NOTICE = "Файл слишком большой — не сохранён."
+ATTACHMENT_MISSING_NOTICE = "Файл потерян на сервере — пришлите, пожалуйста, ещё раз."
+ATTACHMENT_CANCELLED_NOTICE = "Хорошо, не сохраняю."
 
 
 def _run_chief_and_enqueue_reply(state: State, *, task_id: str, owner_id: str,
@@ -132,6 +150,88 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
         logger.warning("hooks/max: сообщение от не-владельца, sender_id=%s",
                        inbound.sender_id)
         raise HTTPException(status.HTTP_403_FORBIDDEN, "отправитель не владелец")
+
+    # P8.5.7: вложения и двухшаговый диалог выбора домена ОБХОДЯТ обычный
+    # register()/probe/chief путь целиком — сообщение с файлом или ответ на
+    # вопрос "какой домен" никогда не должно дойти до chief как обычный
+    # текст. `has_pending` — read-only проверка ДО дедупа: она решает, идёт
+    # ли это сообщение вообще в подсистему вложений; `record_channel_event_
+    # once` вызывается ТОЛЬКО внутри этой ветки (никогда для обычного
+    # текста) — иначе конфликтует с `register()`'s собственной записью
+    # `ChannelEvent` для того же external_message_id (см. docstring
+    # `record_channel_event_once`).
+    has_pending = session.scalar(
+        select(KnowledgePendingAttachment.id)
+        .where(KnowledgePendingAttachment.channel == "max")
+        .limit(1)
+    ) is not None
+
+    if inbound.attachments or has_pending:
+        if record_channel_event_once(session, channel="max",
+                                     external_message_id=inbound.message_id,
+                                     owner_id=request.app.state.owner_id):
+            session.commit()
+            return {"status": "duplicate"}
+
+        if inbound.attachments:
+            try:
+                attachment = parse_attachment(inbound.attachments[0])
+                data = download_attachment(attachment.url)
+            except (MaxAttachmentUnsupported, OSError) as exc:
+                logger.warning("hooks/max: не удалось скачать вложение: %s", exc)
+                enqueue(session, channel="max", recipient=inbound.chat_id,
+                        reference=f"attachment-failed:{inbound.message_id}",
+                        payload_reference={"text": ATTACHMENT_DOWNLOAD_FAILED_NOTICE})
+                session.commit()
+                return {"status": "attachment_failed"}
+
+            try:
+                pending = stage_attachment(session, channel="max", data=data,
+                                           original_filename=attachment.filename,
+                                           mime_type=None, caption=inbound.text)
+            except AttachmentTooLarge:
+                enqueue(session, channel="max", recipient=inbound.chat_id,
+                        reference=f"attachment-too-large:{inbound.message_id}",
+                        payload_reference={"text": ATTACHMENT_TOO_LARGE_NOTICE})
+                session.commit()
+                return {"status": "attachment_too_large"}
+
+            enqueue(session, channel="max", recipient=inbound.chat_id,
+                    reference=f"attachment-staged:{pending.id}",
+                    payload_reference={"text": format_domain_menu(pending.original_filename)})
+            session.commit()
+            return {"status": "attachment_staged", "pending_id": str(pending.id)}
+
+        resolved = resolve_pending_domain(session, channel="max", reply_text=inbound.text)
+        if resolved.status == "ingested":
+            enqueue(session, channel="max", recipient=inbound.chat_id,
+                    reference=f"attachment-ingested:{resolved.result.source.id}",
+                    payload_reference={"text": (
+                        f"Сохранено в «{resolved.result.source.domain}». "
+                        "Разбор запущен, появится в базе знаний в фоне."
+                    )})
+            session.commit()
+            return {"status": "attachment_ingested"}
+        if resolved.status == "cancelled":
+            enqueue(session, channel="max", recipient=inbound.chat_id,
+                    reference=f"attachment-cancelled:{resolved.pending.id}",
+                    payload_reference={"text": ATTACHMENT_CANCELLED_NOTICE})
+            session.commit()
+            return {"status": "attachment_cancelled"}
+        if resolved.status == "missing":
+            enqueue(session, channel="max", recipient=inbound.chat_id,
+                    reference=f"attachment-missing:{resolved.pending.id}",
+                    payload_reference={"text": ATTACHMENT_MISSING_NOTICE})
+            session.commit()
+            return {"status": "attachment_missing"}
+        # status == "invalid": повторяем меню — reference несёт message_id,
+        # иначе повторный неверный ответ не долетел бы (exactly-once по
+        # reference в outbox, а pending.id один и тот же на все попытки).
+        enqueue(session, channel="max", recipient=inbound.chat_id,
+                reference=f"attachment-retry:{resolved.pending.id}:{inbound.message_id}",
+                payload_reference={"text": format_domain_menu(resolved.pending.original_filename)})
+        session.commit()
+        return {"status": "attachment_domain_invalid"}
 
     service = IngestService(session, owner_id=request.app.state.owner_id)
     result = service.register(channel="max", external_message_id=inbound.message_id,

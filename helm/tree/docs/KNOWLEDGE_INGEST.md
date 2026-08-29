@@ -112,25 +112,66 @@ MAX/Telegram (лимит `helm-core` — 768MB).
   try/except на всё тело `process_job()` — единственный правильный
   контракт.
 
-## Чего нет: attachments / spool (§14.5.1) — P8.5.7
+## Attachments / spool (§14.5.1, P8.5.7) — MAX реализован, Telegram открыт
 
-Контракт спеки для входящих вложений Telegram/MAX:
+Двухшаговый диалог выбора домена (решение владельца 29.08.2026, спека не
+задаёт UX для этого) — `helm_core/knowledge/chat_intake.py`, подробности
+и обоснование — `docs/adr/ADR-021-knowledge-attachment-transport.md`:
 
 ```text
-Telegram file message
-→ chief gateway/plugin получает bytes/path через Bot API
-→ запись в защищённый ingest spool (/opt/helm-state/knowledge-spool/,
-  owner-only, bounded size, atomic rename)
-→ SHA256 → atomic move в /opt/helm-knowledge/raw/<domain>/
-→ register_file_for_ingest() → немедленное подтверждение владельцу
-→ асинхронный parse (уже реализовано, см. выше)
+файл → spool (stage_attachment) → KnowledgePendingAttachment (FIFO по
+       created_at внутри channel) → меню доменов владельцу
+следующее сообщение того же канала:
+  номер/имя домена → resolve_pending_domain → atomic move в
+                     raw/<domain>/ → register_file_for_ingest()
+  "отмена"/cancel/нет → снять запись, удалить файл из spool
+  что угодно ещё → меню повторяется, pending не трогается
 ```
 
-Каталог spool создан (`scripts/knowledge-bootstrap.sh`), но ничего в
-него не пишет — ни `helm-control` (Telegram), ни `/hooks/max` (MAX)
-сегодня не обрабатывают вложения, только текст. Это следующий шаг
-(P8.5.7): доставка файла от Telegram/MAX до `register_file_for_ingest()`
-— сама функция и всё, что после неё, уже готовы и протестированы.
+Пока есть неразрешённое вложение на канале — следующее текстовое
+сообщение перехватывается этим диалогом и не доходит до `register()`/
+Probe/chief (осознанно, не баг: «отмена» снимает вложение, если владелец
+на самом деле хотел спросить что-то другое).
+
+`simpas/zapiski` через этот диалог принудительно получает
+`sensitivity=client_restricted` (§14.15: "not indexed into general
+namespaces") — `probe()` обновлён исключать этот домен из общего поиска
+по умолчанию тем же способом, что уже исключён `health`
+(`test_zapiski_domain_excluded_from_general_query`).
+
+**MAX — реализовано и покрыто тестами** (20 новых тестов: `tests/
+test_knowledge_chat_intake.py` — движок диалога изолированно, `tests/
+test_max_channel.py` — весь путь через реальный HTTP `/hooks/max`):
+вебхук сам скачивает вложение (`channels/max.py::download_attachment`)
+и передаёт в `stage_attachment()`. Повторная доставка вебхука дедуплена
+отдельно от `IngestService.register()` (`ingest.py::
+record_channel_event_once` — у вложения нет текста для обычного
+`normalized_hash`-дедупа, и `register()` не должен вызываться для этого
+сообщения вообще).
+
+**Не подтверждено живьём**: `parse_attachment()` разбирает
+`message.body.attachments[].payload.url` — форма, документированная у
+TamTam-производных Bot API, но `dev.max.ru` недоступен из
+egress-политики песочницы разработки. Расхождение не роняет вебхук
+(`MaxAttachmentUnsupported` перехватывается, владелец получает
+нейтральное «не смог скачать», лог несёт имена полей payload, не
+значения) — см. `scripts/knowledge-attachment-deploy-runbook.md` шаг 3
+для того, как этим воспользоваться при первом реальном файле.
+
+**Telegram — не реализовано.** `hermes/plugins/helm-control/__init__.py`
+работает синхронным колбэком внутри процесса Hermes gateway (не Control
+Plane, не Docker) — неизвестно без чтения реального исходника, несёт ли
+`event` что-то про вложение и доступен ли токен бота для его скачивания
+(спека сама допускает оба исхода — §14.5.1, "smallest transport adapter"
+как легитимный запасной путь, ADR-018 по нумерации спеки). Read-only
+разведка — `scripts/knowledge-telegram-attachment-recon.sh`; код и
+решение появятся в `ADR-021` после неё, не раньше.
+
+Каталог spool (`scripts/knowledge-bootstrap.sh`) теперь `770 + setgid`
+(было `700`) — пишут туда ДВЕ разные стороны под разными UID: Hermes
+(хостовый процесс, для будущей Telegram-стороны) и контейнер `helm-core`
+(для MAX, уже реализовано) — тот же паттерн, что уже применён к самому
+Vault в P8.5.2 (`group_add` + setgid, не буквальный "ровно один UID").
 
 ## Чего нет: аудио — GigaAM (§14.7) — P8.5.3
 
@@ -151,9 +192,12 @@ line, актуальной на дату установки) живым бенч
 `tests/test_knowledge_parsers.py` (11), `tests/test_knowledge_worker.py`
 (9, включая регрессию на краш-луп — `Path.write_text` монкипатчится на
 `PermissionError` после успешного парсинга, проверяется `FAILED` вместо
-падения процесса), `tests/test_knowledge_probe.py` (13, включая
-`ingest_text()`) — 158/158 зелёных вместе с остальным control-plane.
-Fixture-матрица §30.8.5 полностью (сложный/табличный PDF, скан, аудио,
+падения процесса), `tests/test_knowledge_probe.py` (15, включая
+`ingest_text()` и исключение `simpas/zapiski` из общего поиска),
+`tests/test_knowledge_chat_intake.py` (19, движок двухшагового диалога
+изолированно) — 191/191 зелёных вместе с остальным control-plane
+(включая MAX-вложения в `tests/test_max_channel.py`). Fixture-матрица
+§30.8.5 полностью (сложный/табличный PDF, скан, аудио,
 prompt-injection документ) недостижима без живой проверки GigaAM на
 сервере (Docling-часть уже подтверждена живьём выше) — появится вместе
 с P8.5.3.

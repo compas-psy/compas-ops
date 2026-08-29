@@ -90,11 +90,17 @@ def _lexical_search(session: Session, *, query: str, domain: str | None) -> list
         .order_by(rank.desc())
         .limit(MAX_EVIDENCE)
     )
-    # §14.15: health не входит в обычный поиск по умолчанию — chief не
-    # получает raw health RAG на общий вопрос, только на явный health-scope
-    # (reviewer temporary explicit scope — отдельный механизм, не эта функция).
+    # §14.15: health и simpas/zapiski не входят в обычный поиск по
+    # умолчанию. health — chief не получает raw health RAG на общий
+    # вопрос, только на явный health-scope (reviewer temporary explicit
+    # scope — отдельный механизм, не эта функция). simpas/zapiski —
+    # клиентский контент, спека прямо требует "not indexed into general
+    # namespaces" (P8.5.7, chat_intake.py форсирует client_restricted при
+    # ingest) — общий вопрос не должен случайно процитировать заметку о
+    # клиенте, только явный domain="simpas/zapiski".
     stmt = (stmt.where(KnowledgeSource.domain == domain) if domain is not None
-           else stmt.where(KnowledgeSource.domain != KnowledgeDomain.HEALTH))
+           else stmt.where(KnowledgeSource.domain.notin_(
+               [KnowledgeDomain.HEALTH, KnowledgeDomain.SIMPAS_ZAPISKI])))
 
     rows = session.execute(stmt).all()
     return [

@@ -20,13 +20,16 @@ from sqlalchemy import select
 from helm_core.api.security import sign
 from helm_core.app import create_app
 from helm_core.channels.max import (
-    InboundMax, MaxSender, WEBHOOK_SECRET_HEADER, parse_message_created, verify_webhook_secret,
+    InboundMax, MaxAttachmentUnsupported, MaxSender, WEBHOOK_SECRET_HEADER,
+    download_attachment, parse_attachment, parse_message_created, verify_webhook_secret,
 )
 from helm_core.config import Settings
 from helm_core.dispatch import BACKOFF, MAX_ATTEMPTS, deliver_pending
 from helm_core.hermes_bridge import HermesUnavailable
 from helm_core.ingest import CROSS_CHANNEL_WINDOW, strip_force_prefix
-from helm_core.models import Base, ChannelEvent, OutboxMessage, Task, utcnow
+from helm_core.models import (
+    Base, ChannelEvent, KnowledgePendingAttachment, KnowledgeSource, OutboxMessage, Task, utcnow,
+)
 from helm_core.outbox import enqueue
 
 from conftest import DB_URL, OWNER_ID, POLICY_PATH
@@ -139,6 +142,60 @@ def test_parse_message_created_coerces_ids_to_str():
 ])
 def test_parse_message_created_ignores_foreign_events(update):
     assert parse_message_created(update) is None
+
+
+# ── P8.5.7: вложения ──────────────────────────────────────────────────────
+
+def test_parse_message_created_accepts_attachment_without_text():
+    """Раньше отсутствие text отбрасывало ЛЮБОЕ сообщение — включая файл
+    без подписи (P8.5.7 меняет это, не трогая случай пустого текста БЕЗ
+    вложения — см. test_parse_message_created_ignores_foreign_events)."""
+    update = _update(text="")
+    update["message"]["body"]["attachments"] = [{"type": "file", "payload": {"url": "x"}}]
+
+    parsed = parse_message_created(update)
+
+    assert parsed is not None
+    assert parsed.text == ""
+    assert parsed.attachments == [{"type": "file", "payload": {"url": "x"}}]
+
+
+def test_parse_attachment_extracts_url():
+    attachment = {"type": "file", "filename": "report.pdf",
+                 "payload": {"url": "https://cdn.max.ru/f/abc"}}
+
+    parsed = parse_attachment(attachment)
+
+    assert parsed.kind == "file"
+    assert parsed.filename == "report.pdf"
+    assert parsed.url == "https://cdn.max.ru/f/abc"
+
+
+def test_parse_attachment_unknown_shape_raises_with_field_names_not_values():
+    attachment = {"type": "file", "payload": {"token": "secret-token-value"}}
+
+    with pytest.raises(MaxAttachmentUnsupported) as exc_info:
+        parse_attachment(attachment)
+
+    assert exc_info.value.payload_keys == ["token"]
+    assert "secret-token-value" not in str(exc_info.value)
+
+
+def test_download_attachment_fetches_bytes():
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b"file bytes"
+
+    with patch("urllib.request.urlopen", return_value=_FakeResponse()):
+        data = download_attachment("https://cdn.max.ru/f/abc")
+
+    assert data == b"file bytes"
 
 
 @pytest.mark.parametrize("provided, expected_ok", [
@@ -352,6 +409,127 @@ def test_webhook_does_not_call_chief_twice_on_redelivery(app, client):
     assert second.status_code == 200
     assert second.json()["status"] == "duplicate"
     assert len(app.state.hermes_bridge.calls) == 1
+
+
+# ── P8.5.7: вложения / двухшаговый диалог доменов ────────────────────────
+
+def _attachment_update(*, mid: str = "mid.att", attachment: dict | None = None,
+                       text: str = "") -> dict:
+    update = _update(text=text, mid=mid)
+    update["message"]["body"]["attachments"] = [
+        attachment or {"type": "file", "filename": "report.pdf",
+                      "payload": {"url": "https://cdn.max.ru/f/abc"}}
+    ]
+    return update
+
+
+def test_webhook_stages_attachment_and_asks_for_domain(app, client):
+    with patch("helm_core.api.hooks.download_attachment", return_value=b"file bytes"):
+        response = post_hook(client, _attachment_update())
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "attachment_staged"
+    assert app.state.hermes_bridge.calls == []
+    with app.state.session_factory() as session:
+        pending = session.scalars(select(KnowledgePendingAttachment)).one()
+        assert pending.channel == "max"
+        assert pending.original_filename == "report.pdf"
+        message = session.scalars(select(OutboxMessage)).one()
+        assert "report.pdf" in message.payload_reference["text"]
+        assert "1. personal" in message.payload_reference["text"]
+        assert session.scalars(select(Task)).all() == []
+
+
+def test_webhook_resolves_pending_domain_and_ingests(app, client):
+    with patch("helm_core.api.hooks.download_attachment", return_value=b"file bytes"):
+        post_hook(client, _attachment_update())
+
+    response = post_hook(client, _update(text="engineering", mid="mid.domain-reply"))
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "attachment_ingested"
+    assert app.state.hermes_bridge.calls == []
+    with app.state.session_factory() as session:
+        assert session.scalars(select(KnowledgePendingAttachment)).all() == []
+        source = session.scalars(select(KnowledgeSource)).one()
+        assert source.domain == "engineering"
+        assert source.original_filename == "report.pdf"
+        assert session.scalars(select(Task)).all() == []
+
+
+def test_webhook_zapiski_domain_reply_forces_client_restricted(app, client):
+    with patch("helm_core.api.hooks.download_attachment", return_value=b"client note"):
+        post_hook(client, _attachment_update(mid="mid.att-2"))
+
+    post_hook(client, _update(text="simpas/zapiski", mid="mid.domain-reply-2"))
+
+    with app.state.session_factory() as session:
+        source = session.scalars(select(KnowledgeSource)).one()
+        assert source.domain == "simpas/zapiski"
+        assert source.sensitivity == "client_restricted"
+
+
+def test_webhook_invalid_domain_reply_reprompts_without_calling_chief(app, client):
+    with patch("helm_core.api.hooks.download_attachment", return_value=b"file bytes"):
+        post_hook(client, _attachment_update())
+
+    response = post_hook(client, _update(text="какая погода", mid="mid.invalid-reply"))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "attachment_domain_invalid"
+    assert app.state.hermes_bridge.calls == []
+    with app.state.session_factory() as session:
+        assert session.scalars(select(KnowledgePendingAttachment)).one() is not None
+        assert session.scalars(select(Task)).all() == []
+
+
+def test_webhook_cancel_removes_pending_attachment(app, client):
+    with patch("helm_core.api.hooks.download_attachment", return_value=b"file bytes"):
+        post_hook(client, _attachment_update())
+
+    response = post_hook(client, _update(text="отмена", mid="mid.cancel-reply"))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "attachment_cancelled"
+    with app.state.session_factory() as session:
+        assert session.scalars(select(KnowledgePendingAttachment)).all() == []
+        assert session.scalars(select(KnowledgeSource)).all() == []
+
+
+def test_webhook_duplicate_attachment_delivery_is_deduped(app, client):
+    with patch("helm_core.api.hooks.download_attachment",
+              return_value=b"file bytes") as fake_download:
+        first = post_hook(client, _attachment_update())
+        second = post_hook(client, _attachment_update())
+
+    assert first.json()["status"] == "attachment_staged"
+    assert second.json()["status"] == "duplicate"
+    assert fake_download.call_count == 1
+    with app.state.session_factory() as session:
+        assert len(session.scalars(select(KnowledgePendingAttachment)).all()) == 1
+
+
+def test_webhook_attachment_download_failure_notifies_owner(app, client):
+    with patch("helm_core.api.hooks.download_attachment", side_effect=OSError("boom")):
+        response = post_hook(client, _attachment_update())
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "attachment_failed"
+    with app.state.session_factory() as session:
+        assert session.scalars(select(KnowledgePendingAttachment)).all() == []
+        message = session.scalars(select(OutboxMessage)).one()
+        assert "скачать" in message.payload_reference["text"]
+
+
+def test_webhook_unknown_attachment_shape_notifies_owner_instead_of_crashing(app, client):
+    bad_attachment = {"type": "file", "payload": {"token": "opaque"}}
+
+    response = post_hook(client, _attachment_update(attachment=bad_attachment))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "attachment_failed"
+    with app.state.session_factory() as session:
+        assert session.scalars(select(KnowledgePendingAttachment)).all() == []
 
 
 def test_webhook_answers_locally_without_calling_chief_when_probe_finds_answer(app, client):

@@ -472,6 +472,38 @@ class KnowledgeIngestJob(Base):
     __table_args__ = (Index("ix_knowledge_ingest_jobs_status", "status", "created_at"),)
 
 
+class KnowledgePendingAttachment(Base):
+    """Файл, уже сохранённый в spool, ждущий ответа владельца с доменом
+    (P8.5.7, §14.5.1 + двухшаговый диалог — решение владельца 29.08.2026).
+
+    Owner-attachment-first: байты уходят в spool ДО какого-либо решения о
+    домене (спека требует preserve-before-parse, а не только
+    preserve-before-parser). Эта строка — единственный след файла между
+    "получили" и "разложили в raw/<domain>/"; следующее сообщение
+    владельца на ТОМ ЖЕ канале резолвит домен и завершает P8.5.7-pipeline
+    (`chat_intake.py`). FIFO по `created_at` внутри одного `channel`:
+    несколько неразрешённых вложений подряд — редкий, но не запрещённый
+    случай, разрешается по очереди, а не последним/первым произвольно.
+    """
+
+    __tablename__ = "knowledge_pending_attachments"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    #: telegram | max — тот же словарь, что у KnowledgeIngestJob.channel.
+    channel: Mapped[str] = mapped_column(String(32), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    spool_path: Mapped[str] = mapped_column(Text, nullable=False)
+    original_filename: Mapped[str | None] = mapped_column(String(255))
+    mime_type: Mapped[str | None] = mapped_column(String(128))
+    #: Подпись/caption, отправленная вместе с файлом, если была — только
+    #: для текста запроса на домен, дальше в KnowledgeSource не переносится.
+    caption: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (Index("ix_knowledge_pending_attachments_channel_created",
+                            "channel", "created_at"),)
+
+
 class KnowledgeAnswerRun(Base):
     """§14.14: поля заданы спекой дословно. Это метрика paid-AI avoidance,
     не отладочный журнал — Panel читает её напрямую («Система → Интеграции»,

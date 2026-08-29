@@ -20,12 +20,15 @@ pack, когда локального ответа объективно недо
 | P8.5.4 остаток — pg_trgm, dense/embeddings, pgvector, rank fusion | ❌ не реализовано |
 | P8.5.5 остаток — Z2 (опциональный локальный генератор) | ❌ не реализовано (спекой разрешено оставить выключенным) |
 | P8.5.6 Graphify challenger | ❌ не реализовано |
-| P8.5.7 Telegram/MAX ingress вложений (spool → RAW → register_file_for_ingest) | ❌ не реализовано (async-парсинг, к которому оно ведёт, — уже готов, P8.5.2 выше) |
+| P8.5.7 Telegram/MAX ingress вложений (spool → RAW → register_file_for_ingest, двухшаговый диалог домена) | ⚠️ MAX-сторона реализована и протестирована (191 тест), не задеплоена; форма MAX-вложения не подтверждена живьём (`ADR-021`). Telegram-сторона не реализована — ждёт живой разведки хука Hermes (`scripts/knowledge-telegram-attachment-recon.sh`) |
 | P8.5.8 Panel строка Knowledge | ❌ не реализовано (бессмысленно без данных) |
 
 Подробности реализации — в `docs/KNOWLEDGE_INGEST.md` (что и как попадает
 в базу) и `docs/KNOWLEDGE_RETRIEVAL.md` (что и как из неё достаётся).
 Статус выбора моделей (embeddings/GigaAM/Z2) — `docs/KNOWLEDGE_MODELS.md`.
+Вложения Telegram/MAX (P8.5.7): двухшаговый диалог выбора домена, MAX-
+транспорт, открытый вопрос по Telegram-транспорту — `docs/adr/ADR-021-
+knowledge-attachment-transport.md`.
 Методология перехода на v3.4 и список того, что осталось —
 `implementation-state/V3.4-DELTA.md`.
 

@@ -117,6 +117,28 @@ def test_health_domain_reachable_with_explicit_scope(session):
     assert result.outcome == "LOCAL_ANSWER"
 
 
+def test_zapiski_domain_excluded_from_general_query(session):
+    """§14.15: 'ЗАПИСКИ client content: NEVER AUTO-INGEST ... not indexed
+    into general namespaces' — тот же паттерн исключения, что у health."""
+    ingest_text(session, domain="simpas/zapiski", text="Клиент рассказал про тревогу на работе.")
+    session.flush()
+
+    result = probe(session, query="что там про тревогу на работе")
+
+    assert result.outcome == "NEEDS_REASONING", (
+        "simpas/zapiski не должен попадать в обычный поиск без явного domain (§14.15)"
+    )
+
+
+def test_zapiski_domain_reachable_with_explicit_scope(session):
+    ingest_text(session, domain="simpas/zapiski", text="Клиент рассказал про тревогу на работе.")
+    session.flush()
+
+    result = probe(session, query="что там про тревогу на работе", domain="simpas/zapiski")
+
+    assert result.outcome == "LOCAL_ANSWER"
+
+
 def test_general_query_does_not_leak_across_other_domains_by_mistake(session):
     """Явный domain-фильтр не даёт постороннему контенту просочиться —
     базовая проверка, что фильтр domain реально применяется, а не игнорируется."""

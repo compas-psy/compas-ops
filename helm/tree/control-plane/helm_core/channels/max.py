@@ -28,7 +28,7 @@ import json
 import ssl
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 API_BASE = "https://platform-api2.max.ru"
@@ -60,12 +60,24 @@ def verify_webhook_secret(expected: str, provided: str | None) -> bool:
 
 @dataclass(frozen=True)
 class InboundMax:
-    """Входящее сообщение MAX, приведённое к тому, что нужно Control Plane."""
+    """Входящее сообщение MAX, приведённое к тому, что нужно Control Plane.
 
-    text: str
+    `text` — None для сообщения, состоящего только из вложения (P8.5.7):
+    раньше такое сообщение просто отбрасывалось (`not text` был частью
+    условия отказа), значит регрессии для существующего пути нет — просто
+    появился новый валидный случай, которого раньше не пропускала сама
+    функция разбора.
+    """
+
+    text: str | None
     sender_id: str
     chat_id: str
     message_id: str
+    #: Сырые элементы `message.body.attachments`, ещё не разобранные —
+    #: `parse_attachment()` ниже. Пустой список для обычного текстового
+    #: сообщения (default, не None — `attachments or []` в вызывающем коде
+    #: не понадобится).
+    attachments: list[dict] = field(default_factory=list)
 
 
 def parse_message_created(update: dict) -> InboundMax | None:
@@ -88,13 +100,68 @@ def parse_message_created(update: dict) -> InboundMax | None:
     sender_id = sender.get("user_id")
     chat_id = recipient.get("chat_id")
     message_id = body.get("mid")
+    attachments = body.get("attachments") or []
 
     # Приведение к str обязательно: id в MAX — числа (как и в Telegram, где
     # это уже стоило одного живого 422 на int message_id, см. helm-control).
-    if not text or sender_id is None or chat_id is None or not message_id:
+    # Сообщение валидно, если есть текст ИЛИ хотя бы одно вложение (P8.5.7)
+    # — раньше отсутствие текста само по себе отбрасывало любое сообщение,
+    # включая файл без подписи.
+    if (not text and not attachments) or sender_id is None or chat_id is None or not message_id:
         return None
-    return InboundMax(text=text, sender_id=str(sender_id),
-                      chat_id=str(chat_id), message_id=str(message_id))
+    return InboundMax(text=text, sender_id=str(sender_id), chat_id=str(chat_id),
+                      message_id=str(message_id), attachments=attachments)
+
+
+class MaxAttachmentUnsupported(Exception):
+    """Payload вложения не совпал с ожидаемой формой (P8.5.7).
+
+    НЕ ПОДТВЕРЖДЕНО ЖИВЬЁМ: `dev.max.ru` недоступен из egress-политики
+    песочницы разработки — тот же класс ограничения, что был у
+    `huggingface.co` для Docling (P8.5.2). Форма ниже (`payload.url` для
+    входящего файла) — по документированному поведению TamTam-производных
+    Bot API, не проверена реальным вебхуком. Сообщение исключения несёт
+    ИМЕНА полей payload, не значения (там может быть токен) — первый живой
+    сбой сразу покажет, чего не хватает, вместо повторного гадания.
+    """
+
+    def __init__(self, kind: str, payload_keys: list[str]):
+        self.kind = kind
+        self.payload_keys = payload_keys
+        super().__init__(f"неизвестная форма payload для типа={kind!r}, ключи={payload_keys}")
+
+
+@dataclass(frozen=True)
+class InboundMaxAttachment:
+    kind: str
+    filename: str | None
+    url: str
+
+
+def parse_attachment(attachment: dict) -> InboundMaxAttachment:
+    """Разбор одного элемента `message.body.attachments`. См. предупреждение
+    у `MaxAttachmentUnsupported` — форма не подтверждена живым тестом."""
+    kind = attachment.get("type", "")
+    payload = attachment.get("payload") or {}
+    url = payload.get("url")
+    if not url:
+        raise MaxAttachmentUnsupported(kind, sorted(payload.keys()))
+    filename = attachment.get("filename") or payload.get("filename")
+    return InboundMaxAttachment(kind=kind, filename=filename, url=url)
+
+
+def download_attachment(url: str, *, timeout: int = REQUEST_TIMEOUT_SECONDS) -> bytes:
+    """Скачать байты уже готового URL вложения (см. `parse_attachment`).
+
+    Корень Минцифры нужен и здесь: если MAX отдаёт вложения со своего же
+    домена (или поддомена), сертификат тот же, что у `platform-api2.max.ru`
+    (F-260829-19); если реальный CDN окажется на ДРУГОМ домене с обычным
+    публичным сертификатом — контекст всё равно доверяет обычным корням,
+    добавляя связку Минцифры поверх, а не вместо (см. `ssl_context()`).
+    """
+    request = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(request, timeout=timeout, context=ssl_context()) as response:
+        return response.read()
 
 
 def ssl_context() -> ssl.SSLContext:
