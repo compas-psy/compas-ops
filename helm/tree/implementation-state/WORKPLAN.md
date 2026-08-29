@@ -4,7 +4,52 @@
 каждой значимой задачи — это заменяет необходимость владельцу писать
 «продолжай».
 
-## Текущая фаза: **P4 и P5 закрыты.** Остаток до Milestone A: A-DoD п.4-6 (GREEN/YELLOW/RED-поток end-to-end на живом Hermes-действии) и п.9 (reboot VPS не ломает core loop) — ещё не проверены вживую на этом сервере (офлайн policy-движок/action registry прошёл 49 тестов, но не через реальный Hermes→Control Plane поток).
+## Текущая фаза: **P4 и P5 закрыты. A-DoD п.4-6 закрыты.** Остаток до Milestone A: только п.9 (reboot VPS не ломает core loop).
+
+## A-DoD п.4-6 — GREEN/YELLOW/RED-поток (закрыто)
+
+**Найден и исправлен реальный баг, не пойманный офлайн-тестами:**
+`propose()` создавал PENDING-approval для ЛЮБОГО уровня (включая GREEN), а
+`execute_direct()` (прямое исполнение GREEN/YELLOW) не вызывался НИ ОДНИМ
+HTTP-роутом control-plane — только тестами напрямую. Значит через настоящий
+вход, которым будет пользоваться Hermes (`/internal/actions/propose`), GREEN
+зависал бы в PENDING навсегда, хотя офлайн `test_green_and_yellow_execute_
+without_approval` проходил — он вызывал `execute_direct()` в обход
+`propose()`. Исправлено: `propose()` теперь сам доводит GREEN/YELLOW до
+`EXECUTED` (переиспользуя протестированный `execute_approved()`); RED
+по-прежнему остаётся PENDING. Три существующих теста, тестировавших
+`decide()`/TTL-механику на `kanban_snapshot` (YELLOW, что перестало иметь
+смысл), переведены на `publish_public_content` (RED). Добавлен
+`test_propose_auto_executes_green_and_yellow`.
+
+**Вторая находка тем же смоук-тестом:** `/internal/approvals/{id}/decision`
+не ловил `PreconditionFailed` (не подкласс `ApprovalError`) — approve=true
+на RED, чьё предусловие перестало выполняться между propose и decision
+(§8.4, перепроверка перед исполнением), улетал голым `500 Internal Server
+Error`. Исправлено: отдельный `except PreconditionFailed` → `409`.
+
+**Проверено вживую через реальный HTTP + HMAC** (`scripts/test_action_flow.sh`,
+не только 57 офлайн pytest-тестов — прогнаны локально против настоящего
+PostgreSQL 16 + pgvector в песочнице, 1 несвязанный сбой — см. находку ниже):
+- п.4: `notify_owner` (GREEN) и `kanban_snapshot` (YELLOW) — `status:
+  EXECUTED` сразу при `propose()`.
+- п.5: `publish_public_content` (RED) — `status: PENDING`; decision чужой
+  identity (`tg:999999999` vs реальный `182398258`) — чистый отказ с
+  сообщением, не 500.
+- п.6: повторный `propose()` того же GREEN-действия (тот же payload, тот
+  же idempotency-key) вернул ТОТ ЖЕ `approval_id`, уже `EXECUTED` — не
+  второе исполнение. Прямое исполнение одобренного RED сейчас физически
+  недостижимо (`ALLOWED_PUBLIC_CHANNELS` пуст до P10, см. распоряжение
+  владельца выше) — exact-once проверен на том же механизме через GREEN,
+  это было явно согласовано с владельцем перед тестом.
+
+**Известный несвязанный сбой офлайн-тестов** (не трогал, не по теме):
+`test_guardian_status_is_served_from_file` (test_perimeter.py) ищет в
+Caddyfile устаревший `handle /guardian/status.json` — мы ещё раньше в этом
+цикле поменяли на рабочий `handle_path /guardian/*` (см. P2 находки), тест
+не обновили. Функциональность работает (проверено живым curl на
+`/guardian/status.json`), тест — тестовый долг, требует отдельного
+one-line фикса не в рамках этой задачи.
 
 ## P5 — Guardian + Backup (закрыто)
 

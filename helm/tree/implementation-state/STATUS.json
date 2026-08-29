@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-08-29T09:15:00Z",
-  "phase": "P5-done",
-  "task": "P4 и P5 закрыты. P5: Guardian развёрнут (systemd, каждые 5 мин, реальные метрики, overall=warn — только ещё не собранный chief API server порт 8765, некритично); backup — restic поверх rclone/Яндекс Диск WebDAV (rclone:yandex:helm-backup), ежедневный таймер 03:30 MSK; A-DoD п.10 подтверждён живым restore-test в изолированный одноразовый Postgres-контейнер (реальные данные восстановлены). Найдена и исправлена причина 401 на Яндекс WebDAV — логин не должен содержать @yandex.ru/@yandex. (Yandex-Uid: 0 в ответе — верный диагностический признак). Владелец распорядился: backup двухэтапный — P5 покрывает Postgres/config/Hermes state, в P6.5 (после Forgejo) добавить Forgejo repos/DB/PR-metadata в тот же restic offsite и сделать отдельный restore-test репозитория (refs/tags/HEAD). Осталось до Milestone A: A-DoD п.4-6 (GREEN/YELLOW/RED approval-поток на живом Hermes-действии, офлайн 49 тестов пройдены, но не через реальный live-поток) и п.9 (reboot VPS).",
+  "updated_at": "2026-08-29T09:45:00Z",
+  "phase": "milestone-a-almost-done",
+  "task": "P4, P5, A-DoD п.4-6 все закрыты. Осталось до Milestone A только п.9 (reboot VPS). A-DoD п.4-6: найден и исправлен реальный баг — propose() не проверял уровень и всегда создавал PENDING (execute_direct() для GREEN/YELLOW не вызывался НИ ОДНИМ HTTP-роутом, только тестами в обход propose()); теперь propose() сам исполняет GREEN/YELLOW через execute_approved(). Вторая находка тем же смоук-тестом: /internal/approvals/{id}/decision не ловил PreconditionFailed, отдавал голый 500 вместо 409. Оба фикса подтверждены и офлайн-тестами (57 pytest локально против настоящего Postgres16+pgvector в песочнице agent'а) и живым HTTP+HMAC на сервере (scripts/test_action_flow.sh): GREEN/YELLOW исполняются сразу, RED остаётся PENDING и блокирует чужую identity, повторный propose() не исполняет дважды. P5: Guardian живой, backup/restore через restic+rclone/Яндекс Диск подтверждён (A-DoD п.10). Владелец распорядился: backup двухэтапный, Forgejo repos войдут в P6.5.",
   "worker": "orchestrator",
   "model": "claude-sonnet-5",
   "status": "in_progress",
@@ -41,6 +41,12 @@
       "severity": "medium"
     },
     {
+      "id": "F-260829-04",
+      "description": "tests/test_perimeter.py::test_guardian_status_is_served_from_file ищет в Caddyfile строку 'handle /guardian/status.json' — устаревшую версию, замененную на рабочую 'handle_path /guardian/*' ещё при P2 bring-up этого же цикла. Тест не обновили. Функциональность живая и рабочая (подтверждено curl на /guardian/status.json), это чисто тестовый долг.",
+      "mitigation": "поправить тест на handle_path /guardian/* при следующем touch test_perimeter.py — однострочный фикс, не блокирует ничего прямо сейчас",
+      "severity": "low"
+    },
+    {
       "id": "F-260829-03",
       "description": "Яндекс Диск WebDAV (webdav.yandex.ru) отвергает логин в формате полного email (user@yandex.ru или обрезанного user@yandex.) — 401 Unauthorized с заголовком Yandex-Uid: 0 (сервер не резолвит identity вообще, это не 'неверный пароль'). Ожидает голый логин без домена. С 22.06.2026 WebDAV-доступ к Яндекс Диску также требует подписку Яндекс 360.",
       "mitigation": "YANDEX_WEBDAV_USER — только локальная часть логина, без @yandex.ru; при 401 на Яндекс WebDAV сразу проверять заголовок Yandex-Uid в ответе — 0 значит проблема с логином, не с паролем",
@@ -70,6 +76,10 @@
     {
       "item": "P5 Guardian + Backup, A-DoD п.10",
       "note": "Guardian живой (systemd timer 5 мин, реальные метрики). Backup — restic поверх rclone/Яндекс Диск WebDAV, ежедневный таймер. Restore-test прошёл в изолированном одноразовом Postgres-контейнере с реальными данными (не заглушка)."
+    },
+    {
+      "item": "A-DoD п.4-6 GREEN/YELLOW/RED approval flow",
+      "note": "Два реальных бага найдены живым смоук-тестом и исправлены: propose() не auto-исполнял GREEN/YELLOW (execute_direct нигде не вызывался из HTTP), decision() отдавал 500 вместо 409 на PreconditionFailed. Подтверждено и офлайн-тестами (57 pytest), и живым HTTP+HMAC на сервере."
     }
   ],
   "found_and_fixed_this_bring_up": [
