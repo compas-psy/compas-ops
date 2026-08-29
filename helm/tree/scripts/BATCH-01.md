@@ -41,15 +41,25 @@ ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "test -d /opt/h
 
 ## Шаг 2. Секреты MAX → пересборка → регистрация вебхука
 
-Нужны два значения: **токен бота** и **секрет вебхука** (его придумываешь
-сам, например `openssl rand -base64 24`). Третий, `max_owner_id`,
-кладётся нулём — настоящее число узнается на шаге 2.3.
+От тебя нужен **только токен бота** (в MAX: настройки бота →
+Расширенные настройки → Чат-бот → Токен доступа).
+
+Секрет вебхука в MAX не выдаётся и в его интерфейсе отсутствует
+намеренно: это значение придумывает наша сторона и передаёт в MAX при
+регистрации подписки (шаг 2.2), а MAX затем присылает его обратно в
+заголовке `X-Max-Bot-Api-Secret` каждого вызова — так Control Plane
+отличает настоящий вебхук от подделки. Команда ниже генерирует его на
+самом сервере: он не проходит ни через буфер обмена, ни через
+переписку. Третий секрет, `max_owner_id`, кладётся нулём — настоящее
+число узнаётся на шаге 2.3.
 
 **2.1. Положить секреты и поднять новый образ:**
 
 ```powershell
-ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "echo 'ТОКЕН_БОТА' | sudo tee /etc/helm/secrets/max_bot_token > /dev/null && echo 'СЕКРЕТ_ВЕБХУКА' | sudo tee /etc/helm/secrets/max_webhook_secret > /dev/null && echo '0' | sudo tee /etc/helm/secrets/max_owner_id > /dev/null && sudo chown root:helm-secrets /etc/helm/secrets/max_bot_token /etc/helm/secrets/max_webhook_secret /etc/helm/secrets/max_owner_id && sudo chmod 640 /etc/helm/secrets/max_bot_token /etc/helm/secrets/max_webhook_secret /etc/helm/secrets/max_owner_id && cd /opt/helm/compose && sudo docker compose build helm-core && sudo docker compose up -d helm-core && sleep 15 && sudo docker compose ps helm-core"
+ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "echo 'ТОКЕН_БОТА' | sudo tee /etc/helm/secrets/max_bot_token > /dev/null && openssl rand -base64 24 | sudo tee /etc/helm/secrets/max_webhook_secret > /dev/null && echo '0' | sudo tee /etc/helm/secrets/max_owner_id > /dev/null && sudo chown root:helm-secrets /etc/helm/secrets/max_bot_token /etc/helm/secrets/max_webhook_secret /etc/helm/secrets/max_owner_id && sudo chmod 640 /etc/helm/secrets/max_bot_token /etc/helm/secrets/max_webhook_secret /etc/helm/secrets/max_owner_id && cd /opt/helm/compose && sudo docker compose build helm-core && sudo docker compose up -d helm-core && sleep 15 && sudo docker compose ps helm-core"
 ```
+
+В команде подставляется одно значение — `ТОКЕН_БОТА`.
 
 Права `640 root:helm-secrets`, а не `600 root:root`: эти файлы читает
 контейнер от непривилегированного пользователя через группу, и `600`
