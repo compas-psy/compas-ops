@@ -151,7 +151,9 @@ def test_only_named_webhooks_are_public():
 def test_guardian_status_is_served_from_file():
     """Статус Guardian обязан работать при мёртвом Control Plane (§25.5)."""
     body = "\n".join(caddy_directives())
-    block = body[body.index("handle /guardian/status.json"):]
+    # handle_path, не handle: префикс срезается из URI (см. комментарий в
+    # Caddyfile — найдено на реальном P2 bring-up, тест обновлён вслед)
+    block = body[body.index("handle_path /guardian/*"):]
     block = block[: block.index("handle", 1)] if "handle" in block[1:] else block
     assert "file_server" in block, "статус Guardian проксируется, а не отдаётся файлом"
     assert "reverse_proxy" not in block

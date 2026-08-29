@@ -113,12 +113,6 @@
       "severity": "medium"
     },
     {
-      "id": "F-260829-04",
-      "description": "tests/test_perimeter.py::test_guardian_status_is_served_from_file ищет в Caddyfile строку 'handle /guardian/status.json' — устаревшую версию, замененную на рабочую 'handle_path /guardian/*' ещё при P2 bring-up этого же цикла. Тест не обновили. Функциональность живая и рабочая (подтверждено curl на /guardian/status.json), это чисто тестовый долг.",
-      "mitigation": "поправить тест на handle_path /guardian/* при следующем touch test_perimeter.py — однострочный фикс, не блокирует ничего прямо сейчас",
-      "severity": "low"
-    },
-    {
       "id": "F-260829-03",
       "description": "Яндекс Диск WebDAV (webdav.yandex.ru) отвергает логин в формате полного email (user@yandex.ru или обрезанного user@yandex.) — 401 Unauthorized с заголовком Yandex-Uid: 0 (сервер не резолвит identity вообще, это не 'неверный пароль'). Ожидает голый логин без домена. С 22.06.2026 WebDAV-доступ к Яндекс Диску также требует подписку Яндекс 360.",
       "mitigation": "YANDEX_WEBDAV_USER — только локальная часть логина, без @yandex.ru; при 401 на Яндекс WebDAV сразу проверять заголовок Yandex-Uid в ответе — 0 значит проблема с логином, не с паролем",
@@ -139,6 +133,10 @@
     }
   ],
   "resolved_this_cycle": [
+    {
+      "item": "F-260829-04 — устаревший test_guardian_status_is_served_from_file",
+      "note": "Тест обновлён на актуальную 'handle_path /guardian/*' (однострочный фикс, обещанный при следующем touch test_perimeter.py). Полный оффлайн-набор control-plane: 74 passed."
+    },
     {
       "item": "P6 (n8n) + P6.5 (Forgejo) — сервисы подняты и подтверждены живьём",
       "note": "git.cmpas.ru отдаёт Forgejo, admin-аккаунт ILYA создан (docker exec -u git ... forgejo admin user create). n8n здоров, пройдена форма первого запуска (owner account) через SSH-туннель 127.0.0.1:5678. БД/роли n8n и forgejo уже существовали в compose/init/01-databases.sql с более раннего офлайн-этапа. 4 находки по пути — F-260829-13 (group_add для секретов n8n), F-260829-14 (N8N_HOST bind-баг, тот же класс что P2 helm-core), F-260829-15 (реальная причина недоступности — OOM, не bind-адрес; лимит памяти 512m -> 1g), F-260829-16 (forgejo CLI требует -u git, не -it). НЕ сделано: миграция 6 репозиториев в Forgejo (§18.3), встраивание Forgejo в restic backup (осмысленно отложено — мигрировать нечего), первый n8n-коннектор (§17.2), OAuth callback route для n8n в Caddyfile (не нужен, пока нет коннектора)."
