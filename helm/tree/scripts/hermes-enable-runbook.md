@@ -23,16 +23,26 @@ F-260829-09).
 
 Hermes работает на хосте, не в контейнере, и читает переменные из
 `~/.hermes/.env` (тот же файл уже входит в `backup.sh`). Значение
-должно СОВПАДАТЬ с шагом 1 — читаем его тем же способом, каким кладём:
+должно СОВПАДАТЬ с шагом 1.
+
+Отдельным скриптом, а не строкой в ssh: `$(sudo cat ...)` внутри
+двойных кавычек PowerShell разворачивается ЛОКАЛЬНО, на Windows, ещё до
+отправки на сервер (та же ловушка, что уже дважды ловилась —
+F-260828-01/02, здесь поймана в третий раз, уже в этом ранбуке). Если
+это уже пробовалось командой с `$(...)` и в ответ пришло что-то вроде
+«Sudo is disabled on this machine» — это ошибка ЛОКАЛЬНОГО Windows
+sudo, а не сервера, и в `~/.hermes/.env` на сервере скорее всего
+осталась битая пустая строка `API_SERVER_KEY=`; скрипт ниже её найдёт и
+заменит (идемпотентен), объяснять/чистить руками не нужно.
 
 ```powershell
-ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "echo API_SERVER_KEY=$(sudo cat /etc/helm/secrets/hermes_api_server_key) | sudo tee -a /home/helm/.hermes/.env > /dev/null && sudo chown helm:helm /home/helm/.hermes/.env && grep -c API_SERVER_KEY /home/helm/.hermes/.env"
+cd D:\ПРОЕКТЫ\simpas\helm\compas-ops
+git pull origin claude/ai-agents-server-deployment-xdp77a
+scp -i "C:\Users\eliah\.ssh\helm_deploy_key" helm\tree\scripts\hermes-set-api-key.sh helm@185.250.44.137:/tmp/
+ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "sudo bash /tmp/hermes-set-api-key.sh"
 ```
 
-Если строка `API_SERVER_KEY=` там уже была (маловероятно, но проверить
-стоит) — не добавлять вторую, а заменить старую; вторая строка того же
-ключа в `.env` обычно означает «последняя побеждает», но полагаться на
-это не стоит.
+Ожидается «готово, строк API_SERVER_KEY= в файле: 1».
 
 ## 3. Перезапустить Hermes gateway
 
