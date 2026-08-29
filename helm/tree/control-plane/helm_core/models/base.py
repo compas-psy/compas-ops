@@ -79,3 +79,67 @@ class Channel(enum.StrEnum):
     PANEL = "panel"
     MAX = "max"
     SYSTEM = "system"
+
+
+class KnowledgeDomain(enum.StrEnum):
+    """Namespaces HELM Knowledge (ТЗ §14.15). Список закрытый: новый домен —
+    решение владельца, не то, что заводится на лету произвольной строкой."""
+
+    PERSONAL = "personal"
+    HEALTH = "health"
+    SIMPAS_COMPANY = "simpas/company"
+    SIMPAS_PRACTICE = "simpas/practice"
+    SIMPAS_ZAPISKI = "simpas/zapiski"
+    SIMPAS_MOMENTS = "simpas/moments"
+    PSY_MARKETING = "psy-marketing"
+    VENTURES = "ventures"
+    ENGINEERING = "engineering"
+    SIGNALAI_DOCS = "signalai-docs"
+
+
+class KnowledgeSensitivity(enum.StrEnum):
+    """§14.3 markdown contract: `sensitivity`."""
+
+    PUBLIC = "public"
+    INTERNAL = "internal"
+    PERSONAL = "personal"
+    HEALTH = "health"
+    CLIENT_RESTRICTED = "client_restricted"
+
+
+class KnowledgeTrust(enum.StrEnum):
+    """§14.3 markdown contract: `trust`."""
+
+    PRIMARY = "primary"
+    EXTRACTED = "extracted"
+    OWNER_VERIFIED = "owner_verified"
+    INFERRED = "inferred"
+
+
+class KnowledgeStatus(enum.StrEnum):
+    """§14.3 markdown contract: `status`. Общий для sources и notes."""
+
+    ACTIVE = "active"
+    SUPERSEDED = "superseded"
+    ARCHIVED = "archived"
+    #: Не из markdown contract — состояние source, у которого и fast path, и
+    #: Docling дали неуверенный результат (§14.6 «Parser quality gate»):
+    #: «не создавать уверенные knowledge facts» на таком материале.
+    NEEDS_REVIEW = "needs_review"
+
+
+class KnowledgeIngestStatus(enum.StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    NEEDS_REVIEW = "needs_review"
+    FAILED = "failed"
+
+
+class KnowledgeAnswerMode(enum.StrEnum):
+    """§14.12 zero-paid answer modes."""
+
+    Z0 = "Z0"
+    Z1 = "Z1"
+    Z2 = "Z2"
+    C1 = "C1"

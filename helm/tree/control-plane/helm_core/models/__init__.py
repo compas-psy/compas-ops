@@ -1,14 +1,23 @@
-from .base import ApprovalStatus, Base, Channel, TaskStatus, utcnow
+from .base import (
+    ApprovalStatus, Base, Channel, KnowledgeAnswerMode, KnowledgeDomain,
+    KnowledgeIngestStatus, KnowledgeSensitivity, KnowledgeStatus, KnowledgeTrust,
+    TaskStatus, utcnow,
+)
 from .tables import (
     ActionTrust, Approval, Artifact, BudgetDaily, ChannelEvent, Decision,
-    MetricPoint, ModelRun, OutboxMessage, PanelEnrollmentToken,
-    PanelSession, PanelStepUpChallenge, Routine, Task, TaskEvent,
-    WebauthnCredential,
+    KnowledgeAnswerRun, KnowledgeChunk, KnowledgeIngestJob, KnowledgeNote,
+    KnowledgeRelation, KnowledgeSource, MetricPoint, ModelRun, OutboxMessage,
+    PanelEnrollmentToken, PanelSession, PanelStepUpChallenge, Routine, Task,
+    TaskEvent, WebauthnCredential,
 )
 
 __all__ = [
     "ActionTrust", "Approval", "ApprovalStatus", "Artifact", "Base",
-    "BudgetDaily", "Channel", "ChannelEvent", "Decision", "MetricPoint",
+    "BudgetDaily", "Channel", "ChannelEvent", "Decision",
+    "KnowledgeAnswerMode", "KnowledgeAnswerRun", "KnowledgeChunk",
+    "KnowledgeDomain", "KnowledgeIngestJob", "KnowledgeIngestStatus",
+    "KnowledgeNote", "KnowledgeRelation", "KnowledgeSensitivity",
+    "KnowledgeSource", "KnowledgeStatus", "KnowledgeTrust", "MetricPoint",
     "ModelRun", "OutboxMessage", "PanelEnrollmentToken", "PanelSession",
     "PanelStepUpChallenge", "Routine", "Task", "TaskEvent", "TaskStatus",
     "WebauthnCredential", "utcnow",

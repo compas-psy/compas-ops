@@ -1,4 +1,4 @@
-"""15 таблиц Control Plane (ТЗ §7.2).
+"""Таблицы Control Plane (ТЗ §7.2) + HELM Knowledge (ТЗ §14, v3.4).
 
 Правила, действующие во всех таблицах:
 
@@ -24,7 +24,12 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from .base import ApprovalStatus, Base, TaskStatus, ts_column, utcnow, uuid_pk
+from sqlalchemy.dialects.postgresql import TSVECTOR
+
+from .base import (
+    ApprovalStatus, Base, KnowledgeIngestStatus, KnowledgeStatus, TaskStatus, ts_column,
+    utcnow, uuid_pk,
+)
 
 
 class Task(Base):
@@ -329,3 +334,161 @@ class MetricPoint(Base):
     labels: Mapped[dict | None] = mapped_column(JSONB)
 
     __table_args__ = (Index("ix_metrics_ts_metric_ts", "metric", "timestamp"),)
+
+
+# ── HELM Knowledge / «второй мозг» (ТЗ §14, v3.4) ──────────────────────────
+#
+# Только лексический слой в этом заходе (V3.4-DELTA.md, "Conflicts found"):
+# dense/pgvector ждёт выбора embedding-модели бенчмарком на живом сервере —
+# pgvector-колонка требует фиксированной размерности, которую нельзя задать
+# заранее (BGE-M3 1024 против e5-base 768, §14.9). Колонка добавится
+# отдельной миграцией после решения, не сейчас.
+
+
+class KnowledgeSource(Base):
+    """L1 SOURCE — нормализованная версия одного исходника (§14.1, §14.4).
+
+    RAW immutable (§14.2) живёт на диске под своим sha256; здесь только
+    метаданные и путь к SOURCE.md, не сам текст — Markdown-файл и Postgres
+    вместе canonical (§14.4), файл не дублируется в БД как BLOB.
+    """
+
+    __tablename__ = "knowledge_sources"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    domain: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: По этому хэшу распознаётся повтор (§14.5: «Повторный файл с тем же
+    #: SHA256 не обрабатывается заново — связывается с существующим source»).
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    raw_path: Mapped[str] = mapped_column(Text, nullable=False)
+    source_path: Mapped[str | None] = mapped_column(Text)
+    original_filename: Mapped[str | None] = mapped_column(String(255))
+    mime_type: Mapped[str | None] = mapped_column(String(128))
+    #: markitdown | docling | gigaam | manual — чем получен source_path.
+    parser: Mapped[str | None] = mapped_column(String(32))
+    sensitivity: Mapped[str] = mapped_column(String(32), default="internal", nullable=False)
+    trust: Mapped[str] = mapped_column(String(32), default="extracted", nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default=KnowledgeStatus.ACTIVE, nullable=False)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("sha256", name="uq_knowledge_sources_sha256"),
+        Index("ix_knowledge_sources_domain_status", "domain", "status"),
+    )
+
+
+class KnowledgeChunk(Base):
+    """Проиндексированный кусок source — лексический слой (§14.9)."""
+
+    __tablename__ = "knowledge_chunks"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("knowledge_sources.id"), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    page: Mapped[int | None] = mapped_column(Integer)
+    time_start_ms: Mapped[int | None] = mapped_column(Integer)
+    time_end_ms: Mapped[int | None] = mapped_column(Integer)
+    #: §14.9: «русская конфигурация для RU». Заполняется приложением
+    #: (to_tsvector('russian', text)) при вставке, не generated column —
+    #: без выражения в generated column миграция проще и переносимее между
+    #: минорными версиями Postgres.
+    tsv: Mapped[str | None] = mapped_column(TSVECTOR)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("source_id", "ordinal", name="uq_knowledge_chunks_source_ordinal"),
+        Index("ix_knowledge_chunks_tsv", "tsv", postgresql_using="gin"),
+    )
+
+
+class KnowledgeNote(Base):
+    """L2 KNOWLEDGE (§14.1, §14.3). Тело заметки — файл на диске
+    (`file_path`); здесь только frontmatter-метаданные для запросов и связей.
+    """
+
+    __tablename__ = "knowledge_notes"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    #: Стабильный id/slug из frontmatter (§14.3: «id: stable.uuid-or-slug»)
+    #: — то, на что ссылаются wikilinks [[concept-id]], не суррогатный PK.
+    slug: Mapped[str] = mapped_column(String(128), nullable=False)
+    type: Mapped[str] = mapped_column(String(32), nullable=False)
+    domain: Mapped[str] = mapped_column(String(32), nullable=False)
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    source_ids: Mapped[list | None] = mapped_column(JSONB)
+    source_sha256: Mapped[list | None] = mapped_column(JSONB)
+    sensitivity: Mapped[str] = mapped_column(String(32), default="internal", nullable=False)
+    trust: Mapped[str] = mapped_column(String(32), default="extracted", nullable=False)
+    #: §14.3: «только для derived/inferred» — NULL для того, что owner
+    #: написал сам, число для того, что вывел HELM.
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    status: Mapped[str] = mapped_column(String(16), default=KnowledgeStatus.ACTIVE, nullable=False)
+    supersedes: Mapped[list | None] = mapped_column(JSONB)
+    contradicts: Mapped[list | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow, nullable=False)
+
+    __table_args__ = (UniqueConstraint("slug", name="uq_knowledge_notes_slug"),)
+
+
+class KnowledgeRelation(Base):
+    """§14.4: минимальные поля заданы спекой дословно."""
+
+    __tablename__ = "knowledge_relations"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    #: Слаг заметки или id source — не FK: узел связи может указывать на
+    #: заметку, которой ещё нет как строки knowledge_notes (owner пишет
+    #: wikilink на будущую заметку) — то же допущение, что у wikilinks в
+    #: Obsidian (§14.3).
+    from_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    to_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    relation_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    evidence_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    source_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("knowledge_sources.id"))
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (Index("ix_knowledge_relations_from", "from_id"),)
+
+
+class KnowledgeIngestJob(Base):
+    """Прогресс одного ingest'а («Гиппокамп», §14.5)."""
+
+    __tablename__ = "knowledge_ingest_jobs"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("knowledge_sources.id"), nullable=False)
+    #: telegram | max | manual — откуда пришёл файл (§14.5.1).
+    channel: Mapped[str | None] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(16), default=KnowledgeIngestStatus.PENDING,
+                                        nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow, nullable=False)
+
+    __table_args__ = (Index("ix_knowledge_ingest_jobs_status", "status", "created_at"),)
+
+
+class KnowledgeAnswerRun(Base):
+    """§14.14: поля заданы спекой дословно. Это метрика paid-AI avoidance,
+    не отладочный журнал — Panel читает её напрямую («Система → Интеграции»,
+    одна строка «free-answer ratio 30d»)."""
+
+    __tablename__ = "knowledge_answer_runs"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+    query_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    domain: Mapped[str | None] = mapped_column(String(32))
+    mode: Mapped[str] = mapped_column(String(8), nullable=False)
+    paid_ai_used: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    evidence_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    local_model: Mapped[str | None] = mapped_column(String(128))
+    cloud_model: Mapped[str | None] = mapped_column(String(128))
+    escalation_reason: Mapped[str | None] = mapped_column(String(128))
+
+    __table_args__ = (Index("ix_knowledge_answer_runs_created", "created_at"),)
