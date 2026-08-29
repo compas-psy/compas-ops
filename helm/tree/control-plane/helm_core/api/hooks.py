@@ -62,6 +62,13 @@ def _run_chief_and_enqueue_reply(state: State, *, task_id: str, owner_id: str,
         try:
             reply_text = state.hermes_bridge.deliver(owner_id=owner_id, text=text)
         except HermesUnavailable as exc:
+            # НАЙДЕНО 29.08.2026: причина падения раньше писалась только в
+            # TaskEvent (БД) — `docker compose logs` не показывал вообще
+            # ничего, и диагностика требовала прямого psql-запроса вместо
+            # обычного просмотра лога. Тип исключения безопасен для лога
+            # (без текста сообщения владельца), полный текст — в TaskEvent.
+            logger.warning("hooks/max: chief недоступен, task_id=%s тип=%s",
+                           task_id, type(exc).__name__)
             session.add(TaskEvent(
                 task_id=task_id, actor="control-plane",
                 event_type="task.hermes_unavailable",

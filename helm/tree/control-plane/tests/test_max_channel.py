@@ -354,7 +354,7 @@ def test_webhook_does_not_call_chief_twice_on_redelivery(app, client):
     assert len(app.state.hermes_bridge.calls) == 1
 
 
-def test_webhook_queues_transport_notice_when_chief_is_down(app, client):
+def test_webhook_queues_transport_notice_when_chief_is_down(app, client, caplog):
     """§10.3: task остаётся REGISTERED, владелец получает транспортное уведомление.
 
     Обработчик вебхука отвечает 'accepted' ВСЕГДА и сразу: вызов Hermes
@@ -364,7 +364,14 @@ def test_webhook_queues_transport_notice_when_chief_is_down(app, client):
     """
     app.state.hermes_bridge = FakeBridge(available=False)
 
-    response = post_hook(client, _update())
+    with caplog.at_level("WARNING"):
+        response = post_hook(client, _update())
+
+    # НАЙДЕНО 29.08.2026: раньше причина падения писалась только в
+    # TaskEvent (БД) — docker compose logs не показывал вообще ничего,
+    # диагностика требовала прямого psql-запроса. Тип исключения
+    # обязан попадать в лог.
+    assert "HermesUnavailable" in caplog.text
 
     assert response.status_code == 202
     assert response.json()["status"] == "accepted"
