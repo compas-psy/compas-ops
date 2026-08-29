@@ -10,6 +10,7 @@ import ssl
 import time
 import uuid
 from datetime import timedelta
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,7 +19,7 @@ from sqlalchemy import select
 from helm_core.api.security import sign
 from helm_core.app import create_app
 from helm_core.channels.max import (
-    InboundMax, WEBHOOK_SECRET_HEADER, parse_message_created, verify_webhook_secret,
+    InboundMax, MaxSender, WEBHOOK_SECRET_HEADER, parse_message_created, verify_webhook_secret,
 )
 from helm_core.config import Settings
 from helm_core.dispatch import BACKOFF, MAX_ATTEMPTS, deliver_pending
@@ -154,6 +155,40 @@ def test_verify_webhook_secret(provided, expected_ok):
 def test_verify_webhook_secret_fails_closed_without_configured_secret():
     """Секрет не задан (пустой дефолт read_secret) — не пускать никого."""
     assert verify_webhook_secret("", "что угодно") is False
+
+
+def test_max_sender_puts_chat_id_in_query_not_body():
+    """Проверено вживую 29.08.2026: MAX не читает chat_id из тела вовсе
+    и отвечает 400 'Unknown recipient' на синтаксически валидный запрос
+    с ним в теле — правильная форма унаследована от TamTam Bot API.
+    Регрессия сюда означала бы, что канал MAX снова молча не отправляет
+    ничего, отчитываясь лишь FAILED-статусом после исчерпания ретраев.
+    """
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b"{}"
+
+    def fake_urlopen(request, timeout, context):
+        captured["url"] = request.full_url
+        captured["body"] = json.loads(request.data)
+        captured["auth"] = request.get_header("Authorization")
+        return FakeResponse()
+
+    with patch("helm_core.channels.max.urllib.request.urlopen", fake_urlopen):
+        MaxSender("bot-token")(CHAT_ID, "готово")
+
+    assert captured["url"] == f"https://platform-api2.max.ru/messages?chat_id={CHAT_ID}"
+    assert captured["body"] == {"text": "готово"}
+    assert "chat_id" not in captured["body"]
+    assert captured["auth"] == "bot-token"
 
 
 def test_ssl_context_keeps_standard_roots():

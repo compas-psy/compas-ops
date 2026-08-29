@@ -6,20 +6,19 @@
 (`api/hooks.py`, `dispatch.py`), и разделение нужно, чтобы разбор чужого
 формата тестировался без БД и без сети.
 
-ПРОВЕРЕНО ПО ДОКУМЕНТАЦИИ, НЕ ЖИВЬЁМ (29.08.2026; dev.max.ru недоступен
-из среды агента, живого бота MAX ещё нет):
+ПРОВЕРЕНО ЖИВЬЁМ 29.08.2026 (scripts/max-diagnose-send.sh, реальный бот,
+реальный `chat_id` из живого вебхука):
 
-* база `https://platform-api2.max.ru` — домен сменился с
-  `platform-api.max.ru` 19.07.2026;
-* токен идёт в заголовке `Authorization`; передача токена query-параметром
-  больше не поддерживается;
-* отправка — `POST /messages`, JSON-тело `{"chat_id": ..., "text": ...}`.
+* база `https://platform-api2.max.ru`;
+* токен идёт в заголовке `Authorization`;
+* отправка — `POST /messages?chat_id=...`, JSON-тело `{"text": ...}`.
 
-Единственное, что здесь может не совпасть с реальностью: MAX унаследован
-от TamTam Bot API, где `chat_id` передавался query-параметром, а в теле
-оставался только текст. Если живой смоук-тест вернёт 400 с жалобой на
-отсутствующий chat_id — правка ровно в одной строке `_send_request`
-(перенести chat_id в query), остальной код не затрагивается.
+Подтвердилось именно то, о чём предупреждала документация «TamTam Bot
+API» — прямого наследника MAX: `chat_id` идёт query-параметром, а НЕ
+полем тела. Первая версия этого файла (по документации самого MAX,
+без живого бота) клала `chat_id` в тело вместе с `text` — MAX принимал
+такой запрос синтаксически (без ошибки схемы), но отвечал `400
+Unknown recipient`, потому что тело для маршрутизации не читает вовсе.
 """
 
 from __future__ import annotations
@@ -27,6 +26,7 @@ from __future__ import annotations
 import hmac
 import json
 import ssl
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -117,9 +117,10 @@ def ssl_context() -> ssl.SSLContext:
 
 
 def _send_request(token: str, chat_id: str, text: str, timeout: int) -> None:
-    body = json.dumps({"chat_id": chat_id, "text": text}).encode("utf-8")
+    query = urllib.parse.urlencode({"chat_id": chat_id})
+    body = json.dumps({"text": text}).encode("utf-8")
     request = urllib.request.Request(
-        f"{API_BASE}/messages",
+        f"{API_BASE}/messages?{query}",
         data=body,
         method="POST",
         headers={"Content-Type": "application/json", "Authorization": token},
