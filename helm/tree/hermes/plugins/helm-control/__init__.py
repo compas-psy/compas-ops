@@ -128,7 +128,17 @@ def _on_pre_gateway_dispatch(event, gateway):
     # Control Plane — str; Pydantic в этом режиме не приводит int к str
     # молча. str() ниже — не форматирование ради вкуса, а обязательное
     # приведение типа перед отправкой.
-    owner_id = str(event.user_id) if event.user_id is not None else ""
+    # НАЙДЕНО на живом тесте: event.user_id у реальных Telegram-сообщений
+    # в этой версии Hermes — None (422 "owner_id: String should have at
+    # least 1 character"). В приватном чате Telegram chat_id — это тот же
+    # числовой id пользователя, что и user_id, поэтому это не подмена
+    # identity, а второй валидный источник того же значения.
+    if event.user_id is not None:
+        owner_id = str(event.user_id)
+    elif source and source.chat_id is not None:
+        owner_id = str(source.chat_id)
+    else:
+        owner_id = ""
     external_message_id = (
         str(event.message_id) if event.message_id
         else channel + ":" + owner_id + ":" + str(time.time())
