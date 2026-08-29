@@ -1,5 +1,19 @@
 """helm-control — Control Plane gate до LLM-вызова (ТЗ §9.3).
 
+НАЙДЕНО на живом Telegram-тесте: директория ``~/.hermes/hooks/<name>/``
+(``HOOK.yaml`` + ``handler.py``, куда этот плагин был помещён изначально)
+— это ДРУГОЙ, чисто уведомительный механизм (``gateway/hooks.py::HookRegistry``,
+события вида ``agent:start``/``session:end`` через двоеточие, docstring
+модуля прямо говорит "Errors ... never block the main pipeline"). Он не
+имеет отношения к ``pre_gateway_dispatch``/``pre_llm_call`` — те дёргает
+исключительно ``hermes_cli/plugins.py::PluginManager`` через
+``~/.hermes/plugins/<name>/`` (``plugin.yaml`` + ``register(ctx)``) и
+только если имя плагина явно включено в ``plugins.enabled`` в конфиге
+(opt-in по умолчанию). Хук в старой директории исправно "загружался"
+(лог "[hooks] Loaded hook ...") — просто событие, под которое он был
+зарегистрирован, там никто никогда не вызывает, поэтому LLM всё это
+время вызывалась мимо Control Plane без единой ошибки в логах.
+
 pre_gateway_dispatch регистрирует входящее сообщение в Control Plane ДО
 того, как оно дойдёт до LLM. Если Control Plane не подтверждает
 регистрацию (недоступен, отверг подпись, отверг owner_id) — сообщение до
@@ -110,3 +124,8 @@ def _on_pre_llm_call(kwargs: dict):
     if not task_id:
         return None
     return {"context": "HELM_TASK_ID=" + task_id}
+
+
+def register(ctx) -> None:
+    ctx.register_hook("pre_gateway_dispatch", handle)
+    ctx.register_hook("pre_llm_call", handle)

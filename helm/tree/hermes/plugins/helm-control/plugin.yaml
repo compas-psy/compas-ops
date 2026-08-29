@@ -1,8 +1,10 @@
 name: helm-control
+version: "0.1.0"
 description: >
   Регистрирует входящее сообщение в HELM Control Plane ДО первого LLM-вызова
   (ТЗ §9.3, A-DoD п.2-3). Fail-closed: если Control Plane недоступен,
   сообщение не доходит до модели.
-events:
+author: "HELM"
+hooks:
   - pre_gateway_dispatch
   - pre_llm_call
