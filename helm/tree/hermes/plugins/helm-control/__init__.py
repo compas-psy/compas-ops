@@ -29,10 +29,27 @@ pre_llm_call передаёт HELM_TASK_ID зарегистрированной 
 в Docker, и секреты лежат в /etc/helm/secrets; при переносе Hermes в
 контейнер этот путь придётся поменять на /run/secrets, как уже было
 найдено для helm-core).
+
+НАЙДЕНО следом за переездом на настоящий PluginManager: колбэки здесь
+обязаны быть СИНХРОННЫМИ. ``PluginManager._invoke_hook_callback`` (см.
+исходник) делает ровно ``return callback(**payload)`` — без единой
+проверки на корутину и без await. Первая версия этого файла (ещё под
+именем handler.py, ``async def handle``) на живом Telegram-сообщении не
+падала и не гейтила — просто создавала объект корутины, который никто
+не запускал (``RuntimeWarning: coroutine 'handle' was never awaited``),
+а `pre_gateway_dispatch` в gateway/run.py получал этот объект как
+non-None ``_result``, проваливал ``isinstance(_result, dict)`` и молча
+пропускал сообщение к модели. Поэтому ``handle``/``_on_pre_gateway_dispatch``
+ниже — обычные ``def``, а уведомление в Telegram при недоступном Control
+Plane идёт через ``asyncio.get_running_loop().create_task(...)``
+(fire-and-forget: await внутри синхронного колбэка невозможен, а
+``pre_gateway_dispatch`` вызывается прямо в потоке event loop'а, так что
+``get_running_loop()`` не падает).
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -83,14 +100,14 @@ def _register_task(channel: str, external_message_id: str, owner_id: str, text: 
         return json.loads(resp.read().decode())
 
 
-async def handle(event=None, gateway=None, session_store=None, **kwargs):
+def handle(event=None, gateway=None, session_store=None, **kwargs):
     # pre_gateway_dispatch передаёт event+gateway; pre_llm_call — нет.
     if event is not None and gateway is not None:
-        return await _on_pre_gateway_dispatch(event, gateway)
+        return _on_pre_gateway_dispatch(event, gateway)
     return _on_pre_llm_call(kwargs)
 
 
-async def _on_pre_gateway_dispatch(event, gateway):
+def _on_pre_gateway_dispatch(event, gateway):
     if not event.text:
         return None
 
@@ -105,9 +122,11 @@ async def _on_pre_gateway_dispatch(event, gateway):
         result = _register_task(channel, external_message_id, owner_id, event.text)
     except Exception as exc:
         try:
-            await gateway.adapters[source.platform].send(
-                text="HELM Control Plane недоступен. Задача не запущена.",
-                chat_id=source.chat_id,
+            asyncio.get_running_loop().create_task(
+                gateway.adapters[source.platform].send(
+                    text="HELM Control Plane недоступен. Задача не запущена.",
+                    chat_id=source.chat_id,
+                )
             )
         except Exception:
             pass
