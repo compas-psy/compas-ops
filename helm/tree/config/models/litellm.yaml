@@ -95,3 +95,18 @@ router_settings:
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
+
+# НАЙДЕНО на первом реальном Telegram-сообщении через Hermes: Hermes
+# provider=custom безусловно шлёт top-level reasoning_effort на каждый
+# completion-запрос (plugins/model-providers/custom/__init__.py в
+# составе hermes-agent) — вне зависимости от agent.reasoning_effort в
+# конфиге Hermes. Закреплённая версия образа litellm:main-v1.55.8 не
+# принимает этот параметр в пути OpenRouter вообще ни при каком значении
+# ("AsyncCompletions.create() got an unexpected keyword argument
+# 'reasoning_effort'") — падают и helm-standard, и его fallback
+# одинаково. drop_params здесь правильнее апгрейда закреплённой версии
+# litellm (§33 «pin versions»): не только чинит эту модель, но и любую
+# будущую под custom-провайдером Hermes, для которой понадобится
+# provider-специфичный top-level kwarg, который наш LiteLLM не знает.
+litellm_settings:
+  drop_params: true
