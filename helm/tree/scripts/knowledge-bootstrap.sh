@@ -44,11 +44,29 @@ mkdir -p \
   "$VAULT/archive" \
   "$VAULT/derived/graphify"
 
-# owner-only: содержит health/personal/client_restricted материалы (§14.15).
-# Владелец процесса — helm, тот же пользователь, что уже владеет
+# Владелец — helm (UID/GID хоста), тот же пользователь, что уже владеет
 # /home/helm/.hermes и читает секреты хоста.
+#
+# НАЙДЕНО 29.08.2026 живым тестом P8.5.2, в два шага: chmod 700 (доступ
+# только владельцу) не даёт контейнеру helm-knowledge-worker даже ЗАЙТИ
+# в каталог — он работает под собственным UID (10002, useradd в
+# Dockerfile.worker), не под хостовым helm (UID 1000). Первая попытка,
+# 750 (rwx владельцу, rx группе), решила чтение raw/, но process_job()
+# пишет L1 SOURCE .md в sources/ — для записи нужен ещё и w у группы.
+# 770 + group_add: ["1001"] в docker-compose.yml (GID группы helm на
+# хосте) — тот же паттерн, что уже используется для Docker secrets
+# (F-260829-09), просто для каталога с чтением И записью, а не только
+# чтением файла 640. Права ниже 770 не откатывать без этого контекста —
+# воркер снова перестанет писать в Vault.
 chown -R helm:helm "$VAULT"
-chmod -R 700 "$VAULT"
+chmod -R 770 "$VAULT"
+# setgid на каталогах: новый файл/подкаталог, созданный воркером (UID
+# 10002, primary group — свой собственный, не helm) наследует ГРУППУ
+# helm от родителя, а не группу процесса-создателя. Без этого следующий
+# читатель за пределами воркера (хостовый helm-пользователь, Obsidian
+# по SFTP, restic под root — этот и так может, root обходит DAC) не
+# гарантированно попадёт в нужную группу файла.
+find "$VAULT" -type d -exec chmod g+s {} +
 
 # Spool для входящих вложений Telegram/MAX (§14.5.1): "owner-only
 # permissions, bounded size, atomic rename". Отдельно от /opt/helm-knowledge,
