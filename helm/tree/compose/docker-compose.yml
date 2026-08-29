@@ -178,7 +178,8 @@ services:
       N8N_HOST: 0.0.0.0
       N8N_PROTOCOL: http
       N8N_PORT: "5678"
-      WEBHOOK_URL: http://127.0.0.1:5678/
+      # N8N_WEBHOOK_URL, не устаревший WEBHOOK_URL (лог сам на это указал).
+      N8N_WEBHOOK_URL: http://127.0.0.1:5678/
     secrets: [n8n_database_password, n8n_encryption_key]
     # Тот же класс проблемы, что уже решён для helm-core: секреты — root:
     # helm-secrets 640, образ n8n работает под непривилегированным node
@@ -199,7 +200,11 @@ services:
       start_period: 30s
     deploy:
       resources:
-        limits: {memory: 512m}
+        limits:
+          # НАЙДЕНО на живом деплое: 512m было мало — "FATAL ERROR:
+          # JavaScript heap out of memory" при старте (V8/n8n тяжелее,
+          # чем control-plane на Python). n8n сам рекомендует ~1 ГБ+.
+          memory: 1g
 
   forgejo:
     image: codeberg.org/forgejo/forgejo:15.0.3
