@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-08-29T12:10:00Z",
-  "phase": "milestone-b-panel-auth-written-not-deployed",
-  "task": "Milestone A закрыт целиком (см. resolved_this_cycle). Milestone B начат с Panel auth backend (§10.5.6-§10.5.8.2): написано и протестировано офлайн (73 passed, 1 pre-existing failed), НЕ развёрнуто на сервере. По пути выяснилось, что предыдущее заявление 'backend авторизации не существует вообще' было неверным (find -iname *auth* не нашёл классы в общем tables.py) — таблицы, deps.py (session+step-up) и весь Panel API уже существовали и уже применены на живой БД. Затем: владелец проверил вживую через BotFather, что OIDC (Authorization Code+PKCE, спека называет предпочтительным) для этого бота недоступен ('Web login is currently unavailable', после привязки домена — только документация classic Login Widget, ни разу не появился OpenID Connect/Client ID) — auth.py переписан на Telegram Login Widget (HMAC-SHA256 на bot token, без Client ID/Secret/PKCE/discovery/JWKS). Реально написано: helm_core/api/auth.py (verify_login_widget + первый enrollment + passkey-логин + серверная часть step-up), panel/src/Login.tsx (виджет вставлен императивно через useEffect), scripts/panel-passkey-recover.py (§10.5.8.2). Секрет panel_auth_cookie_secret уже размещён на сервере; telegram_bot_token — ещё нет. Блокирует живой e2e-тест: backend/frontend файлы и docker-compose.yml не доставлены на сервер, образ не пересобран (новая зависимость webauthn), bootstrap-enrollment ещё не выпущен.",
+  "updated_at": "2026-08-29T13:15:00Z",
+  "phase": "milestone-b-panel-auth-live-verified",
+  "task": "Milestone A закрыт целиком. Milestone B — Panel auth (§10.5.6-§10.5.8.2) закрыт и подтверждён ЖИВЬЁМ 29.08.2026: реальный вход владельца через Telegram Login Widget (OIDC оказался недоступен у BotFather для этого бота — проверено вживую, перешли на classic widget с HMAC на bot token) → первый passkey создан → реальная сессия → дашборд отдаёт честные пустые данные. По пути от 'офлайн-тесты зелёные' до 'работает на сервере' потребовалось 6 независимых находок/фиксов (подробности — WORKPLAN.md, раздел 'живой сквозной тест пройден'): Dockerfile не читал pyproject.toml (webauthn не попадал в образ, crash loop); owner_id сравнивался с лишним префиксом tg: (реальный формат — голое число, подтверждено в hermes/plugins/helm-control); секреты для helm-core нужны с группой helm-secrets+640, не root:600; Caddy bind-mount на panel/dist протухает после rm-rf директории под работающим контейнером; CSP блокировал сам виджет (script-src/frame-src для telegram.org); Cross-Origin-Opener-Policy same-origin из общего security_headers компилируется с deferred:true и переопределяется только явным заданием в каждом handle-блоке, не изнутри вложенного handle — диагностировано чтением реального autosave.json внутри контейнера Caddy, не документацией. Следующий шаг Milestone B — MAX fallback/n8n/Forgejo/GitHub CI.",
   "worker": "orchestrator",
   "model": "claude-sonnet-5",
   "status": "in_progress",
@@ -16,6 +16,36 @@
   },
   "blockers": [],
   "open_findings": [
+    {
+      "id": "F-260829-08",
+      "description": "Dockerfile control-plane держит СВОЙ захардкоженный список pip-пакетов в RUN pip install, отдельно от pyproject.toml. Добавление зависимости только в pyproject.toml (как это обычно и делается) не попадает в образ — обнаружено по логу реальной пересборки (webauthn отсутствовал в Collecting) и подтверждено крашем контейнера (ModuleNotFoundError) на живом сервере.",
+      "mitigation": "любая новая зависимость control-plane — правка в ДВУХ местах: pyproject.toml И control-plane/Dockerfile (RUN pip install), не только в одном",
+      "severity": "high"
+    },
+    {
+      "id": "F-260829-09",
+      "description": "Секреты, которые читает контейнер helm-core (Docker secret, /run/secrets/*), должны иметь владельца root, группу helm-secrets и права 640 — доступ идёт через членство контейнера в группе (group_add: [\"10001\"] в docker-compose), не через root. chmod 600 root:root (интуитивно 'безопаснее') на самом деле ломает чтение секрета контейнером (PermissionError при старте, crash loop). Секреты host-side root-скриптов (restic_password, guardian_telegram_token) — отдельная категория, для них 600 root:root корректны, так как их читает systemd-юнит от root, не контейнер.",
+      "mitigation": "перед созданием нового секрета для helm-core сверяться с ls -la /etc/helm/secrets/ на уже рабочих записях, а не угадывать права по общей интуиции безопасности",
+      "severity": "medium"
+    },
+    {
+      "id": "F-260829-10",
+      "description": "Bind-mount Caddy на хостовую директорию (panel/dist:/srv/panel) 'протухает' (404 file_server на все запросы) после sudo rm -rf этой директории на хосте + пересоздания под тем же путём, пока контейнер caddy продолжает работать без перезапуска. Файлы и права после пересоздания корректны, но caddy их не видит до docker compose restart caddy.",
+      "mitigation": "после любого rm -rf + пересоздания bind-mounted директории на хосте — restart соответствующего контейнера обязателен, не опционален",
+      "severity": "medium"
+    },
+    {
+      "id": "F-260829-11",
+      "description": "panel/dist не в git (.gitignore) и передаётся отдельно (zip/scp). При повторной распаковке архива поверх уже существующей локальной папки старые файлы предыдущих сборок (с другим content-hash в имени) не удаляются — Vite их не трогает, если extract идёт не через 'clean install', и локальная dist/assets накапливает мусор из нескольких версий, а браузер/scp потом путается, какой index.html/JS реальный.",
+      "mitigation": "перед каждой распаковкой нового dist.zip поверх старого — снести локальную папку dist полностью, не распаковывать поверх",
+      "severity": "low"
+    },
+    {
+      "id": "F-260829-12",
+      "description": "Caddy: header-директива без матчера на уровне ВСЕГО САЙТА (например, через import сниппета с header{...} до любого handle) компилируется в JSON-конфиг с \"deferred\":true — применяется ПОСЛЕДНЕЙ из всей цепочки безусловно. Никакая header-директива внутри вложенного handle{} (ни с path-матчером, ни без, ни в однострочной 'header Field value' форме, ни в блочной 'header { Field value }' форме — обе варианта проверены вживую и обе НЕ deferred, если находятся внутри handle) не может переопределить значение того же поля, заданное на уровне сайта. Диагностировано только чтением реального скомпилированного конфига (docker exec <caddy> cat /config/caddy/autosave.json) — документация и два независимых, но неверных предположения по пути (path-матчер внутри общего handle; отдельный handle-блок с блочной формой header) были опровергнуты этим способом.",
+      "mitigation": "если конкретному route нужно ДРУГОЕ значение общего security-заголовка (не то, что задано глобально через import) — не пытаться переопределить его изнутри handle; вместо этого убрать это поле из общего сниппета и задавать его явно (одинаковым способом, тем же сниппетом-импортом) в КАЖДОМ handle-блоке отдельно. При любой непонятной проблеме с Caddy header/handle — сразу читать autosave.json, не гадать по документации",
+      "severity": "high"
+    },
     {
       "id": "F-260829-07",
       "description": "Telegram OIDC (Authorization Code+PKCE), который §10.5.6 называет текущим предпочтительным способом входа, у BotFather недоступен для бота @cmpas_board_bot: /mybots -> Bot Settings -> Domain отвечает 'Web login is currently unavailable' до привязки домена, а после Set domain -> helm.cmpas.ru показывает только документацию classic Telegram Login Widget, ни разу не показал пункт OpenID Connect Login/Client ID/Secret (проверено дважды владельцем вживую). Причина не установлена (поэтапная раскатка Telegram? другое условие активации?) — вторичные источники (блоги) описывали OIDC как уже общедоступный, что здесь не подтвердилось.",
@@ -79,6 +109,10 @@
   ],
   "deferred": [],
   "resolved_this_cycle": [
+    {
+      "item": "Milestone B — Panel auth (§10.5.6-§10.5.8.2)",
+      "note": "Живой сквозной тест на реальном сервере 29.08.2026: кнопка Telegram Login Widget → подтверждение владельцем в Telegram → /login?step=enroll → ввод enrollment-токена (выпущен scripts/panel-passkey-recover.py) → создание passkey → реальная сессия helm_panel_session → дашборд с честными пустыми данными. OIDC (предпочтительный по спеке) оказался недоступен у BotFather для этого бота — заменён на classic Telegram Login Widget (HMAC на bot token). По пути найдено и исправлено 6 находок (F-260829-08..12, подробности там же) между 'офлайн-тесты зелёные' и 'работает на сервере' — Dockerfile/pyproject.toml рассинхрон, формат owner_id, права секретов, протухший bind-mount Caddy, CSP и Cross-Origin-Opener-Policy (deferred-семантика header-директивы Caddy)."
+    },
     {
       "item": "Caddy + TLS (P1)",
       "note": "Поднят на живом сервере, реальные сертификаты Let's Encrypt для helm.cmpas.ru и git.cmpas.ru получены и работают"
