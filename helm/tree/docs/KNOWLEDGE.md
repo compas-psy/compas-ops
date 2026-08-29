@@ -15,7 +15,7 @@ pack, когда локального ответа объективно недо
 |---|---|
 | P8.5.1 Storage (схема БД, каталоги, backup) | ✅ задеплоено, подтверждено живьём |
 | P8.5.4/5 частично — лексический Probe (Z0/Z1/NEEDS_REASONING), wiring в `/hooks/max` и `helm-control` | ✅ задеплоено, подтверждено живьём (см. `docs/KNOWLEDGE_RETRIEVAL.md`) |
-| P8.5.2 Parsers/attachment path — parser router + async worker (job queue, quality gate, эскалация) | ⚠️ код готов, протестирован на реальных MarkItDown-фикстурах; Docling-эскалация и сама сборка Docker-образа воркера НЕ проверены живьём (нужен реальный интернет — недоступен из песочницы разработки) — см. `docs/KNOWLEDGE_INGEST.md` |
+| P8.5.2 Parsers/attachment path — parser router + async worker (job queue, quality gate, эскалация) | ✅ задеплоено, подтверждено живьём: `smoke-test.docx` → `markitdown`/`done`, `smoke-test-broken.pdf` → эскалация на `docling`/`needs_review` (см. `docs/KNOWLEDGE_INGEST.md`) |
 | P8.5.3 GigaAM (ASR) | ❌ не реализовано |
 | P8.5.4 остаток — pg_trgm, dense/embeddings, pgvector, rank fusion | ❌ не реализовано |
 | P8.5.5 остаток — Z2 (опциональный локальный генератор) | ❌ не реализовано (спекой разрешено оставить выключенным) |

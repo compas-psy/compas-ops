@@ -4,7 +4,7 @@
 каждой значимой задачи — это заменяет необходимость владельцу писать
 «продолжай».
 
-## Текущая фаза: **Milestone A и Milestone B закрыты целиком** (Panel auth, n8n, Forgejo, MAX — все подтверждены живьём, MAX включая реальный ответ chief-агента в реальном чате 29.08.2026). Пришёл **HELM v3.4** (§14, HELM Knowledge/«второй мозг») — `V3.4-DELTA.md` сверил его со STATUS.json построчным диффом фактических файлов спеки, изменения изолированы в §14 + additive-шаги в §9.3/§10.2/§26.1/§30.8. **P8.5.1 и P8.5.4/5 частично ЗАДЕПЛОЕНЫ И ПОДТВЕРЖДЕНЫ ЖИВЬЁМ 29.08.2026** (см. `## HELM Knowledge (P8.5) — v3.4`): схема БД, лексический Knowledge Probe без embeddings, wiring в обе точки входа (`/hooks/max`, `helm-control`) — реальный вопрос владельца получил мгновенный локальный ответ с источником в ОБОИХ каналах (Telegram и MAX), обычные вопросы по-прежнему уходят через Hermes (регрессия проверена). По пути найдены и исправлены три живых бага (restore_test.sh гонка готовности Postgres, helm-control звал send() с несуществующим параметром text вместо content — молча ломало и старое уведомление о недоступности Control Plane тоже). Добавлен домен `library` (решение владельца — книги по психологии). 138 тестов зелёные (было 120). Единственный открытый пробел — F-260829-25 (Telegram не логирует paid-avoidance метрику §14.14 постфактум). Остальное из v3.4 (парсеры, GigaAM, embeddings, Graphify) осознанно отложено, требует бенчмарка на живом VPS. Параллельно ждут: миграция репозиториев в Forgejo (`forgejo-migrate-runbook.md`), ключ n8n API, живая проверка MAX cross-channel дедупа/`/force`/n8n-down (deferred).
+## Текущая фаза: **Milestone A и Milestone B закрыты целиком** (Panel auth, n8n, Forgejo, MAX — все подтверждены живьём, MAX включая реальный ответ chief-агента в реальном чате 29.08.2026). Пришёл **HELM v3.4** (§14, HELM Knowledge/«второй мозг») — `V3.4-DELTA.md` сверил его со STATUS.json построчным диффом фактических файлов спеки, изменения изолированы в §14 + additive-шаги в §9.3/§10.2/§26.1/§30.8. **P8.5.1 и P8.5.4/5 частично ЗАДЕПЛОЕНЫ И ПОДТВЕРЖДЕНЫ ЖИВЬЁМ 29.08.2026** (см. `## HELM Knowledge (P8.5) — v3.4`): схема БД, лексический Knowledge Probe без embeddings, wiring в обе точки входа (`/hooks/max`, `helm-control`) — реальный вопрос владельца получил мгновенный локальный ответ с источником в ОБОИХ каналах (Telegram и MAX), обычные вопросы по-прежнему уходят через Hermes (регрессия проверена). По пути найдены и исправлены три живых бага (restore_test.sh гонка готовности Postgres, helm-control звал send() с несуществующим параметром text вместо content — молча ломало и старое уведомление о недоступности Control Plane тоже). Добавлен домен `library` (решение владельца — книги по психологии). **P8.5.2 (parser router + async worker, `helm-knowledge-worker`) тоже ЗАДЕПЛОЕНО И ПОДТВЕРЖДЕНО ЖИВЬЁМ 29.08.2026** (см. `## HELM Knowledge (P8.5) — v3.4` → раздел P8.5.2 ниже): MarkItDown fast path + Docling-эскалация реально сработали на сервере, четыре живых бага найдены и исправлены по пути (torch/torchvision ABI, opencv системные библиотеки, pydantic install ordering, воркер-краш-луп). 158 тестов зелёных (было 138). Единственный открытый пробел — F-260829-25 (Telegram не логирует paid-avoidance метрику §14.14 постфактум). Остальное из v3.4 (GigaAM, embeddings, Graphify, Telegram/MAX attachment ingress) осознанно отложено, требует бенчмарка на живом VPS. Параллельно ждут: миграция репозиториев в Forgejo (`forgejo-migrate-runbook.md`), ключ n8n API, живая проверка MAX cross-channel дедупа/`/force`/n8n-down (deferred).
 
 ## HELM Knowledge (P8.5) — v3.4, реализовано и ПОДТВЕРЖДЕНО ЖИВЬЁМ 29.08.2026
 
@@ -107,7 +107,7 @@ helm-control на хосте Hermes → bootstrap каталогов под вс
 подтверждения (`knowledge-probe-smoke-test-cleanup.sh`),
 `knowledge_answer_runs` обнулены.
 
-### P8.5.2 — parser router + async worker: код готов, деплой не выполнен
+### P8.5.2 — parser router + async worker: ЗАДЕПЛОЕНО И ПОДТВЕРЖДЕНО ЖИВЬЁМ 29.08.2026
 
 Владелец выбрал архитектуру: отдельный контейнер
 `helm-knowledge-worker`, не встраивать парсинг в `helm-core` (лимит
@@ -115,7 +115,8 @@ helm-control на хосте Hermes → bootstrap каталогов под вс
 MAX/Telegram).
 
 Реализовано и протестировано на Python-уровне в песочнице разработки
-(19 новых тестов, 157 всего зелёных — подробности `docs/
+(12 новых тестов на момент написания кода, сейчас 158 всего зелёных
+вместе с регрессией на краш-луп ниже — подробности `docs/
 KNOWLEDGE_INGEST.md`): `helm_core/knowledge/parsers.py` (MarkItDown
 fast path → quality gate → эскалация на Docling; quality gate
 калиброван на реальных фикстурах, включая новый найденный живьём
@@ -123,15 +124,54 @@ fast path → quality gate → эскалация на Docling; quality gate
 шрифта без кириллицы), `helm_core/knowledge/{ingest,worker}.py`
 (`register_file_for_ingest()` + `claim_next_job()`/`process_job()`,
 пишет L1 SOURCE `.md` на диск), `Dockerfile.worker` +
-`docker-compose.yml::helm-knowledge-worker` (CPU-only torch явно через
-`--index-url .../whl/cpu` — иначе CUDA-сборка лишние ~1.2GB; opencv
-нужен `libgl1`+3 пакета на Debian slim).
+`docker-compose.yml::helm-knowledge-worker`.
 
-**Честно не проверено**: сборка Docker-образа и реальная
-Docling-эскалация — Docker Hub и huggingface.co недоступны из
-egress-политики песочницы разработки. `knowledge-worker-deploy-
-runbook.md` + `knowledge-worker-smoke-test.sh` готовы для первой живой
-проверки на сервере.
+**Задеплоено и подтверждено живьём 29.08.2026** на 185.250.44.137
+(`knowledge-worker-deploy-runbook.md`, `knowledge-worker-smoke-test.sh`)
+— смоук на реальных фикстурах: `smoke-test.docx` → `markitdown`/`done`
+(fast path), `smoke-test-broken.pdf` (испорченный шрифтом текст) →
+эскалация на `docling`/`needs_review` (Docling реально скачал модели с
+huggingface.co, реально разобрал PDF за 18 сек, и — так как сам
+исходник действительно испорчен на уровне шрифта — корректно тоже не
+прошёл quality gate; ожидаемое, не баг). Сборка образа и Docling были
+непроверяемы из песочницы разработки (нет доступа к Docker Hub/
+huggingface.co) — эти четыре бага нашлись ТОЛЬКО на живом сервере:
+
+- **torch/torchvision ABI mismatch**: раздельная установка (torch с
+  `--index-url .../whl/cpu`, torchvision как транзитивная зависимость
+  docling с обычного PyPI) дала несовместимую пару native-сборок —
+  `RuntimeError: operator torchvision::nms does not exist` при первом
+  импорте `transformers.AutoImageProcessor`. Исправлено: обе пакета
+  одной командой install с одного индекса.
+- **opencv-python на Debian slim** требует системные `libgl1`/
+  `libglib2.0-0`/`libsm6`/`libxext6`/`libxrender1` — без них падает на
+  первом `import cv2`.
+- **pydantic зафиксирован ДО docling** — та же ловушка, что уже
+  встречалась в этой сессии: `docling-core` требует
+  `pydantic-settings>=2.14.0`, транзитивно новее pydantic, чем ручной
+  пин; pip формально не апгрейдит уже запиненную версию (в диапазоне),
+  и docling падает `PydanticSerializationError: Circular reference
+  detected` внутри собственного `_get_pipeline()`. Исправлено: pydantic-
+  экосистема не фиксируется вручную рядом с sqlalchemy/psycopg, приходит
+  из зависимостей docling.
+- **`process_job()` крашлуп**: try/except изначально оборачивал только
+  `parse_file()` — сбой на шаге ПОСЛЕ (запись L1 SOURCE на диск)
+  улетал необработанным, валил процесс, транзакция откатывалась (job
+  возвращался в `pending`), `restart: unless-stopped` поднимал
+  контейнер заново — и тот немедленно падал на ТОЙ ЖЕ задаче: вечный
+  краш-луп вместо `FAILED`. Исправлено: один try/except на всё тело
+  `process_job()` + внешний try/except в `run_forever()`; добавлена
+  регрессия `test_process_job_failure_after_successful_parse_marks_
+  failed_not_crash`.
+
+Отдельно permission-модель для `/opt/helm-knowledge` (контейнер
+воркера — UID 10002, отличный от хостового `helm`, UID 1000, который
+владеет `raw/`): тот же паттерн, что уже применён для Docker-секретов
+(`group_add` под GID хостовой группы), но здесь — на директории с
+чтением И записью, не только чтением: `chmod 770` + setgid-бит
+(`chmod g+s`) на дереве `/opt/helm-knowledge` в
+`knowledge-bootstrap.sh`, `group_add: ["10001", "1001"]` в
+docker-compose (GID `helm-secrets` + GID хостовой группы `helm`).
 
 Не сделано, зависит от этого шага: P8.5.7 (Telegram/MAX ingress
 вложений — сама доставка файла до `register_file_for_ingest()`).
