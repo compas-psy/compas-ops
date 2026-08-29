@@ -30,12 +30,19 @@ docker run --rm -d --name "$TEST_CONTAINER" \
   -e POSTGRES_PASSWORD=restoretest \
   pgvector/pgvector:pg16 >/dev/null
 
-for _ in $(seq 1 30); do
+ready=0
+for _ in $(seq 1 60); do
   if docker exec "$TEST_CONTAINER" pg_isready -U postgres >/dev/null 2>&1; then
+    ready=1
     break
   fi
   sleep 1
 done
+if [ "$ready" -ne 1 ]; then
+  echo "FAIL: тестовый Postgres не поднялся за 60с. Логи контейнера:" >&2
+  docker logs "$TEST_CONTAINER" 2>&1 | tail -50 >&2
+  exit 1
+fi
 
 echo "== загружаю дамп в тестовый контейнер =="
 docker exec -i "$TEST_CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 < "$DUMP" >/dev/null
