@@ -81,11 +81,6 @@ class Settings(BaseSettings):
     #: §10.5.8.1: challenge step-up живёт 60 секунд.
     stepup_challenge_ttl_seconds: int = 60
 
-    #: §10.5.6: текущий OIDC-провайдер Telegram. Discovery-документ
-    #: (authorization/token/jwks endpoints) вычитывается динамически по этому
-    #: issuer, а не хардкодится — Telegram вправе сменить конкретные URL.
-    telegram_oidc_issuer: str = "https://oauth.telegram.org"
-
     environment: str = "production"
 
 

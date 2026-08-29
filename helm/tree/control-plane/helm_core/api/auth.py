@@ -2,7 +2,13 @@
 
 Три отдельных, но связанных потока:
 
-1. Telegram OIDC (§10.5.6) — подтверждает, что за браузером сидит владелец.
+1. Telegram Login Widget (§10.5.6) — подтверждает, что за браузером сидит
+   владелец. Спека называет предпочтительным способом OIDC (Authorization
+   Code+PKCE), но для этого бота он у BotFather недоступен (проверено
+   вживую 29.08.2026: "Web login is currently unavailable", а после
+   привязки домена открывается документация только classic-виджета) —
+   используется официальный, но более старый механизм Telegram с проверкой
+   HMAC-подписи на самом токене бота.
 2. Первый enrollment passkey (§10.5.7) — единственный путь получить первый
    WebauthnCredential, когда его ещё ни одного нет.
 3. Passkey-логин (после первого enrollment) и passkey step-up на запись
@@ -10,7 +16,7 @@
    чей JSON-контракт уже зафиксирован фронтендом (panel/src/components/passkey.ts),
    написанным раньше этого модуля.
 
-Между OIDC-подтверждением и готовой PanelSession нет отдельной таблицы —
+Между подтверждением Telegram и готовой PanelSession нет отдельной таблицы —
 переходное состояние "Telegram подтвердил, passkey ещё нет" живёт в подписанной
 cookie на 10 минут, а не в БД: это состояние одного диалога в одном браузере,
 а не то, что должно пережить рестарт сервера.
@@ -30,15 +36,11 @@ import base64
 import hashlib
 import hmac as hmac_mod
 import json
-import secrets
 import time
 import uuid
 from datetime import timedelta
 from typing import Any
-from urllib.parse import urlencode
 
-import httpx
-import jwt
 import webauthn
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -153,108 +155,52 @@ def _create_session(session: Session, settings: Settings, owner_id: str) -> Pane
     return record
 
 
-# ── Telegram OIDC (§10.5.6) ──────────────────────────────────────────────────
+# ── Telegram Login Widget (§10.5.6) ─────────────────────────────────────────
+# OIDC (Authorization Code+PKCE), который спека называет предпочтительным
+# способом, у BotFather для этого бота недоступен ("Web login is currently
+# unavailable" до привязки домена, а после привязки открывается только
+# документация classic-виджета, без отдельного OIDC/Client ID) — проверено
+# вживую 29.08.2026, не предположение. Виджет — тот же официальный механизм
+# Telegram (core.telegram.org/widgets/login), просто без OIDC-обвязки:
+# подлинность отправителя подтверждается HMAC-SHA256 на самом токене бота,
+# а не отдельным Client Secret.
 
-class TelegramOIDC:
-    """Authorization Code + PKCE поверх текущего OIDC-логина Telegram.
+TELEGRAM_AUTH_MAX_AGE_SECONDS = 300
 
-    Discovery-документ вычитывается один раз за жизнь процесса и кэшируется:
-    он не меняется быстрее, чем живёт контейнер, а дёргать его на каждый
-    /telegram/start — лишний внешний вызов на критичном пути входа.
+
+def verify_login_widget(bot_token: str, fields: dict[str, str]) -> dict[str, str]:
+    """Проверить подпись Telegram Login Widget.
+
+    https://core.telegram.org/widgets/login#checking-authorization —
+    data_check_string собирается из всех полей, кроме hash, отсортированных
+    по ключу и склеенных "key=value\\n"; secret_key = SHA256(bot_token);
+    ожидаемый hash = HMAC-SHA256(secret_key, data_check_string).
     """
+    received_hash = fields.get("hash", "")
+    payload = {k: v for k, v in fields.items() if k != "hash"}
+    data_check_string = "\n".join(f"{k}={payload[k]}" for k in sorted(payload))
+    secret_key = hashlib.sha256(bot_token.encode()).digest()
+    expected_hash = hmac_mod.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+    # .encode(): не-ASCII в присланном hash не должен ронять TypeError вместо 401.
+    if not hmac_mod.compare_digest(expected_hash.encode(), received_hash.encode()):
+        raise ValueError("подпись Telegram не совпадает")
 
-    def __init__(self, issuer: str, client_id: str, client_secret: str, redirect_uri: str):
-        self.issuer = issuer
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self.redirect_uri = redirect_uri
-        self._discovery: dict[str, Any] | None = None
-        self._jwks_client: jwt.PyJWKClient | None = None
-
-    def discovery(self) -> dict[str, Any]:
-        if self._discovery is None:
-            resp = httpx.get(f"{self.issuer}/.well-known/openid-configuration", timeout=10)
-            resp.raise_for_status()
-            self._discovery = resp.json()
-        return self._discovery
-
-    def jwks_client(self) -> jwt.PyJWKClient:
-        if self._jwks_client is None:
-            self._jwks_client = jwt.PyJWKClient(self.discovery()["jwks_uri"])
-        return self._jwks_client
-
-    def authorize_url(self, *, state: str, nonce: str, code_challenge: str) -> str:
-        params = {
-            "response_type": "code", "client_id": self.client_id,
-            "redirect_uri": self.redirect_uri, "scope": "openid",
-            "state": state, "nonce": nonce,
-            "code_challenge": code_challenge, "code_challenge_method": "S256",
-        }
-        return f"{self.discovery()['authorization_endpoint']}?{urlencode(params)}"
-
-    def exchange_code(self, *, code: str, code_verifier: str) -> str:
-        """→ id_token (ещё не проверенный)."""
-        resp = httpx.post(self.discovery()["token_endpoint"], data={
-            "grant_type": "authorization_code", "code": code,
-            "redirect_uri": self.redirect_uri, "client_id": self.client_id,
-            "client_secret": self.client_secret, "code_verifier": code_verifier,
-        }, timeout=10)
-        resp.raise_for_status()
-        id_token = resp.json().get("id_token")
-        if not id_token:
-            raise RuntimeError("ответ token endpoint не содержит id_token")
-        return id_token
-
-    def verify_id_token(self, id_token: str, *, nonce: str) -> dict[str, Any]:
-        signing_key = self.jwks_client().get_signing_key_from_jwt(id_token)
-        claims = jwt.decode(id_token, signing_key.key, algorithms=["RS256"],
-                            audience=self.client_id, issuer=self.issuer)
-        if claims.get("nonce") != nonce:
-            raise jwt.InvalidTokenError("nonce не совпадает")
-        return claims
-
-
-@router.get("/telegram/start")
-def telegram_start(request: Request) -> Response:
-    oidc: TelegramOIDC = request.app.state.oidc
-    code_verifier = _b64u(secrets.token_bytes(32))
-    code_challenge = _b64u(hashlib.sha256(code_verifier.encode()).digest())
-    state = _b64u(secrets.token_bytes(16))
-    nonce = _b64u(secrets.token_bytes(16))
-    try:
-        url = oidc.authorize_url(state=state, nonce=nonce, code_challenge=code_challenge)
-    except httpx.HTTPError as exc:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Telegram OIDC недоступен") from exc
-
-    response = RedirectResponse(url, status_code=status.HTTP_302_FOUND)
-    _set_pending(response, request, {
-        "purpose": "oidc", "state": state, "nonce": nonce, "code_verifier": code_verifier,
-        "exp": time.time() + PENDING_TTL_SECONDS,
-    })
-    return response
+    auth_date = int(payload.get("auth_date", "0"))
+    if time.time() - auth_date > TELEGRAM_AUTH_MAX_AGE_SECONDS:
+        raise ValueError("данные входа устарели, начните заново")
+    return payload
 
 
 @router.get("/telegram/callback")
-def telegram_callback(code: str, state: str, request: Request,
-                      session: Session = Depends(get_session)) -> Response:
-    oidc: TelegramOIDC = request.app.state.oidc
-    pending = _read_pending(request)
-    if pending is None or pending.get("purpose") != "oidc":
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "сессия входа истекла, начните заново")
-    # .encode(): compare_digest не принимает строки с не-ASCII символами и
-    # роняет TypeError вместо честного 401 — state приходит от клиента,
-    # доверять его алфавиту нельзя.
-    if not hmac_mod.compare_digest(pending["state"].encode(), state.encode()):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "state не совпадает")
-
+def telegram_callback(request: Request, session: Session = Depends(get_session)) -> Response:
+    settings: Settings = request.app.state.settings
+    fields = dict(request.query_params)
     try:
-        id_token = oidc.exchange_code(code=code, code_verifier=pending["code_verifier"])
-        claims = oidc.verify_id_token(id_token, nonce=pending["nonce"])
-    except (httpx.HTTPError, jwt.PyJWTError, RuntimeError) as exc:
+        claims = verify_login_widget(request.app.state.telegram_bot_token, fields)
+    except ValueError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"Telegram не подтвердил вход: {exc}") from exc
 
-    owner_id = f"tg:{claims.get('sub')}"
-    settings: Settings = request.app.state.settings
+    owner_id = f"tg:{claims.get('id')}"
     if owner_id != settings.owner_id:
         # Не создаём вообще никакого состояния для не-владельца — ни сессии,
         # ни pending-cookie на попытку enrollment.

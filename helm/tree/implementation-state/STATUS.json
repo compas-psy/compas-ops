@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-08-29T11:20:00Z",
+  "updated_at": "2026-08-29T12:10:00Z",
   "phase": "milestone-b-panel-auth-written-not-deployed",
-  "task": "Milestone A закрыт целиком (см. resolved_this_cycle). Milestone B начат с Panel auth backend (§10.5.6-§10.5.8.2): написано и протестировано офлайн (73 passed, 1 pre-existing failed), НЕ развёрнуто на сервере. По пути выяснилось, что предыдущее заявление 'backend авторизации не существует вообще' было неверным (find -iname *auth* не нашёл классы в общем tables.py) — таблицы, deps.py (session+step-up) и весь Panel API уже существовали и уже применены на живой БД; реально написаны только helm_core/api/auth.py (Telegram OIDC + первый enrollment + passkey-логин + серверная часть step-up), panel/src/Login.tsx, scripts/panel-passkey-recover.py (§10.5.8.2). Блокирует живой e2e-тест: секреты не размещены на сервере, образ не пересобран, владелец ещё не прошёл BotFather Web Login, discovery-документ Telegram не проверен вживую (агентская песочница не имеет туда сетевого доступа).",
+  "task": "Milestone A закрыт целиком (см. resolved_this_cycle). Milestone B начат с Panel auth backend (§10.5.6-§10.5.8.2): написано и протестировано офлайн (73 passed, 1 pre-existing failed), НЕ развёрнуто на сервере. По пути выяснилось, что предыдущее заявление 'backend авторизации не существует вообще' было неверным (find -iname *auth* не нашёл классы в общем tables.py) — таблицы, deps.py (session+step-up) и весь Panel API уже существовали и уже применены на живой БД. Затем: владелец проверил вживую через BotFather, что OIDC (Authorization Code+PKCE, спека называет предпочтительным) для этого бота недоступен ('Web login is currently unavailable', после привязки домена — только документация classic Login Widget, ни разу не появился OpenID Connect/Client ID) — auth.py переписан на Telegram Login Widget (HMAC-SHA256 на bot token, без Client ID/Secret/PKCE/discovery/JWKS). Реально написано: helm_core/api/auth.py (verify_login_widget + первый enrollment + passkey-логин + серверная часть step-up), panel/src/Login.tsx (виджет вставлен императивно через useEffect), scripts/panel-passkey-recover.py (§10.5.8.2). Секрет panel_auth_cookie_secret уже размещён на сервере; telegram_bot_token — ещё нет. Блокирует живой e2e-тест: backend/frontend файлы и docker-compose.yml не доставлены на сервер, образ не пересобран (новая зависимость webauthn), bootstrap-enrollment ещё не выпущен.",
   "worker": "orchestrator",
   "model": "claude-sonnet-5",
   "status": "in_progress",
@@ -16,6 +16,12 @@
   },
   "blockers": [],
   "open_findings": [
+    {
+      "id": "F-260829-07",
+      "description": "Telegram OIDC (Authorization Code+PKCE), который §10.5.6 называет текущим предпочтительным способом входа, у BotFather недоступен для бота @cmpas_board_bot: /mybots -> Bot Settings -> Domain отвечает 'Web login is currently unavailable' до привязки домена, а после Set domain -> helm.cmpas.ru показывает только документацию classic Telegram Login Widget, ни разу не показал пункт OpenID Connect Login/Client ID/Secret (проверено дважды владельцем вживую). Причина не установлена (поэтапная раскатка Telegram? другое условие активации?) — вторичные источники (блоги) описывали OIDC как уже общедоступный, что здесь не подтвердилось.",
+      "mitigation": "используется classic Telegram Login Widget (HMAC-SHA256 на bot token, core.telegram.org/widgets/login) вместо OIDC — helm_core/api/auth.py::verify_login_widget(). Если Telegram позже раскатит OIDC на этот бот, можно вернуться: серверная часть после подтверждения владельца (enrollment/логин/step-up) не зависит от конкретного способа проверки Telegram-identity",
+      "severity": "low"
+    },
     {
       "id": "F-260829-05",
       "description": "hmac.compare_digest роняет TypeError (не False) на не-ASCII символах в str-аргументе — если сравнивать значение, пришедшее прямо от клиента (query-param, cookie), без .encode(), атакующий получает 500 вместо честного 401 отправкой кириллицы/emoji в это поле.",

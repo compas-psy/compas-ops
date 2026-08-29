@@ -22,19 +22,18 @@ Panel API на чтение/запись (`panel.py`); фронтенд step-up 
 фиксировал форму ответа/запроса для меня, не наоборот.
 
 **Реально отсутствовало и написано сейчас**:
-- `helm_core/api/auth.py` — Telegram OIDC (Authorization Code + PKCE,
-  discovery по `oauth.telegram.org/.well-known/openid-configuration`,
-  RS256/JWKS через `PyJWT`), первый enrollment passkey (§10.5.7),
+- `helm_core/api/auth.py` — первый enrollment passkey (§10.5.7),
   passkey-логин (когда credential уже есть), серверная часть step-up
   (`/auth/passkey/assert/*`, под уже готовый контракт `passkey.ts`).
-  Переходное состояние между OIDC и passkey-церемонией — подписанная
-  HMAC-cookie на 10 минут (`helm_auth_pending`), не отдельная таблица.
+  Переходное состояние между Telegram-подтверждением и passkey-церемонией —
+  подписанная HMAC-cookie на 10 минут (`helm_auth_pending`), не отдельная
+  таблица.
 - `panel/src/Login.tsx` + `panel/src/api/codec.ts` (общий base64url-кодек,
   вынесен из `passkey.ts`, теперь используется в обоих местах) — экран
-  «Войти через Telegram», экран ввода enrollment-токена + WebAuthn
-  registration ceremony, экран WebAuthn login ceremony. `client.ts`: 401 от
-  Panel API теперь сразу уводит на `/auth/telegram/start` (раздела
-  «сессия истекла, нажмите куда-то» в панели нет и не должно быть).
+  «Войти через Telegram» (сам виджет), экран ввода enrollment-токена +
+  WebAuthn registration ceremony, экран WebAuthn login ceremony. `client.ts`:
+  401 от Panel API теперь сразу уводит на `/login` (раздела «сессия истекла,
+  нажмите куда-то» в панели нет и не должно быть).
 - `scripts/panel-passkey-recover.py` (§10.5.8.2, деплоится как
   `/opt/helm/scripts/panel-passkey-recover`) — root-only, revoke сессий +
   выборочный revoke passkey + новый enrollment-токен (TTL 30 мин, печатается
@@ -46,30 +45,57 @@ Panel API на чтение/запись (`panel.py`); фронтенд step-up 
   `-v`+`:'var'` (psql сам экранирует), НЕ через `-c` (проверено — `-c` не
   делает `:'var'`-подстановку вовсе, только stdin/`-f`).
 - Новые секреты (docker-compose.yml + `helm-core`): `panel_auth_cookie_secret`
-  (генерируется сейчас, не зависит от внешних сервисов),
-  `telegram_oidc_client_id`/`telegram_oidc_client_secret` (из BotFather →
-  Bot Settings → Web Login, отдельно от токена бота).
-- Новые зависимости control-plane: `httpx==0.28.1` (теперь core, не только
-  dev), `pyjwt[crypto]==2.13.0`, `webauthn==3.0.0` — версии проверены через
-  PyPI JSON API, не угаданы; API `webauthn` 3.0.0 проверен установкой и
-  `inspect.signature` в песочнице, а не по памяти (мажорный бамп с 2.x).
-- `tests/test_panel_auth.py` — 16 тестов, полный набор `73 passed, 1 failed`
-  (падение — старый долг F-260829-04, не это изменение). Найдено и
-  исправлено по пути: `hmac.compare_digest` роняет `TypeError` (не 401) на
-  не-ASCII входе от клиента — `state`/подпись cookie теперь всегда `.encode()`
-  перед сравнением.
+  (сгенерирован и размещён на сервере 29.08.2026), `telegram_bot_token`
+  (тот же токен бота, что уже используется у Hermes chief-профиля — не
+  Client Secret, отдельный OIDC-механизм не понадобился, см. ниже).
+- Новые зависимости control-plane: `webauthn==3.0.0` (версия проверена через
+  PyPI JSON API, не угадана; API проверен установкой и `inspect.signature`
+  в песочнице, а не по памяти — мажорный бамп с 2.x). `httpx` остался
+  dev-only (нужен только `TestClient`, серверных вызовов к Telegram больше
+  нет — см. УТОЧНЕНИЕ).
+- `tests/test_panel_auth.py` — 16 тестов (подпись Telegram Login Widget
+  считается по-настоящему через `hmac`, не мокается — это наш собственный
+  код, не сторонняя библиотека), полный набор `73 passed, 1 failed` (падение
+  — старый долг F-260829-04, не это изменение). Найдено и исправлено по
+  пути: `hmac.compare_digest` роняет `TypeError` (не 401) на не-ASCII входе
+  от клиента — сравнения подписи/cookie теперь всегда `.encode()` перед
+  сравнением.
+
+**УТОЧНЕНИЕ 29.08.2026 (после первой записи этого раздела): OIDC заменён на
+Telegram Login Widget.** Проверено вживую самим владельцем через BotFather:
+`/mybots → @cmpas_board_bot → Bot Settings → Domain` сначала ответил "**Web
+login is currently unavailable**"; после `Set domain → helm.cmpas.ru` стало
+"Web login is currently available", но экран предлагает только документацию
+**classic Telegram Login Widget** (`core.telegram.org/widgets/login`) — ни
+разу не показал пункт "OpenID Connect Login" или Client ID/Secret, ни сразу,
+ни после повторного захода в настройки. Секция §10.5.6 называет OIDC
+"текущим предпочтительным" способом со ссылкой на верификацию во время P0 —
+но для ЭТОГО бота прямо сейчас он не активирован (возможно, поэтапная
+раскатка Telegram, возможно другое условие — установить причину не удалось).
+Решение: не ждать и не гадать — перейти на classic Login Widget (тот же
+официальный механизм Telegram, HMAC-SHA256 подпись на самом bot token,
+годами стабилен), не блокируя Milestone B. `helm_core/api/auth.py`
+переписан: `TelegramOIDC`/PKCE/discovery/JWKS убраны целиком, добавлен
+`verify_login_widget()` (data_check_string → HMAC-SHA256(SHA256(bot_token))
+по `core.telegram.org/widgets/login#checking-authorization`, `auth_date`
+не старше 5 минут). `/auth/telegram/start` (redirect-инициация) больше не
+нужен — виджет сам показывает кнопку и уводит на `data-auth-url` без
+серверного шага; `Login.tsx` вставляет `telegram-widget.js` императивно
+через `useEffect` (браузер не выполняет `<script>`, вставленный через
+`innerHTML`/JSX). Если Telegram позже раскатит OIDC на этот бот — можно
+будет вернуться, серверная часть после Telegram-подтверждения (enrollment/
+логин/step-up) не зависит от того, как именно подтверждён `sub`/`id`.
 
 **Не сделано / блокирует живой e2e-тест**:
-- Секреты не размещены на сервере, control-plane образ не пересобран,
-  `docker-compose.yml`/`panel/dist` не доставлены на сервер.
-- Владелец ещё не прошёл BotFather → Bot Settings → Web Login (добавить
-  `https://helm.cmpas.ru`, убрать, переоткрыть панель — до появления пункта
-  «OpenID Connect Login» — и получить Client ID/Client Secret).
-- Discovery-документ Telegram (`oauth.telegram.org`) не проверен вживую:
-  агентская песочница не имеет туда сетевого доступа (egress-прокси отдаёт
-  403 на `oauth.telegram.org`/`core.telegram.org` даже для обычного curl) —
-  код читает discovery динамически, а не хардкодит URL, но первая живая
-  проверка будет только с реального сервера.
+- `docker-compose.yml`, backend-файлы, `panel/dist`, `scripts/panel-passkey-
+  recover.py` не доставлены на сервер; control-plane образ не пересобран
+  (новая зависимость `webauthn` требует rebuild).
+- `telegram_bot_token` ещё не размещён на сервере (только
+  `panel_auth_cookie_secret` — сделано).
+- Bootstrap: `panel-passkey-recover` ещё не запущен на сервере ни разу —
+  первый enrollment-токен ещё не выпущен.
+- Живой e2e через браузер (`helm.cmpas.ru` → виджет → enroll → passkey →
+  дашборд) не проводился.
 
 ## A-DoD п.9 — reboot VPS (закрыто)
 

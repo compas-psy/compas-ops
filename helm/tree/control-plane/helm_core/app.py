@@ -13,13 +13,12 @@ from sqlalchemy.orm import sessionmaker
 from .actions.fixtures import build_registry
 from .approvals.service import ApprovalService
 from .api import auth, internal, panel
-from .api.auth import TelegramOIDC
 from .api.security import SecurityHeadersMiddleware
 from .config import Settings, get_settings, read_secret
 
 
 def create_app(settings: Settings | None = None, *, service_secret: str | None = None,
-              oidc: TelegramOIDC | None = None) -> FastAPI:
+              telegram_bot_token: str | None = None) -> FastAPI:
     settings = settings or get_settings()
     app = FastAPI(title="HELM Control Plane", version="0.1.0",
                   docs_url=None, redoc_url=None, openapi_url=None)
@@ -31,12 +30,7 @@ def create_app(settings: Settings | None = None, *, service_secret: str | None =
     app.state.settings = settings
     app.state.service_secret = service_secret or read_secret("hermes_service_hmac", "")
     app.state.panel_auth_cookie_secret = read_secret("panel_auth_cookie_secret", "")
-    app.state.oidc = oidc or TelegramOIDC(
-        issuer=settings.telegram_oidc_issuer,
-        client_id=read_secret("telegram_oidc_client_id", ""),
-        client_secret=read_secret("telegram_oidc_client_secret", ""),
-        redirect_uri=f"{settings.panel_origin}/auth/telegram/callback",
-    )
+    app.state.telegram_bot_token = telegram_bot_token or read_secret("telegram_bot_token", "")
 
     def approval_service_factory(session):
         return ApprovalService(session, app.state.registry, owner_id=settings.owner_id)

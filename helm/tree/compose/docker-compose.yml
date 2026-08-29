@@ -124,7 +124,7 @@ services:
       HELM_PANEL_ORIGIN: https://helm.cmpas.ru
       TZ: Europe/Moscow
     secrets: [helm_database_url, telegram_owner_id, hermes_service_hmac,
-              panel_auth_cookie_secret, telegram_oidc_client_id, telegram_oidc_client_secret]
+              panel_auth_cookie_secret, telegram_bot_token]
     # docker compose (не swarm) монтирует secrets bind-mount'ом с теми же
     # правами, что и на хосте (0600 root:root, §6.3) — не сбрасывает их на
     # 0444, как это делал бы Swarm. Контейнер работает под UID 10001, не
@@ -179,8 +179,7 @@ secrets:
   telegram_owner_id:    {file: /etc/helm/secrets/telegram_owner_id}
   hermes_service_hmac:  {file: /etc/helm/secrets/hermes_service_hmac}
   panel_auth_cookie_secret:    {file: /etc/helm/secrets/panel_auth_cookie_secret}
-  telegram_oidc_client_id:     {file: /etc/helm/secrets/telegram_oidc_client_id}
-  telegram_oidc_client_secret: {file: /etc/helm/secrets/telegram_oidc_client_secret}
+  telegram_bot_token:          {file: /etc/helm/secrets/telegram_bot_token}
 
 volumes:
   pgdata:       {name: helm_pgdata}

@@ -1,14 +1,18 @@
 /* Вход и первый enrollment passkey (ТЗ §10.5.6-§10.5.7).
  *
- * Существует только ради двух шагов, на которые Telegram OIDC callback
- * назначает редирект: ?step=enroll (первого passkey ещё нет) и ?step=login
- * (passkey уже есть, нужен ассершн). Оба заканчиваются одинаково —
- * появляется helm_panel_session cookie, и страница уходит на /.
+ * Существует только ради трёх шагов: сам Telegram Login Widget (§10.5.6 —
+ * OIDC у BotFather для этого бота недоступен, проверено вживую, используется
+ * официальный classic-виджет) и два шага, на которые уводит его callback:
+ * ?step=enroll (первого passkey ещё нет) и ?step=login (passkey уже есть,
+ * нужен ассершн). Оба заканчиваются одинаково — появляется
+ * helm_panel_session cookie, и страница уходит на /.
  */
 
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { fromBase64Url, toBase64Url } from './api/codec'
 import { PrimaryButton } from './components/primitives'
+
+const TELEGRAM_BOT_USERNAME = 'cmpas_board_bot'
 
 const PUB_KEY_ALGS: PublicKeyCredentialParameters[] = [
   { type: 'public-key', alg: -8 }, // EdDSA
@@ -24,20 +28,31 @@ export function Login() {
 }
 
 function StartScreen() {
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    // Виджет — сторонний <script>, который сам рисует кнопку и уводит на
+    // data-auth-url с подписанными полями (§10.5.6). Браузер не выполняет
+    // <script>, вставленный через innerHTML/dangerouslySetInnerHTML — только
+    // через реальный DOM-узел, отсюда императивный useEffect, не JSX.
+    const script = document.createElement('script')
+    script.src = 'https://telegram.org/js/telegram-widget.js?22'
+    script.async = true
+    script.setAttribute('data-telegram-login', TELEGRAM_BOT_USERNAME)
+    script.setAttribute('data-size', 'large')
+    script.setAttribute('data-auth-url', 'https://helm.cmpas.ru/auth/telegram/callback')
+    script.setAttribute('data-userpic', 'false')
+    container.appendChild(script)
+    return () => {
+      container.replaceChildren()
+    }
+  }, [])
+
   return (
     <Screen title="Вход в HELM">
-      <a
-        href="/auth/telegram/start"
-        style={{
-          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          minHeight: 'var(--h-row-min)', padding: '0 18px',
-          background: 'var(--h-acc)', color: 'var(--h-acc-ink)',
-          borderRadius: 'var(--h-radius-sm)', textDecoration: 'none',
-          fontWeight: 'var(--h-fw-bold)' as never,
-        }}
-      >
-        Войти через Telegram
-      </a>
+      <div ref={containerRef} />
     </Screen>
   )
 }

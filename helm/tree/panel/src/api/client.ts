@@ -42,8 +42,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (response.status === 401) {
     // Нет валидной сессии — единственное осмысленное действие панели: начать
     // вход заново. Показывать «сессия истекла» и ждать повторного нажатия
-    // некуда, раздела для этого в панели нет (бриф §3).
-    window.location.href = '/auth/telegram/start'
+    // некуда, раздела для этого в панели нет (бриф §3). /login — экран со
+    // встроенным Telegram Login Widget (§10.5.6), не серверный редирект.
+    window.location.href = '/login'
     throw new ApiError(401, 'Сессия истекла')
   }
   if (!response.ok) {
