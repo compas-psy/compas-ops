@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-08-29T13:15:00Z",
-  "phase": "milestone-b-panel-auth-live-verified",
-  "task": "Milestone A закрыт целиком. Milestone B — Panel auth (§10.5.6-§10.5.8.2) закрыт и подтверждён ЖИВЬЁМ 29.08.2026: реальный вход владельца через Telegram Login Widget (OIDC оказался недоступен у BotFather для этого бота — проверено вживую, перешли на classic widget с HMAC на bot token) → первый passkey создан → реальная сессия → дашборд отдаёт честные пустые данные. По пути от 'офлайн-тесты зелёные' до 'работает на сервере' потребовалось 6 независимых находок/фиксов (подробности — WORKPLAN.md, раздел 'живой сквозной тест пройден'): Dockerfile не читал pyproject.toml (webauthn не попадал в образ, crash loop); owner_id сравнивался с лишним префиксом tg: (реальный формат — голое число, подтверждено в hermes/plugins/helm-control); секреты для helm-core нужны с группой helm-secrets+640, не root:600; Caddy bind-mount на panel/dist протухает после rm-rf директории под работающим контейнером; CSP блокировал сам виджет (script-src/frame-src для telegram.org); Cross-Origin-Opener-Policy same-origin из общего security_headers компилируется с deferred:true и переопределяется только явным заданием в каждом handle-блоке, не изнутри вложенного handle — диагностировано чтением реального autosave.json внутри контейнера Caddy, не документацией. Следующий шаг Milestone B — MAX fallback/n8n/Forgejo/GitHub CI.",
+  "updated_at": "2026-08-29T16:40:00Z",
+  "phase": "milestone-b-n8n-forgejo-live-verified-max-deferred",
+  "task": "Milestone A закрыт целиком. Milestone B — Panel auth закрыт (см. resolved_this_cycle). P6 (n8n) и P6.5 (Forgejo) подняты и подтверждены ЖИВЬЁМ 29.08.2026: git.cmpas.ru отдаёт Forgejo, admin-аккаунт ILYA создан; n8n здоров и прошёл первый экран (owner account) через SSH-туннель 127.0.0.1:5678. 4 находки по пути (F-260829-13..16, подробности в open_findings и WORKPLAN.md): n8n нужен group_add для чтения Docker-секретов (тот же класс бага, что у helm-core); N8N_HOST=127.0.0.1 — тот же bind-баг, что был у helm-core на P2 (исправлено, но не было настоящей причиной сбоя); реальная причина недоступности n8n — OOM (JavaScript heap out of memory) при лимите памяти 512m, исправлено до 1g; Forgejo CLI через docker exec требует явного -u git (default exec user образа — root, хотя демон работает под git) и не терпит -it без выделенного TTY. MAX (P7) — отложен решением владельца: живой port-scan (ss -tlnp) и grep исходников Hermes подтвердили, что \"Hermes chief API server\" из §10.2 не существует ни в каком виде — нужен новый Hermes-side plugin (не начат). Следующий шаг: миграция 6 репозиториев в Forgejo (§18.3), первый n8n-коннектор (§17.2), либо проектирование MAX/Hermes plugin — выбор за владельцем.",
   "worker": "orchestrator",
   "model": "claude-sonnet-5",
   "status": "in_progress",
@@ -16,6 +16,30 @@
   },
   "blockers": [],
   "open_findings": [
+    {
+      "id": "F-260829-13",
+      "description": "n8n (контейнер работает под непривилегированным node) не читает Docker-секреты root:helm-secrets 640 (DB_POSTGRESDB_PASSWORD_FILE, N8N_ENCRYPTION_KEY_FILE) без group_add — EACCES при старте. Тот же класс бага, что F-260829-09 у helm-core, но задет отдельно, так как n8n — независимый сервис со своим compose-блоком. Forgejo этот баг НЕ затронул: его entrypoint читает секрет ещё в root-фазе, до дропа привилегий на git.",
+      "mitigation": "любой новый контейнер, читающий /run/secrets/* с правами root:helm-secrets 640, должен получить group_add: [\"10001\"] в docker-compose.yml — не полагаться на то, что 'раз работало у helm-core, сработает само' для нового сервиса",
+      "severity": "medium"
+    },
+    {
+      "id": "F-260829-14",
+      "description": "n8n: N8N_HOST=127.0.0.1 — тот же bind-баг, что был у helm-core на P2 (uvicorn --host 127.0.0.1 внутри контейнера недоступен снаружи через проброшенный порт, хотя healthcheck внутри namespace зелёный). Это уже третий раз за весь цикл, когда этот класс бага всплывает (helm-core P2, теперь n8n) — паттерн узнаваем, но всё равно был внесён заново в новый сервис.",
+      "mitigation": "для любого нового контейнерного сервиса с HTTP-портом проверять bind-адрес на 0.0.0.0 ДО первого деплоя, не после ERR_EMPTY_RESPONSE — искать по имени переменной вида *_HOST/*_BIND/--host в документации образа заранее",
+      "severity": "medium"
+    },
+    {
+      "id": "F-260829-15",
+      "description": "n8n не запускался (ERR_EMPTY_RESPONSE) по причине, НЕ СВЯЗАННОЙ с bind-адресом (F-260829-14 был исправлен первым, но не решил проблему): реальная причина — 'FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory' при лимите deploy.resources.limits.memory: 512m, скопированном по аналогии с control-plane. docker compose ps/healthcheck молчаливо показывали только факт падения, без причины — видно только в docker compose logs n8n.",
+      "mitigation": "лимит памяти для Node.js-сервисов (n8n и подобные) не копировать бездумно с Python-сервисов — ставить с запасом (n8n: 1g минимум) и при любом необъяснимом падении контейнера сразу смотреть docker compose logs, не только ps/healthcheck",
+      "severity": "medium"
+    },
+    {
+      "id": "F-260829-16",
+      "description": "Forgejo CLI (forgejo admin user create и подобные) через docker exec отказывается работать от root ('Forgejo is not supposed to be run as root'), хотя сам демон в контейнере уже работает под непривилегированным git — образ объявляет root дефолтным пользователем именно для exec, CLI-команда отдельно проверяет UID. Плюс отдельная ошибка при первой попытке: docker exec -it через неинтерактивный ssh-вызов ('command in quotes') падает 'cannot attach stdin to a TTY-enabled container because stdin is not a terminal' — TTY не выделяется.",
+      "mitigation": "для forgejo admin/* команд — docker exec -u git (без -it, если команда не интерактивна и все данные передаются флагами)",
+      "severity": "low"
+    },
     {
       "id": "F-260829-08",
       "description": "Dockerfile control-plane держит СВОЙ захардкоженный список pip-пакетов в RUN pip install, отдельно от pyproject.toml. Добавление зависимости только в pyproject.toml (как это обычно и делается) не попадает в образ — обнаружено по логу реальной пересборки (webauthn отсутствовал в Collecting) и подтверждено крашем контейнера (ModuleNotFoundError) на живом сервере.",
@@ -107,8 +131,18 @@
       "severity": "high"
     }
   ],
-  "deferred": [],
+  "deferred": [
+    {
+      "item": "MAX (P7) — Telegram-fallback канал (§10, §10.2, §10.4, §30.5)",
+      "reason": "Требует нового Hermes-side plugin (локальный листенер, принимающий сообщение и прогоняющий его через chief-агента), которого сейчас не существует. Подтверждено вживую: sudo ss -tlnp на сервере не показал ни одного порта, принадлежащего Hermes (только postgres/helm-core/sing-box); grep по /home/helm/.hermes/hermes-agent на 'chief API'/'Responses API'/'named conversation' нашёл только код, которым Hermes сам обращается к OpenAI/Codex как к провайдеру модели — другое значение того же термина. Решение владельца 29.08.2026: отложить, спроектировать отдельным заходом.",
+      "not_lost": "IngestService уже поддерживает generic cross-channel дедуп (написан раньше, не только для Telegram) — /hooks/max сможет переиспользовать его без изменений. Реальный внешний API MAX для исходящих сообщений найден: POST /messages на platform-api2.max.ru, Authorization-заголовок с токеном бота, JSON {chat_id, text}. Inbound webhook: заголовок x-max-bot-api-secret, update_type: message_created."
+    }
+  ],
   "resolved_this_cycle": [
+    {
+      "item": "P6 (n8n) + P6.5 (Forgejo) — сервисы подняты и подтверждены живьём",
+      "note": "git.cmpas.ru отдаёт Forgejo, admin-аккаунт ILYA создан (docker exec -u git ... forgejo admin user create). n8n здоров, пройдена форма первого запуска (owner account) через SSH-туннель 127.0.0.1:5678. БД/роли n8n и forgejo уже существовали в compose/init/01-databases.sql с более раннего офлайн-этапа. 4 находки по пути — F-260829-13 (group_add для секретов n8n), F-260829-14 (N8N_HOST bind-баг, тот же класс что P2 helm-core), F-260829-15 (реальная причина недоступности — OOM, не bind-адрес; лимит памяти 512m -> 1g), F-260829-16 (forgejo CLI требует -u git, не -it). НЕ сделано: миграция 6 репозиториев в Forgejo (§18.3), встраивание Forgejo в restic backup (осмысленно отложено — мигрировать нечего), первый n8n-коннектор (§17.2), OAuth callback route для n8n в Caddyfile (не нужен, пока нет коннектора)."
+    },
     {
       "item": "Milestone B — Panel auth (§10.5.6-§10.5.8.2)",
       "note": "Живой сквозной тест на реальном сервере 29.08.2026: кнопка Telegram Login Widget → подтверждение владельцем в Telegram → /login?step=enroll → ввод enrollment-токена (выпущен scripts/panel-passkey-recover.py) → создание passkey → реальная сессия helm_panel_session → дашборд с честными пустыми данными. OIDC (предпочтительный по спеке) оказался недоступен у BotFather для этого бота — заменён на classic Telegram Login Widget (HMAC на bot token). По пути найдено и исправлено 6 находок (F-260829-08..12, подробности там же) между 'офлайн-тесты зелёные' и 'работает на сервере' — Dockerfile/pyproject.toml рассинхрон, формат owner_id, права секретов, протухший bind-mount Caddy, CSP и Cross-Origin-Opener-Policy (deferred-семантика header-директивы Caddy)."
