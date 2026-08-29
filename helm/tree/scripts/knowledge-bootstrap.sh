@@ -5,6 +5,16 @@
 # НЕ коммитится и не зеркалится в Forgejo/GitHub (§14.2) — это runtime/
 # private data, защищённые ACL + encrypted restic backup, а не код.
 #
+# НАЙДЕНО 29.08.2026 при живом деплое: раньше этот список raw/<domain>
+# был написан ДО того, как §14.15 закрепили закрытым списком в
+# helm_core/models/base.py::KnowledgeDomain (10 значений), и разошёлся с
+# ним — "simpas" вместо 4 отдельных simpas/*, выдуманная "psychology",
+# без psy-marketing и signalai-docs. helm_core/knowledge/ingest.py строит
+# raw_path буквально как raw/{domain}/<sha256>.txt, поэтому подкаталоги
+# обязаны совпадать со значениями enum'а СИМВОЛЬНО, включая "/" внутри
+# simpas/* (mkdir -p создаёт вложенность сам). Источник истины —
+# KnowledgeDomain, при добавлении домена туда — обновить и этот список.
+#
 # Запуск: sudo bash /tmp/knowledge-bootstrap.sh
 set -euo pipefail
 
@@ -15,10 +25,14 @@ mkdir -p \
   "$VAULT/inbox" \
   "$VAULT/raw/personal" \
   "$VAULT/raw/health" \
-  "$VAULT/raw/simpas" \
-  "$VAULT/raw/psychology" \
+  "$VAULT/raw/simpas/company" \
+  "$VAULT/raw/simpas/practice" \
+  "$VAULT/raw/simpas/zapiski" \
+  "$VAULT/raw/simpas/moments" \
+  "$VAULT/raw/psy-marketing" \
   "$VAULT/raw/ventures" \
   "$VAULT/raw/engineering" \
+  "$VAULT/raw/signalai-docs" \
   "$VAULT/sources" \
   "$VAULT/concepts" \
   "$VAULT/entities" \
