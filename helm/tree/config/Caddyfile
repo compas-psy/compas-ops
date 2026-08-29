@@ -74,21 +74,35 @@ helm.cmpas.ru {
 		file_server
 	}
 
+	# ── Экран входа (§10.5.6): отдельный handle, не матчер внутри общего ────
+	# Казалось бы, что достаточно `header /login ...` внутри общего handle{}
+	# ниже — но это не сработало на живом тесте: header-директива с матчером
+	# внутри handle, конфликтующая по имени поля с header'ом из security_headers
+	# на уровне сайта, надёжно не переопределяет значение (известная особенность
+	# Caddy на стыке header+handle, caddyserver/caddy#7598). header без матчера
+	# прямо в СВОЁМ handle-блоке — переопределяет надёжно, поэтому у /login
+	# отдельный блок, а не условие внутри общего.
+	handle /login {
+		root * /srv/panel
+		header Cache-Control "no-store"
+		# CSP шире, чем у остального SPA: экран входа — единственное место,
+		# где нужен сторонний <script src="https://telegram.org/..."> самого
+		# виджета (рисует кнопку через iframe с oauth.telegram.org).
+		header Content-Security-Policy "default-src 'self'; script-src 'self' https://telegram.org; frame-src https://oauth.telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://telegram.org; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
+		# same-origin (из security_headers) рвёт window.opener между
+		# всплывающим окном oauth.telegram.org и этой страницей — виджет не
+		# может сообщить родителю о завершении входа.
+		header Cross-Origin-Opener-Policy "unsafe-none"
+		rewrite * /index.html
+		file_server
+	}
+
 	# ── Статика панели (§10.5.2, §10.5.3) ──────────────────────────────────
 	handle {
 		root * /srv/panel
 		header /assets/* Cache-Control "public, max-age=31536000, immutable"
 		header /index.html Cache-Control "no-store"
-		# CSP для самой страницы. connect-src 'self' не даёт панели ходить
-		# наружу, даже если такой код туда попадёт. script-src/frame-src
-		# отдельно пускают telegram.org: сам виджет входа (§10.5.6) — сторонний
-		# <script>, который рисует кнопку через iframe с oauth.telegram.org.
-		header Content-Security-Policy "default-src 'self'; script-src 'self' https://telegram.org; frame-src https://oauth.telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://telegram.org; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
-		# Cross-Origin-Opener-Policy: same-origin (из security_headers, глобально)
-		# рвёт связь window.opener между всплывающим окном oauth.telegram.org и
-		# этой страницей — виджет не может сообщить родителю о завершении входа.
-		# Ослабляем только на /login, не на всю панель.
-		header /login Cross-Origin-Opener-Policy "unsafe-none"
+		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
 		try_files {path} /index.html
 		file_server
 	}
