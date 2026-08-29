@@ -6,6 +6,7 @@
 """
 
 import json
+import ssl
 import time
 import uuid
 from datetime import timedelta
@@ -153,6 +154,23 @@ def test_verify_webhook_secret(provided, expected_ok):
 def test_verify_webhook_secret_fails_closed_without_configured_secret():
     """Секрет не задан (пустой дефолт read_secret) — не пускать никого."""
     assert verify_webhook_secret("", "что угодно") is False
+
+
+def test_ssl_context_keeps_standard_roots():
+    """Корень Минцифры добавляется К обычным, а не вместо них.
+
+    Подмена всего набора связкой из двух сертификатов означала бы, что
+    Control Plane перестал доверять любому обычному удостоверяющему
+    центру. Проверяем на среде без связки — контекст обязан быть
+    полноценным и здесь.
+    """
+    from helm_core.channels.max import RU_CA_BUNDLE, ssl_context
+
+    assert not RU_CA_BUNDLE.exists(), "тест рассчитан на среду без связки"
+    context = ssl_context()
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+    assert len(context.get_ca_certs()) > 0, "стандартные корни не загружены"
 
 
 # ── §10.1/§10.3: эндпоинт /hooks/max ─────────────────────────────────────────

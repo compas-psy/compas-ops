@@ -24,11 +24,11 @@ compose не поднимет контейнер: он ссылается на �
 cd D:\ПРОЕКТЫ\simpas\helm\compas-ops
 git pull origin claude/ai-agents-server-deployment-xdp77a
 scp -i "C:\Users\eliah\.ssh\helm_deploy_key" -r helm\tree\control-plane\helm_core helm@185.250.44.137:/tmp/helm_core
-scp -i "C:\Users\eliah\.ssh\helm_deploy_key" helm\tree\compose\docker-compose.yml helm\tree\scripts\forgejo-migrate.py helm\tree\scripts\n8n-workflows.py helm\tree\scripts\max-register-webhook.sh helm\tree\scripts\backup.sh helm\tree\scripts\restore_test.sh helm@185.250.44.137:/tmp/
+scp -i "C:\Users\eliah\.ssh\helm_deploy_key" helm\tree\compose\docker-compose.yml helm\tree\scripts\forgejo-migrate.py helm\tree\scripts\n8n-workflows.py helm\tree\scripts\max-register-webhook.sh helm\tree\scripts\install-ru-ca.sh helm\tree\scripts\backup.sh helm\tree\scripts\restore_test.sh helm@185.250.44.137:/tmp/
 ```
 
 ```powershell
-ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "test -d /opt/helm/control-plane/helm_core || { echo 'СТОП: ожидаемого пути нет, ничего не трогаю'; exit 1; }; sudo rm -rf /opt/helm/control-plane/helm_core && sudo mv /tmp/helm_core /opt/helm/control-plane/helm_core && sudo mv /tmp/docker-compose.yml /opt/helm/compose/docker-compose.yml && sudo mv /tmp/forgejo-migrate.py /tmp/n8n-workflows.py /tmp/max-register-webhook.sh /tmp/backup.sh /tmp/restore_test.sh /opt/helm/scripts/ && sudo chown -R root:root /opt/helm/control-plane/helm_core /opt/helm/compose/docker-compose.yml /opt/helm/scripts && sudo chmod -R go-w /opt/helm/control-plane/helm_core /opt/helm/scripts && sudo chmod 755 /opt/helm/scripts/*.py /opt/helm/scripts/*.sh && sudo mkdir -p /opt/helm/n8n/exports && ls -la /opt/helm/scripts/ && ls /opt/helm/control-plane/helm_core/"
+ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "test -d /opt/helm/control-plane/helm_core || { echo 'СТОП: ожидаемого пути нет, ничего не трогаю'; exit 1; }; sudo rm -rf /opt/helm/control-plane/helm_core && sudo mv /tmp/helm_core /opt/helm/control-plane/helm_core && sudo mv /tmp/docker-compose.yml /opt/helm/compose/docker-compose.yml && sudo mv /tmp/forgejo-migrate.py /tmp/n8n-workflows.py /tmp/max-register-webhook.sh /tmp/install-ru-ca.sh /tmp/backup.sh /tmp/restore_test.sh /opt/helm/scripts/ && sudo chown -R root:root /opt/helm/control-plane/helm_core /opt/helm/compose/docker-compose.yml /opt/helm/scripts && sudo chmod -R go-w /opt/helm/control-plane/helm_core /opt/helm/scripts && sudo chmod 755 /opt/helm/scripts/*.py /opt/helm/scripts/*.sh && sudo mkdir -p /opt/helm/n8n/exports && ls -la /opt/helm/scripts/ && ls /opt/helm/control-plane/helm_core/"
 ```
 
 `chmod -R go-w` не косметика: scp создаёт каталоги world-writable даже
@@ -68,6 +68,24 @@ ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "echo 'ТОКЕ
 Ожидается: `helm-core` в состоянии `healthy`. Если контейнер
 перезапускается — сразу `sudo docker compose logs --tail 50 helm-core`
 и вывод в чат.
+
+**2.1a. Доверие корню Минцифры (иначе MAX недоступен вовсе):**
+
+Сертификат `platform-api2.max.ru` выдан «Russian Trusted Sub CA», и в
+стандартном наборе корней Ubuntu его нет — curl отвергает соединение
+(«unable to get local issuer certificate»). Основание для установки:
+решение учредителя от 18.08.2026, принятое для платёжного шлюза
+Т-Банк в `cmpas.ru`. Скрипт сверяет отпечатки скачанных сертификатов с
+эталонными из того прогона и при расхождении не ставит ничего.
+
+```powershell
+ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "sudo /opt/helm/scripts/install-ru-ca.sh && cd /opt/helm/compose && sudo docker compose up -d --force-recreate helm-core && sleep 15 && sudo docker compose ps helm-core"
+```
+
+Ожидается «отпечаток совпал с эталонным» дважды и «MAX ответил кодом
+401» — 401 здесь успех: TLS проверен, а без токена сервер и должен
+отказать. Пересоздание контейнера обязательно: связка монтируется в
+него отдельным томом.
 
 **2.2. Зарегистрировать вебхук в MAX:**
 

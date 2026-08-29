@@ -139,6 +139,13 @@ services:
     group_add: ["10001"]
     volumes:
       - ../config:/opt/helm/config:ro
+      # Корень Минцифры для вызовов MAX Bot API (§10.3): сертификат
+      # platform-api2.max.ru выдан «Russian Trusted Sub CA», которого нет
+      # в наборе корней образа python:slim. Кладётся на хост скриптом
+      # scripts/install-ru-ca.sh; используется только для соединений с
+      # MAX (helm_core/channels/max.py::ssl_context), не подменяет
+      # остальные корни контейнера.
+      - /etc/ssl/ru-ca:/etc/ssl/ru-ca:ro
     ports: ["127.0.0.1:8080:8080"]
     healthcheck:
       test: ["CMD", "python", "-c",

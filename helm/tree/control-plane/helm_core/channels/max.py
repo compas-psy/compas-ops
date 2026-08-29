@@ -26,10 +26,19 @@ from __future__ import annotations
 
 import hmac
 import json
+import ssl
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 
 API_BASE = "https://platform-api2.max.ru"
+
+#: Связка корня и промежуточного сертификата Минцифры, которую кладёт
+#: scripts/install-ru-ca.sh и монтирует docker-compose. Сертификат
+#: platform-api2.max.ru выдан «Russian Trusted Sub CA», которого нет в
+#: стандартном наборе Debian, — без этой связки любая отправка падает на
+#: проверке TLS («unable to get local issuer certificate»).
+RU_CA_BUNDLE = Path("/etc/ssl/ru-ca/russian-trusted.pem")
 
 #: §10.1: «Control Plane проверяет X-Max-Bot-Api-Secret».
 WEBHOOK_SECRET_HEADER = "X-Max-Bot-Api-Secret"
@@ -88,6 +97,25 @@ def parse_message_created(update: dict) -> InboundMax | None:
                       chat_id=str(chat_id), message_id=str(message_id))
 
 
+def ssl_context() -> ssl.SSLContext:
+    """Контекст TLS для вызовов MAX: обычные корни ПЛЮС корень Минцифры.
+
+    Именно плюс, а не вместо: подменять весь набор корней связкой из двух
+    сертификатов значило бы перестать доверять всем остальным. И именно
+    здесь, а не в доверенных всего контейнера: доверие Минцифры нужно
+    ровно для одного адреса, и незачем распространять его на все
+    исходящие соединения Control Plane.
+
+    Связки нет — контекст остаётся стандартным. Так код работает в тестах
+    и в любой среде без этого файла, а на сервере без связки отправка
+    честно падает на проверке сертификата, а не тихо перестаёт проверять.
+    """
+    context = ssl.create_default_context()
+    if RU_CA_BUNDLE.exists():
+        context.load_verify_locations(cafile=str(RU_CA_BUNDLE))
+    return context
+
+
 def _send_request(token: str, chat_id: str, text: str, timeout: int) -> None:
     body = json.dumps({"chat_id": chat_id, "text": text}).encode("utf-8")
     request = urllib.request.Request(
@@ -96,7 +124,7 @@ def _send_request(token: str, chat_id: str, text: str, timeout: int) -> None:
         method="POST",
         headers={"Content-Type": "application/json", "Authorization": token},
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urllib.request.urlopen(request, timeout=timeout, context=ssl_context()) as response:
         response.read()
 
 
