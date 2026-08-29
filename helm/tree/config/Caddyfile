@@ -119,8 +119,9 @@ git.cmpas.ru {
 	import security_headers
 	import coop_locked
 	encode zstd gzip
-	# Forgejo появляется в P6.5; до установки домен отвечает 503, а не
-	# проксирует в пустоту.
+	# §18.1: приватный по умолчанию — сам Forgejo (REQUIRE_SIGNIN_VIEW,
+	# DISABLE_REGISTRATION в docker-compose.yml) решает, кто видит содержимое;
+	# Caddy здесь только TLS-периметр домена, не дополнительный слой авторизации.
 	reverse_proxy 127.0.0.1:3000 {
 		health_uri /api/healthz
 	}

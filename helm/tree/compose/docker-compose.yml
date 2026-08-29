@@ -146,6 +146,90 @@ services:
       resources:
         limits: {memory: 768m}
 
+  n8n:
+    image: n8nio/n8n:2.36.8
+    <<: *restart
+    logging: *logging
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: "5432"
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: n8n
+      DB_POSTGRESDB_PASSWORD_FILE: /run/secrets/n8n_database_password
+      N8N_ENCRYPTION_KEY_FILE: /run/secrets/n8n_encryption_key
+      GENERIC_TIMEZONE: Europe/Moscow
+      TZ: Europe/Moscow
+      # §17.1: Community edition, queue mode не включаем (EXECUTIONS_MODE не
+      # задан → regular, без Redis — "no Redis unless factual need appears").
+      # §17.4: редактор остаётся localhost/SSH-туннель, наружу через Caddy
+      # не идёт вообще — ни один OAuth callback пока не заведён (P6 start
+      # set его не требует), поэтому WEBHOOK_URL смотрит на loopback.
+      N8N_HOST: 127.0.0.1
+      N8N_PROTOCOL: http
+      N8N_PORT: "5678"
+      WEBHOOK_URL: http://127.0.0.1:5678/
+    secrets: [n8n_database_password, n8n_encryption_key]
+    volumes:
+      - n8n_data:/home/node/.n8n
+    # §4.6 / test_perimeter.py::NEVER_PUBLIC_PORTS: 5678 никогда не публичный
+    # — только 127.0.0.1, доступ владельца через ssh -L 5678:127.0.0.1:5678.
+    ports: ["127.0.0.1:5678:5678"]
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits: {memory: 512m}
+
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:15.0.3
+    <<: *restart
+    logging: *logging
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      FORGEJO__database__DB_TYPE: postgres
+      FORGEJO__database__HOST: postgres:5432
+      FORGEJO__database__NAME: forgejo
+      FORGEJO__database__USER: forgejo
+      FORGEJO__database__PASSWD__FILE: /run/secrets/forgejo_database_password
+      FORGEJO__server__DOMAIN: git.cmpas.ru
+      FORGEJO__server__ROOT_URL: https://git.cmpas.ru/
+      FORGEJO__server__HTTP_PORT: "3000"
+      # §18.1 "git.cmpas.ru private by default": ни анонимного чтения, ни
+      # самостоятельной регистрации — единственный владелец заводится вручную
+      # один раз (forgejo admin user create) после первого подъёма.
+      FORGEJO__service__DISABLE_REGISTRATION: "true"
+      FORGEJO__service__REQUIRE_SIGNIN_VIEW: "true"
+      FORGEJO__repository__DEFAULT_PRIVATE: private
+      # Пропускает веб-инсталлятор (небезопасен для контейнера без сохранения
+      # состояния установки между рестартами) — конфигурация целиком через
+      # переменные окружения, как и было задумано с самого начала.
+      FORGEJO__security__INSTALL_LOCK: "true"
+      TZ: Europe/Moscow
+    secrets: [forgejo_database_password]
+    volumes:
+      - forgejo_data:/data
+    # SSH-клонирование не заводим (§18.1: "отдельный public Forgejo SSH порт
+    # не обязателен" — HTTPS-токена достаточно) — порт 22 не публикуется и
+    # не пробрасывается вовсе, меньше поверхность внимания на порт наружу.
+    ports: ["127.0.0.1:3000:3000"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:3000/api/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits: {memory: 512m}
+
   caddy:
     image: caddy:2.8-alpine
     <<: *restart
@@ -180,8 +264,13 @@ secrets:
   hermes_service_hmac:  {file: /etc/helm/secrets/hermes_service_hmac}
   panel_auth_cookie_secret:    {file: /etc/helm/secrets/panel_auth_cookie_secret}
   telegram_bot_token:          {file: /etc/helm/secrets/telegram_bot_token}
+  n8n_database_password:       {file: /etc/helm/secrets/n8n_database_password}
+  n8n_encryption_key:          {file: /etc/helm/secrets/n8n_encryption_key}
+  forgejo_database_password:   {file: /etc/helm/secrets/forgejo_database_password}
 
 volumes:
   pgdata:       {name: helm_pgdata}
   caddy_data:   {name: helm_caddy_data}
   caddy_config: {name: helm_caddy_config}
+  n8n_data:     {name: helm_n8n_data}
+  forgejo_data: {name: helm_forgejo_data}
