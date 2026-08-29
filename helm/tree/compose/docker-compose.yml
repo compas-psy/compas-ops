@@ -172,6 +172,12 @@ services:
       N8N_PORT: "5678"
       WEBHOOK_URL: http://127.0.0.1:5678/
     secrets: [n8n_database_password, n8n_encryption_key]
+    # Тот же класс проблемы, что уже решён для helm-core: секреты — root:
+    # helm-secrets 640, образ n8n работает под непривилегированным node
+    # (не root), без членства в группе — EACCES на /run/secrets/*.
+    # GID числом, не именем (см. helm-core выше — имя группы не резолвится
+    # через границу bind-mount).
+    group_add: ["10001"]
     volumes:
       - n8n_data:/home/node/.n8n
     # §4.6 / test_perimeter.py::NEVER_PUBLIC_PORTS: 5678 никогда не публичный
