@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-08-29T08:24:00Z",
-  "phase": "P4-done",
-  "task": "P4 закрыт целиком. A-DoD п.1-2-3 (Milestone A) подтверждены на живом Telegram-пути (плагин helm-control переехал с нерабочей ~/.hermes/hooks на настоящую ~/.hermes/plugins/PluginManager; чинились owner_id/message_id в payload и sync-требование колбэков). Все 5 профилей Hermes (chief/business/engineering/health/reviewer, §11.2) созданы и провизионированы: у каждого свой scoped LiteLLM virtual key (не общий master key, §15.4), правильный alias по матрице §15.7, у четырёх worker-профилей снят TELEGRAM_BOT_TOKEN (§9.1). Проверено вживую по отдельности: engineering/reviewer (разные alias+ключи), business/health, chief через реальное Telegram-сообщение после смены ключа. Следующая фаза — P5 (Guardian): офлайн-часть уже собрана и протестирована (10 тестов, мутационная проверка), нужен live-деплой на сервер.",
+  "updated_at": "2026-08-29T09:15:00Z",
+  "phase": "P5-done",
+  "task": "P4 и P5 закрыты. P5: Guardian развёрнут (systemd, каждые 5 мин, реальные метрики, overall=warn — только ещё не собранный chief API server порт 8765, некритично); backup — restic поверх rclone/Яндекс Диск WebDAV (rclone:yandex:helm-backup), ежедневный таймер 03:30 MSK; A-DoD п.10 подтверждён живым restore-test в изолированный одноразовый Postgres-контейнер (реальные данные восстановлены). Найдена и исправлена причина 401 на Яндекс WebDAV — логин не должен содержать @yandex.ru/@yandex. (Yandex-Uid: 0 в ответе — верный диагностический признак). Владелец распорядился: backup двухэтапный — P5 покрывает Postgres/config/Hermes state, в P6.5 (после Forgejo) добавить Forgejo repos/DB/PR-metadata в тот же restic offsite и сделать отдельный restore-test репозитория (refs/tags/HEAD). Осталось до Milestone A: A-DoD п.4-6 (GREEN/YELLOW/RED approval-поток на живом Hermes-действии, офлайн 49 тестов пройдены, но не через реальный live-поток) и п.9 (reboot VPS).",
   "worker": "orchestrator",
   "model": "claude-sonnet-5",
   "status": "in_progress",
@@ -41,6 +41,12 @@
       "severity": "medium"
     },
     {
+      "id": "F-260829-03",
+      "description": "Яндекс Диск WebDAV (webdav.yandex.ru) отвергает логин в формате полного email (user@yandex.ru или обрезанного user@yandex.) — 401 Unauthorized с заголовком Yandex-Uid: 0 (сервер не резолвит identity вообще, это не 'неверный пароль'). Ожидает голый логин без домена. С 22.06.2026 WebDAV-доступ к Яндекс Диску также требует подписку Яндекс 360.",
+      "mitigation": "YANDEX_WEBDAV_USER — только локальная часть логина, без @yandex.ru; при 401 на Яндекс WebDAV сразу проверять заголовок Yandex-Uid в ответе — 0 значит проблема с логином, не с паролем",
+      "severity": "low"
+    },
+    {
       "id": "F-260829-02",
       "description": "Hermes Agent имеет ДВЕ разные системы хуков с похожими именами и одинаковой директорией-конвенцией: ~/.hermes/hooks/<name>/ (HOOK.yaml+handler.py, gateway/hooks.py::HookRegistry) — чисто уведомительная, события через двоеточие (agent:start, session:end), никогда не блокирует; ~/.hermes/plugins/<name>/ (plugin.yaml+__init__.py с register(ctx), hermes_cli/plugins.py::PluginManager, opt-in через plugins.enabled) — единственная, которая реально дёргает pre_gateway_dispatch/pre_llm_call и умеет skip/rewrite/allow. Первая молча 'загружает' плагин под любым именем события без валидации — лог '[hooks] Loaded hook ...' ничего не гарантирует. Плюс: колбэки PluginManager обязаны быть синхронными (async def создаёт неawait-нутую корутину без единой ошибки в логе). Плюс: Python-логи gateway-процесса под systemd буферизуются без PYTHONUNBUFFERED=1 — журнал может часами не показывать реальные события.",
       "mitigation": "любой новый gateway-хук с реальным gating (skip/rewrite/allow) — только через ~/.hermes/plugins/, plugin.yaml с hooks:, __init__.py с register(ctx): ctx.register_hook(name, callback), явный `hermes plugins enable <name>`, колбэк — обычный def, не async def; проверять реальное срабатывание не по стартовому логу загрузки, а по независимому side-effect (в этом случае — по логу самого helm-core, не по логу Hermes)",
@@ -60,6 +66,10 @@
     {
       "item": "P4 профили + virtual keys (§11.2, §15.4)",
       "note": "5 профилей Hermes (chief/business/engineering/health/reviewer) созданы, у каждого свой scoped LiteLLM virtual key вместо общего master key, правильный alias по §15.7, Telegram-токен снят у четырёх worker-профилей (§9.1). Проверено вживую по отдельности для всех пяти."
+    },
+    {
+      "item": "P5 Guardian + Backup, A-DoD п.10",
+      "note": "Guardian живой (systemd timer 5 мин, реальные метрики). Backup — restic поверх rclone/Яндекс Диск WebDAV, ежедневный таймер. Restore-test прошёл в изолированном одноразовом Postgres-контейнере с реальными данными (не заглушка)."
     }
   ],
   "found_and_fixed_this_bring_up": [

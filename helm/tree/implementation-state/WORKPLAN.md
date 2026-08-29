@@ -4,7 +4,51 @@
 каждой значимой задачи — это заменяет необходимость владельцу писать
 «продолжай».
 
-## Текущая фаза: **P4 закрыт.** P5 (Guardian) развёрнут и работает live. Backup — в процессе (restic/rclone поверх Яндекс Диска, WebDAV 401 — диагностируется).
+## Текущая фаза: **P4 и P5 закрыты.** Остаток до Milestone A: A-DoD п.4-6 (GREEN/YELLOW/RED-поток end-to-end на живом Hermes-действии) и п.9 (reboot VPS не ломает core loop) — ещё не проверены вживую на этом сервере (офлайн policy-движок/action registry прошёл 49 тестов, но не через реальный Hermes→Control Plane поток).
+
+## P5 — Guardian + Backup (закрыто)
+
+- [x] `guardian.py`/`cleanup.sh` развёрнуты в `/opt/helm/guardian/`,
+      `helm-guardian.service`(oneshot)+`.timer` (каждые 5 мин) в systemd,
+      включены. Живой прогон показывает реальные метрики (диск/RAM/своп/
+      load/docker/postgres/control-plane/litellm) — не заглушку.
+      `hermes: warn` (порт 8765, chief API server §11.4) — ожидаемо, эта
+      фича ещё не собрана, не блокер.
+- [x] Прямой алерт (§25.5): секрет `guardian_telegram_token` — копия уже
+      выданного владельцем `telegram_bot_token` (не отдельный бот;
+      независимость обеспечена root-only путём чтения, не отдельной
+      identity — §25.5 требует именно первое).
+- [x] Backup (§26, restic поверх rclone/Яндекс Диск WebDAV,
+      `rclone:yandex:helm-backup`):
+      - `backup_credentials` (Яндекс WebDAV URL/логин/app-пароль) владелец
+        положил напрямую на сервер, минуя чат.
+      - **Найдено и исправлено:** Яндекс WebDAV ожидает голый логин без
+        `@yandex.ru`/`@yandex.` — `401 Unauthorized` с `Yandex-Uid: 0`
+        (сервер не резолвит identity) чётко на это указывал; после
+        исправления логина — `207 Multi-Status`, реальный листинг Диска.
+      - `setup_backup.sh` (разовый, идемпотентный): ставит rclone+restic,
+        создаёт rclone remote, генерирует `restic_password`
+        (`/etc/helm/secrets/restic_password`, единственная копия —
+        владельцу стоит держать offline-копию отдельно), инициализирует
+        repo.
+      - `backup.sh` (ежедневно, `helm-backup.timer`, 03:30 MSK):
+        `pg_dumpall` (весь кластер, не по БД), консистентные
+        `sqlite3 .backup` для `kanban.db`/`state.db` (сырое копирование
+        WAL-файлов рискованно), конфиг Control Plane/LiteLLM/Guardian,
+        `/etc/helm/secrets`, профили/state Hermes. `--exclude skills`
+        (втроенный набор Hermes, дублировался 5× по профилям, не
+        уникальные данные — раздувал WebDAV-аплоад мелкими файлами).
+        Ретеншен 7 daily/4 weekly/3 monthly (дефолт, не задан спекой
+        явно). Первый живой прогон: 2510 файлов, 26.9 MiB, 2:42.
+      - **A-DoD п.10 подтверждён:** `restore_test.sh` восстанавливает
+        последний снапшот и грузит `pg_dumpall`-дамп в ИЗОЛИРОВАННЫЙ
+        одноразовый Postgres-контейнер (не прод) — реальные данные
+        (таблица `tasks`, 6 строк) и все 4 файла `profiles/*/config.yaml`
+        подтверждены восстановленными. `helm-backup.timer` включён.
+
+**Распоряжение владельца (29.08.2026) — backup не закрыт для системы в целом:**
+См. секцию ниже «Распоряжение владельца: backup — двухэтапный». P5 покрывает
+только Postgres/config/Hermes state; Forgejo repos/DB/PR-metadata — в P6.5.
 
 ## Распоряжение владельца: backup — двухэтапный, P5 не покрывает всё (зафиксировано 29.08.2026)
 
