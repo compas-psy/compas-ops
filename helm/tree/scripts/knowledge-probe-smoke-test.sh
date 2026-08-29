@@ -47,10 +47,15 @@ sudo docker compose exec -T helm-core python3 - <<'PYEOF'
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from helm_core.config import Settings
+from helm_core.config import get_settings
 from helm_core.knowledge.ingest import ingest_text
 
-settings = Settings()
+# get_settings() (не Settings() напрямую!) — она разворачивает
+# HELM_DATABASE_URL_FILE в HELM_DATABASE_URL ДО создания Settings
+# (config.py::_resolve_file_env_vars). Settings() в обход этого падает
+# на дефолт из кода (unix-сокет /var/run/postgresql, которого в этом
+# контейнере нет) — ровно так и было в первой версии этого скрипта.
+settings = get_settings()
 engine = create_engine(settings.database_url)
 with Session(engine) as session:
     source = ingest_text(
