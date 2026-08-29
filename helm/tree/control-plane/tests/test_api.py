@@ -57,6 +57,35 @@ def test_inbound_rejects_non_owner(client):
     assert r.status_code == 403
 
 
+# ── §14.11: Knowledge Probe как internal endpoint, вызываемый до Hermes ──────
+
+def test_knowledge_probe_endpoint_returns_needs_reasoning_on_empty_corpus(client):
+    r = post_internal(client, "/internal/knowledge/probe", {"query": "что угодно"})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"outcome": "NEEDS_REASONING", "mode": None, "answer_text": None}
+
+
+def test_knowledge_probe_endpoint_returns_local_answer(client):
+    from helm_core.knowledge.ingest import ingest_text
+
+    with client.app.state.session_factory() as session:
+        ingest_text(session, domain="engineering", text="Решение: используем Postgres.")
+        session.commit()
+
+    r = post_internal(client, "/internal/knowledge/probe", {"query": "какое решение приняли"})
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["outcome"] == "LOCAL_ANSWER"
+    assert body["mode"] == "Z0"
+    assert "Postgres" in body["answer_text"]
+
+
+def test_knowledge_probe_endpoint_requires_service_auth(client):
+    r = client.post("/internal/knowledge/probe", json={"query": "что угодно"})
+    assert r.status_code == 422 or r.status_code == 401
+
+
 # ── A-DoD п.4-6: propose()/decision() через реальный HTTP, не сервис напрямую ──
 
 def test_propose_green_executes_immediately_via_http(client):

@@ -61,7 +61,11 @@ class ProbeResult:
     evidence: list[Evidence] = field(default_factory=list)
 
 
-def _query_hash(query: str) -> str:
+def query_hash(query: str) -> str:
+    """Публичная: переиспользуется вызывающим кодом (например, `/hooks/max`)
+    при логировании `knowledge_answer_runs` для NEEDS_REASONING→C1 —
+    один и тот же вопрос обязан хэшироваться одинаково независимо от
+    того, кто пишет строку."""
     return hashlib.sha256(query.strip().casefold().encode("utf-8")).hexdigest()
 
 
@@ -119,9 +123,12 @@ def probe(session: Session, *, query: str, domain: str | None = None) -> ProbeRe
     заведомо False, остальных полей достаточно для paid-avoidance метрики
     (§14.14). NEEDS_REASONING строку НЕ пишет: mode (C1 или неудавшийся
     Z2) и cloud_model станут известны только после реального вызова
-    Hermes — логировать эту строку обязан вызывающий код после ответа
-    (задача wiring — /hooks/max и helm-control, ещё не сделана в этом
-    заходе).
+    Hermes — логировать эту строку обязан вызывающий код после ответа.
+    `/hooks/max` делает это (§10.2, in-process — Control Plane сам вызывает
+    Hermes и видит ответ). `helm-control` (Telegram) — нет: Hermes вызывает
+    LLM у себя, Control Plane не видит момент завершения хода, чтобы
+    залогировать строку постфактум; это открытый пробел, не реализовано,
+    ждёт живой разведки хуков gateway на предмет пост-ответного события.
     """
     evidence = _lexical_search(session, query=query, domain=domain)
 
@@ -133,7 +140,7 @@ def probe(session: Session, *, query: str, domain: str | None = None) -> ProbeRe
 
     answer_text, mode = _compose_answer(evidence)
     session.add(KnowledgeAnswerRun(
-        query_hash=_query_hash(query), domain=domain, mode=mode,
+        query_hash=query_hash(query), domain=domain, mode=mode,
         paid_ai_used=False, evidence_count=len(evidence),
     ))
     return ProbeResult(outcome="LOCAL_ANSWER", mode=mode, answer_text=answer_text,

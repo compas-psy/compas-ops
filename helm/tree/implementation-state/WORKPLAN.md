@@ -1,10 +1,74 @@
-# WORKPLAN — HELM v3.3
+# WORKPLAN — HELM v3.4
 
 Живой файл состояния реализации (ТЗ §31.0). Обновляется оркестратором после
 каждой значимой задачи — это заменяет необходимость владельцу писать
 «продолжай».
 
-## Текущая фаза: **Milestone A закрыт целиком.** Milestone B: Panel auth **закрыт**, n8n (P6) и Forgejo (P6.5) **подняты и подтверждены живьём**. MAX (P7): сторона Control Plane реализована и живьём подтверждена секретами/дедупом/доставкой; **архитектура пересмотрена 29.08.2026** — вместо нового Hermes-side плагина Control Plane станет клиентом уже существующего встроенного API Hermes (`/v1/responses`), план в `docs/adr/ADR-020-max-responses-api.md` и `scripts/hermes-enable-runbook.md`. Миграционный пакет Forgejo готов (§18.3 шаги 1-9, включая инвентаризацию). 120 тестов зелёные. Следующие шаги на сервере: включить API Hermes для MAX, миграция репозиториев, ключ n8n API. Первый n8n-коннектор — за выбором владельца.
+## Текущая фаза: **Milestone A и Milestone B закрыты целиком** (Panel auth, n8n, Forgejo, MAX — все подтверждены живьём, MAX включая реальный ответ chief-агента в реальном чате 29.08.2026). Пришёл **HELM v3.4** (§14, HELM Knowledge/«второй мозг») — `V3.4-DELTA.md` сверил его со STATUS.json построчным диффом фактических файлов спеки, изменения изолированы в §14 + additive-шаги в §9.3/§10.2/§26.1/§30.8. Реализовано в этом заходе **оффлайн** (см. `## HELM Knowledge (P8.5) — v3.4`): схема БД (P8.5.1), лексический Knowledge Probe без embeddings (P8.5.4/5 частично) и его wiring в обе точки входа (`/hooks/max`, `helm-control`). 138 тестов зелёные (было 120). Следующий шаг — **деплой на сервер** (`knowledge-deploy-runbook.md`) и живая проверка Probe на реальном боте; остальное из v3.4 (парсеры, GigaAM, embeddings, Graphify) осознанно отложено, требует бенчмарка на живом VPS. Параллельно ждут: миграция репозиториев в Forgejo (`forgejo-migrate-runbook.md`), ключ n8n API, живая проверка MAX cross-channel дедупа/`/force`/n8n-down (deferred).
+
+## HELM Knowledge (P8.5) — v3.4, реализовано оффлайн 29.08.2026, деплой не выполнен
+
+`V3.4-DELTA.md` — методология и полный список already-satisfied/needs-additive/
+conflicts/tests-to-rerun. Коротко, что сделано в этом заходе:
+
+- **P8.5.1 схема БД**: 6 таблиц §14.4 (`knowledge_sources`, `knowledge_chunks`,
+  `knowledge_notes`, `knowledge_relations`, `knowledge_ingest_jobs`,
+  `knowledge_answer_runs`), alembic-миграция `b0ff2dca9936` поверх
+  `f12e419c664b_initial_schema`, нулевой drift проверен повторным
+  autogenerate на одноразовой scratch-БД. Каталоги `/opt/helm-knowledge/*`
+  (`scripts/knowledge-bootstrap.sh`) и `backup.sh` со scope-добавлением
+  (`derived/` исключён — воспроизводимый вывод Graphify).
+- **P8.5.4/5 частично — лексический Knowledge Probe**: `helm_core/knowledge/
+  {ingest,probe}.py`. `ingest_text()` — SHA256-дедуп, разбиение на чанки по
+  абзацам, `to_tsvector('russian', ...)`. `probe()` — Z0 (одно совпадение,
+  extractive с источником) / Z1 (несколько, детерминированный список без
+  LLM) / NEEDS_REASONING. 13 golden-case тестов (§30.8.5) написаны ДО
+  правки кода и нашли два реальных бага PostgreSQL FTS, каждый подтверждён
+  напрямую в `psql` перед тем, как трогать Python:
+  - `plainto_tsquery` AND-комбинирует все стеммы запроса — вопрос из
+    нескольких слов никогда не совпадал с документом-фактом, содержащим
+    только один общий корень. Исправлено OR-ификацией тсквери
+    (`replace(plainto_tsquery(...)::text, ' & ', ' | ')::tsquery`).
+  - `ts_rank` без `normalization` игнорирует длину документа — длинный
+    нерелевантный документ с одним случайным словом получал тот же ранг,
+    что короткий релевантный. Исправлено `normalization=2`; порог
+    `MIN_RANK_SCORE` пересчитан под новую шкалу эмпирически (шум ~0.0009,
+    реальные совпадения 0.0068–0.0203 → порог 0.003, не «на глаз»).
+- **Wiring** (задача #10 трекера): новый эндпоинт `POST
+  /internal/knowledge/probe` (HMAC service auth, тот же паттерн, что
+  `/internal/inbound`) — вызывается ДО обращения к Hermes. `/hooks/max`
+  вызывает его in-process (Control Plane сам ходит к Hermes и видит
+  ответ — логирует `knowledge_answer_runs` mode=C1/paid_ai_used=true
+  постфактум). `hermes/plugins/helm-control/__init__.py` вызывает его по
+  HTTP тем же HMAC-подписанным паттерном, что и `_register_task`, но
+  **fail-open**, не fail-closed: недоступность Probe не блокирует
+  сообщение — оно просто идёт к LLM как обычно, без бесплатного пути в
+  этот раз (в отличие от регистрации задачи, где недоступность Control
+  Plane обязана остановить всё). LOCAL_ANSWER на любой из двух точек
+  входа отвечает владельцу напрямую, chief вообще не вызывается.
+- **Открытый пробел, зафиксирован как находка F-260829-25**: для
+  Telegram логирование paid-avoidance метрики (§14.14) при
+  NEEDS_REASONING→реальный ответ Hermes НЕ реализовано — Control Plane
+  не получает от Hermes gateway события о завершении хода (в отличие от
+  MAX, где Control Plane сам делает HTTP-вызов). Требует живой разведки
+  hook-словаря gateway на сервере, тем же методом, что нашёл
+  `pre_gateway_dispatch`/`pre_llm_call` изначально (F-260829-02) — не
+  догадка по названию.
+
+Не сделано, осознанно отложено (требует моделей/пакетов и бенчмарка на
+живом 12GB VPS — спека сама запрещает хардкодить выбор до бенчмарка):
+парсеры (MarkItDown/Docling, P8.5.2), GigaAM ASR (P8.5.3), embedding-модель
++ pgvector (P8.5.4 вторая половина), Z2 локальный генератор (необязателен
+по спеке), Graphify A/B (P8.5.6), реальный ingest вложений Telegram/MAX
+(P8.5.7), строка Knowledge в Panel (P8.5.8, бессмысленна без данных).
+Отдельная схема/роль Postgres для `health` (§14.15) — тоже отложено,
+сейчас только логическая колонка `domain` (см. «Conflicts found» в
+`V3.4-DELTA.md`).
+
+Код не задеплоен на сервер — весь этот раздел оффлайн, `knowledge-
+deploy-runbook.md` описывает порядок (код+миграция → bootstrap каталогов
+→ только потом обновлённый `backup.sh`, с обязательной перепроверкой
+`restore_test.sh` после).
 
 ## Инвентаризация репозиториев (§18.3 шаг 1) — выполнена 29.08.2026
 

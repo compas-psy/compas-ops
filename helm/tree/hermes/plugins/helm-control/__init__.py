@@ -58,6 +58,7 @@ import urllib.error
 import urllib.request
 
 CONTROL_PLANE_URL = "http://127.0.0.1:8080/internal/inbound"
+KNOWLEDGE_PROBE_URL = "http://127.0.0.1:8080/internal/knowledge/probe"
 HMAC_SECRET_PATH = "/etc/helm/secrets/hermes_service_hmac"
 REQUEST_TIMEOUT = 5
 
@@ -107,6 +108,35 @@ def _register_task(channel: str, external_message_id: str, owner_id: str, text: 
         raise RuntimeError(
             f"HTTP {exc.code} от Control Plane: {exc.read().decode(errors='replace')}"
         ) from exc
+
+
+def _probe_local_answer(text: str) -> dict | None:
+    """Free-first Knowledge Probe (ТЗ §14.11, v3.4), ДО обращения к LLM.
+
+    В отличие от `_register_task` это НЕ fail-closed гейт: probe — способ
+    сэкономить на платной модели, а не проверка допуска. Недоступность
+    Control Plane здесь не блокирует ответ владельцу — сообщение просто
+    идёт к LLM как обычно, без бесплатного локального пути в этот раз.
+    """
+    body = json.dumps({"query": text}).encode("utf-8")
+    ts = str(time.time())
+    sig = _sign(_read_secret(), ts, body)
+    req = urllib.request.Request(
+        KNOWLEDGE_PROBE_URL,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-Helm-Timestamp": ts,
+            "X-Helm-Signature": sig,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+            return json.loads(resp.read().decode())
+    except Exception as exc:
+        print(f"[helm-control] knowledge_probe failed: {exc}", flush=True)
+        return None
 
 
 def handle(event=None, gateway=None, session_store=None, **kwargs):
@@ -170,6 +200,20 @@ def _on_pre_gateway_dispatch(event, gateway):
 
     if source and source.chat_id:
         _task_ids[str(source.chat_id)] = result["task_id"]
+
+    probe_result = _probe_local_answer(event.text)
+    if probe_result and probe_result.get("outcome") == "LOCAL_ANSWER":
+        try:
+            asyncio.get_running_loop().create_task(
+                gateway.adapters[source.platform].send(
+                    text=probe_result["answer_text"],
+                    chat_id=source.chat_id,
+                )
+            )
+        except Exception:
+            pass
+        return {"action": "skip", "reason": "knowledge_probe_local_answer"}
+
     return None
 
 

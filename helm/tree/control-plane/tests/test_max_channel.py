@@ -354,6 +354,38 @@ def test_webhook_does_not_call_chief_twice_on_redelivery(app, client):
     assert len(app.state.hermes_bridge.calls) == 1
 
 
+def test_webhook_answers_locally_without_calling_chief_when_probe_finds_answer(app, client):
+    """§14.11: LOCAL_ANSWER отвечает напрямую — Hermes вообще не вызывается."""
+    from helm_core.knowledge.ingest import ingest_text
+
+    with app.state.session_factory() as session:
+        ingest_text(session, domain="engineering", text="Решение: используем Postgres.")
+        session.commit()
+
+    response = post_hook(client, _update(text="какое решение приняли"))
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "local_answer"
+    assert app.state.hermes_bridge.calls == []
+    with app.state.session_factory() as session:
+        message = session.scalars(select(OutboxMessage)).one()
+        assert message.channel == "max"
+        assert "Postgres" in message.payload_reference["text"]
+
+
+def test_webhook_calls_chief_when_probe_finds_nothing(app, client):
+    """Пустой корпус — NEEDS_REASONING, обычный путь через Hermes не меняется."""
+    response = post_hook(client, _update(text="собери отчёт"))
+
+    assert response.status_code == 202
+    assert len(app.state.hermes_bridge.calls) == 1
+    with app.state.session_factory() as session:
+        from helm_core.models import KnowledgeAnswerRun
+        run = session.scalars(select(KnowledgeAnswerRun)).one()
+        assert run.mode == "C1"
+        assert run.paid_ai_used is True
+
+
 def test_webhook_queues_transport_notice_when_chief_is_down(app, client, caplog):
     """§10.3: task остаётся REGISTERED, владелец получает транспортное уведомление.
 

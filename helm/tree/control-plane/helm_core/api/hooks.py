@@ -6,10 +6,12 @@
 поэтому ниже нет ни одной ветки, которая делает что-либо до его проверки.
 
 Порядок шагов взят из §10.1 дословно: проверить секрет → проверить
-владельца → дедуплицировать → зарегистрировать task → вызвать локальный
-chief API. Порядок важен, а не декоративен: вердикт дедупликации нужен
-ДО обращения к Hermes, иначе на схлопнутом дубле chief ответил бы во
-второй раз на уже отвеченный вопрос.
+владельца → дедуплицировать → зарегистрировать task → Knowledge Probe →
+вызвать локальный chief API. Порядок важен, а не декоративен: вердикт
+дедупликации нужен ДО обращения к Hermes, иначе на схлопнутом дубле
+chief ответил бы во второй раз на уже отвеченный вопрос; Probe (§14.11,
+v3.4) — тоже до Hermes, а не «совет поискать» — LOCAL_ANSWER отвечает
+владельцу напрямую и chief вообще не вызывается.
 
 Вызов Hermes (`HermesBridge.deliver`, §10.2) уходит в ФОНОВУЮ задачу, а
 не в тело этого обработчика: это синхронный HTTP-запрос к
@@ -32,7 +34,8 @@ from starlette.datastructures import State
 from ..channels.max import WEBHOOK_SECRET_HEADER, parse_message_created, verify_webhook_secret
 from ..hermes_bridge import HermesUnavailable
 from ..ingest import IngestService
-from ..models import TaskEvent
+from ..knowledge.probe import probe, query_hash
+from ..models import KnowledgeAnswerRun, TaskEvent
 from ..outbox import enqueue
 from .deps import get_session
 
@@ -80,6 +83,15 @@ def _run_chief_and_enqueue_reply(state: State, *, task_id: str, owner_id: str,
             session.commit()
             return
 
+        # §14.14 paid-avoidance metric: до этой точки Probe уже вернул
+        # NEEDS_REASONING (вызывающая сторона иначе не дошла бы сюда) — раз
+        # Hermes реально вызван и ответил, это платная эскалация (C1),
+        # логируется постфактум, потому что латентность/факт успеха
+        # известны только сейчас.
+        session.add(KnowledgeAnswerRun(
+            query_hash=query_hash(text), domain=None, mode="C1",
+            paid_ai_used=True, evidence_count=0,
+        ))
         enqueue(session, channel="max", recipient=chat_id,
                 reference=f"max-reply:{task_id}",
                 payload_reference={"text": reply_text})
@@ -140,6 +152,18 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
 
     task_id = str(result.task.id)
     session.commit()
+
+    # §14.11: бесплатный локальный путь ДО платной модели. LOCAL_ANSWER
+    # уже залогирован в knowledge_answer_runs внутри probe() — здесь
+    # только доставка; chief вообще не вызывается.
+    probe_result = probe(session, query=result.text)
+    if probe_result.outcome == "LOCAL_ANSWER":
+        enqueue(session, channel="max", recipient=inbound.chat_id,
+                reference=f"knowledge-probe:{task_id}",
+                payload_reference={"text": probe_result.answer_text})
+        session.commit()
+        return {"status": "local_answer", "task_id": task_id}
+
     background.add_task(_run_chief_and_enqueue_reply, request.app.state,
                         task_id=task_id, owner_id=request.app.state.owner_id,
                         chat_id=inbound.chat_id, text=result.text)

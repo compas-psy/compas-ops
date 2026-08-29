@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..ingest import IngestService, NotOwner
+from ..knowledge.probe import probe
 from ..models import ModelRun, Task, TaskEvent, TaskStatus, utcnow
 from ..outbox import enqueue
 from .deps import get_session
@@ -54,6 +55,27 @@ def inbound(message: InboundMessage, request: Request,
     session.commit()
     return {"task_id": str(result.task.id), "created": result.created,
             "dedup_reason": result.dedup_reason, "status": result.task.status}
+
+
+class KnowledgeProbeIn(BaseModel):
+    query: str = Field(min_length=1)
+    domain: str | None = None
+
+
+@router.post("/knowledge/probe")
+def knowledge_probe(body: KnowledgeProbeIn,
+                    session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Free-first Knowledge Probe (§14.11), вызывается ДО LLM.
+
+    `helm-control` (Telegram) и `/hooks/max` — единственные вызывающие;
+    оба обязаны дёргать это ДО обращения к Hermes, не после. LOCAL_ANSWER
+    уже залогирован в `knowledge_answer_runs` внутри `probe()` — здесь
+    просто отдаём результат вызывающей стороне, чтобы та решила, слать
+    ли ответ напрямую или пропускать сообщение к модели.
+    """
+    result = probe(session, query=body.query, domain=body.domain)
+    session.commit()
+    return {"outcome": result.outcome, "mode": result.mode, "answer_text": result.answer_text}
 
 
 class OutboundMessage(BaseModel):
