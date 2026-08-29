@@ -50,8 +50,15 @@ ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "sudo rm -rf /o
 
 ## 4. Проверка изнутри контейнера — до живого MAX
 
+Скриптом, не строкой: python-однострочник с вложенными кавычками через
+`ssh` в PowerShell разваливается на экранировании — та же ловушка, что
+уже несколько раз ловилась на этом сервере.
+
 ```powershell
-ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "cd /opt/helm/compose && sudo docker compose exec -T helm-core python3 -c \"import urllib.request; print(urllib.request.urlopen('http://host.docker.internal:8642/health', timeout=5).status)\""
+cd D:\ПРОЕКТЫ\simpas\helm\compas-ops
+git pull origin claude/ai-agents-server-deployment-xdp77a
+scp -i "C:\Users\eliah\.ssh\helm_deploy_key" helm\tree\scripts\check-hermes-reachable.sh helm@185.250.44.137:/tmp/
+ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "sudo bash /tmp/check-hermes-reachable.sh"
 ```
 
 Ожидается `200`. Это proof того, что контейнер реально достаёт до
