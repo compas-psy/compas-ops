@@ -126,6 +126,7 @@ def decision(approval_id: uuid.UUID, body: DecisionIn, request: Request,
              session: Session = Depends(get_session)) -> dict[str, Any]:
     """Решение из Telegram (§8.5). Команда не проходит через LLM."""
     service = request.app.state.approval_service_factory(session)
+    from ..actions.registry import PreconditionFailed
     from ..approvals.service import ApprovalError, NotAuthorized
 
     try:
@@ -137,6 +138,15 @@ def decision(approval_id: uuid.UUID, body: DecisionIn, request: Request,
     except NotAuthorized as exc:
         session.commit()  # запись о неавторизованной попытке обязана сохраниться
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc))
+    except PreconditionFailed as exc:
+        # НАЙДЕНО на живом смоук-тесте A-DoD п.4-6: без этого перехвата
+        # непройденное предусловие (§8.4 — перепроверяется прямо перед
+        # исполнением, между approve и этим моментом могло пройти 24ч)
+        # улетало как голый 500 Internal Server Error вместо осмысленной
+        # ошибки. status уже FAILED — execute_approved() выставляет его
+        # сам до re-raise.
+        session.commit()
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
     except ApprovalError as exc:
         session.commit()
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc))

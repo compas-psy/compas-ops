@@ -57,6 +57,40 @@ def test_inbound_rejects_non_owner(client):
     assert r.status_code == 403
 
 
+# ── A-DoD п.4-6: propose()/decision() через реальный HTTP, не сервис напрямую ──
+
+def test_propose_green_executes_immediately_via_http(client):
+    r = post_internal(client, "/internal/actions/propose", {
+        "action_type": "notify_owner", "payload": {"text": "готово"},
+    })
+    assert r.status_code == 201, r.text
+    assert r.json()["status"] == "EXECUTED"
+
+
+def test_propose_red_stays_pending_via_http(client):
+    r = post_internal(client, "/internal/actions/propose", {
+        "action_type": "publish_public_content",
+        "payload": {"channel": "tg_test", "body": "текст"},
+    })
+    assert r.status_code == 201, r.text
+    assert r.json()["status"] == "PENDING"
+
+
+def test_decision_precondition_failure_is_409_not_500(client):
+    """НАЙДЕНО на живом смоук-тесте: PreconditionFailed не ловился этим
+    роутом и улетал как голый 500 вместо осмысленной ошибки.
+    """
+    approval_id = post_internal(client, "/internal/actions/propose", {
+        "action_type": "publish_public_content",
+        "payload": {"channel": "tg_test", "body": "текст"},
+    }).json()["approval_id"]
+
+    r = post_internal(client, f"/internal/approvals/{approval_id}/decision", {
+        "approve": True, "decided_by": OWNER_ID, "channel": "telegram",
+    })
+    assert r.status_code == 409, r.text
+
+
 # ── service auth ────────────────────────────────────────────────────────────
 
 def test_internal_requires_signature(client):
