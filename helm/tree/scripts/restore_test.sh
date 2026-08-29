@@ -30,9 +30,21 @@ docker run --rm -d --name "$TEST_CONTAINER" \
   -e POSTGRES_PASSWORD=restoretest \
   pgvector/pgvector:pg16 >/dev/null
 
+# НАЙДЕНО 29.08.2026 на живом деплое: официальный образ postgres (и
+# pgvector/pgvector, собранный поверх него) на ПЕРВОМ запуске стартует
+# СЕРВЕР ДВАЖДЫ — временный (только чтобы прогнать init-скрипты), затем
+# он останавливается и запускается финальный, уже принимающий рабочие
+# подключения. pg_isready один раз успевает ответить "готов" ещё для
+# временного сервера, который тут же гасится (сокет исчезает) — psql
+# сразу после этого ловит гонку: "No such file or directory" на сокете,
+# хотя проверка готовности секундой раньше прошла зелёной. Единственный
+# надёжный сигнал именно финального запуска — вторая строка "database
+# system is ready to accept connections" в логе контейнера (первая —
+# от временного сервера); ждём именно её, а не однократный pg_isready.
 ready=0
 for _ in $(seq 1 60); do
-  if docker exec "$TEST_CONTAINER" pg_isready -U postgres >/dev/null 2>&1; then
+  count=$(docker logs "$TEST_CONTAINER" 2>&1 | grep -c "database system is ready to accept connections" || true)
+  if [ "$count" -ge 2 ]; then
     ready=1
     break
   fi
