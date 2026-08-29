@@ -46,7 +46,7 @@ restic backup \
   /home/helm/.hermes/plugins \
   /home/helm/.hermes/profiles \
   /home/helm/.hermes/memories \
-  /home/helm/.hermes/skills \
+  --exclude 'skills' \
   --tag helm-daily
 
 # Ретеншен: спека не задаёт конкретное число дней для бэкапов (только для
