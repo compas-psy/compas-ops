@@ -18,9 +18,10 @@ COMPOSE = ROOT / "compose" / "docker-compose.yml"
 
 #: §4.6 «Не публиковать»: PostgreSQL, LiteLLM, Hermes API/dashboard,
 #: admin API Control Plane, редактор n8n, внутренняя БД SignalAI.
-#: 8090 — локальный chief API Hermes (плагин max-bridge, §10.2 «127.0.0.1
-#: only»): по нему сообщение попадает прямо к модели минуя всё остальное.
-NEVER_PUBLIC_PORTS = {5432, 4000, 5678, 3306, 6379, 8090}
+#: 8642 — встроенный OpenAI-совместимый API-сервер Hermes (§10.2, chief
+#: API server): по нему сообщение попадает прямо к модели, минуя весь
+#: гейт Control Plane (регистрацию, дедуп, owner-проверку).
+NEVER_PUBLIC_PORTS = {5432, 4000, 5678, 3306, 6379, 8642}
 
 #: Единственные публичные пути (§4.6).
 ALLOWED_PUBLIC_PREFIXES = (
@@ -145,7 +146,7 @@ def test_internal_api_is_not_routed():
 def test_never_public_ports_are_not_proxied():
     """Ни один из закрытых портов не должен стоять целью reverse_proxy.
 
-    В первую очередь про 8090: локальный chief API Hermes (§10.2) отдаёт
+    В первую очередь про 8642: встроенный API Hermes (§10.2) отдаёт
     сообщение прямо модели, минуя регистрацию задачи и дедуп, — публичный
     маршрут на него обошёл бы весь Control Plane целиком.
     """

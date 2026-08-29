@@ -40,7 +40,7 @@ def create_app(settings: Settings | None = None, *, service_secret: str | None =
     app.state.telegram_bot_token = telegram_bot_token or read_secret("telegram_bot_token", "")
     app.state.max_webhook_secret = read_secret("max_webhook_secret", "")
     app.state.max_owner_id = settings.max_owner_id
-    app.state.hermes_bridge = HermesBridge(HERMES_BRIDGE_URL, app.state.service_secret)
+    app.state.hermes_bridge = HermesBridge(HERMES_BRIDGE_URL, read_secret("hermes_api_server_key", ""))
     #: Отправители по каналам для доставщика outbox. Пока один: Telegram
     #: отвечает через собственный адаптер Hermes, а не через эту очередь.
     app.state.senders = {"max": MaxSender(read_secret("max_bot_token", ""))}

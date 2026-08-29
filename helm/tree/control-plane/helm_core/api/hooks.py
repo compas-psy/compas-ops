@@ -10,6 +10,14 @@
 chief API. Порядок важен, а не декоративен: вердикт дедупликации нужен
 ДО обращения к Hermes, иначе на схлопнутом дубле chief ответил бы во
 второй раз на уже отвеченный вопрос.
+
+Вызов Hermes (`HermesBridge.deliver`, §10.2) уходит в ФОНОВУЮ задачу, а
+не в тело этого обработчика: это синхронный HTTP-запрос к
+`/v1/responses`, который держится столько же, сколько ход агента —
+минуты, если тот пользуется инструментами. MAX ждёт ответ на вебхук
+секунды, не минуты; обработчик обязан вернуть 2xx сразу после
+регистрации задачи, а доставка ответа владельцу идёт отдельно, через
+ту же очередь outbox, что и любое другое исходящее (§10.3).
 """
 
 from __future__ import annotations
@@ -17,8 +25,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
+from starlette.datastructures import State
 
 from ..channels.max import WEBHOOK_SECRET_HEADER, parse_message_created, verify_webhook_secret
 from ..hermes_bridge import HermesUnavailable
@@ -40,8 +49,38 @@ HERMES_DOWN_NOTICE = (
 )
 
 
+def _run_chief_and_enqueue_reply(state: State, *, task_id: str, owner_id: str,
+                                 chat_id: str, text: str) -> None:
+    """Фоновая задача: вызвать chief-агента, поставить ответ в очередь.
+
+    Собственная сессия БД — сессия запроса закрывается вместе с ответом
+    вебхуку, а эта задача переживает его на минуты. Синхронная функция,
+    не корутина: `BackgroundTasks` прогоняет её в threadpool, что здесь и
+    нужно — `HermesBridge.deliver` блокирует поток на время HTTP-вызова.
+    """
+    with state.session_factory() as session:
+        try:
+            reply_text = state.hermes_bridge.deliver(owner_id=owner_id, text=text)
+        except HermesUnavailable as exc:
+            session.add(TaskEvent(
+                task_id=task_id, actor="control-plane",
+                event_type="task.hermes_unavailable",
+                payload_redacted={"channel": "max", "error": str(exc)},
+            ))
+            enqueue(session, channel="max", recipient=chat_id,
+                    reference=f"hermes-down:{task_id}",
+                    payload_reference={"text": HERMES_DOWN_NOTICE})
+            session.commit()
+            return
+
+        enqueue(session, channel="max", recipient=chat_id,
+                reference=f"max-reply:{task_id}",
+                payload_reference={"text": reply_text})
+        session.commit()
+
+
 @router.post("/max")
-async def max_webhook(request: Request, response: Response,
+async def max_webhook(request: Request, response: Response, background: BackgroundTasks,
                       session: Session = Depends(get_session)) -> dict[str, Any]:
     if not verify_webhook_secret(request.app.state.max_webhook_secret,
                                  request.headers.get(WEBHOOK_SECRET_HEADER)):
@@ -92,27 +131,10 @@ async def max_webhook(request: Request, response: Response,
         session.commit()
         return {"status": "duplicate", "task_id": str(result.task.id)}
 
-    try:
-        request.app.state.hermes_bridge.deliver(
-            task_id=str(result.task.id), channel="max",
-            chat_id=inbound.chat_id, text=result.text,
-        )
-    except HermesUnavailable as exc:
-        # §10.3: task остаётся REGISTERED, владелец получает транспортное
-        # уведомление, повтор — после восстановления Hermes.
-        session.add(TaskEvent(
-            task_id=result.task.id, actor="control-plane",
-            event_type="task.hermes_unavailable",
-            payload_redacted={"channel": "max", "error": str(exc)},
-        ))
-        enqueue(session, channel="max", recipient=inbound.chat_id,
-                reference=f"hermes-down:{result.task.id}",
-                payload_reference={"text": HERMES_DOWN_NOTICE})
-        session.commit()
-        # 200, а не 5xx: сообщение принято и сохранено, ретрай вебхука
-        # ничего не улучшит — задачу подхватит восстановившийся Hermes.
-        return {"status": "accepted_hermes_down", "task_id": str(result.task.id)}
-
+    task_id = str(result.task.id)
     session.commit()
+    background.add_task(_run_chief_and_enqueue_reply, request.app.state,
+                        task_id=task_id, owner_id=request.app.state.owner_id,
+                        chat_id=inbound.chat_id, text=result.text)
     response.status_code = status.HTTP_202_ACCEPTED
-    return {"status": "accepted", "task_id": str(result.task.id)}
+    return {"status": "accepted", "task_id": task_id}

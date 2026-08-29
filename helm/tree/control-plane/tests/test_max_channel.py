@@ -1,8 +1,9 @@
 """Канал MAX (ТЗ §10) целиком: дедуп, /force, вебхук, очередь исходящих.
 
-Проверяется сторона Control Plane. Плагин Hermes (`max-bridge`, ADR-020)
-здесь заменён двойником: его контракт — «принять и вернуть управление
-сразу», и именно это свойство тесты и фиксируют.
+Проверяется сторона Control Plane. Встроенный API-сервер Hermes
+(`/v1/responses`, §10.2, ADR-020) здесь заменён двойником HermesBridge —
+реальный HTTP-вызов проверяется отдельно, живым смоуком на сервере
+(`scripts/hermes-responses-diagnose.sh`).
 """
 
 import json
@@ -211,16 +212,18 @@ def test_ssl_context_keeps_standard_roots():
 # ── §10.1/§10.3: эндпоинт /hooks/max ─────────────────────────────────────────
 
 class FakeBridge:
-    """Двойник плагина max-bridge: принимает и сразу возвращает управление."""
+    """Двойник HermesBridge: не ходит по сети, помнит вызовы."""
 
-    def __init__(self, available: bool = True):
+    def __init__(self, available: bool = True, reply: str = "готово"):
         self.available = available
+        self.reply = reply
         self.calls: list[dict] = []
 
-    def deliver(self, **kwargs) -> None:
+    def deliver(self, **kwargs) -> str:
+        self.calls.append(kwargs)
         if not self.available:
             raise HermesUnavailable("двойник: chief недоступен")
-        self.calls.append(kwargs)
+        return self.reply
 
 
 @pytest.fixture
@@ -273,11 +276,13 @@ def test_webhook_registers_task_and_calls_chief(app, client):
         task = session.scalars(select(Task)).one()
         assert task.origin_channel == "max"
         assert task.status == "REGISTERED"
+        message = session.scalars(select(OutboxMessage)).one()
+        assert message.channel == "max"
+        assert message.recipient == CHAT_ID
+        assert message.payload_reference["text"] == "готово"
     call = app.state.hermes_bridge.calls[0]
-    assert call["channel"] == "max"
-    assert call["chat_id"] == CHAT_ID
+    assert call["owner_id"] == OWNER_ID
     assert call["text"] == "собери отчёт"
-    assert call["task_id"] == response.json()["task_id"]
 
 
 def test_webhook_rejects_non_owner(app, client):
@@ -350,13 +355,19 @@ def test_webhook_does_not_call_chief_twice_on_redelivery(app, client):
 
 
 def test_webhook_queues_transport_notice_when_chief_is_down(app, client):
-    """§10.3: task остаётся REGISTERED, владелец получает транспортное уведомление."""
+    """§10.3: task остаётся REGISTERED, владелец получает транспортное уведомление.
+
+    Обработчик вебхука отвечает 'accepted' ВСЕГДА и сразу: вызов Hermes
+    уходит в фоновую задачу (он может идти минуты), и различие
+    успех/недоступность видно только по результату в outbox, не в ответе
+    на сам вебхук.
+    """
     app.state.hermes_bridge = FakeBridge(available=False)
 
     response = post_hook(client, _update())
 
-    assert response.status_code == 200
-    assert response.json()["status"] == "accepted_hermes_down"
+    assert response.status_code == 202
+    assert response.json()["status"] == "accepted"
     with app.state.session_factory() as session:
         task = session.scalars(select(Task)).one()
         assert task.status == "REGISTERED"

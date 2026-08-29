@@ -129,7 +129,8 @@ services:
       TZ: Europe/Moscow
     secrets: [helm_database_url, telegram_owner_id, hermes_service_hmac,
               panel_auth_cookie_secret, telegram_bot_token,
-              max_webhook_secret, max_bot_token, max_owner_id]
+              max_webhook_secret, max_bot_token, max_owner_id,
+              hermes_api_server_key]
     # docker compose (не swarm) монтирует secrets bind-mount'ом с теми же
     # правами, что и на хосте (0600 root:root, §6.3) — не сбрасывает их на
     # 0444, как это делал бы Swarm. Контейнер работает под UID 10001, не
@@ -301,6 +302,10 @@ secrets:
   max_webhook_secret:          {file: /etc/helm/secrets/max_webhook_secret}
   max_bot_token:               {file: /etc/helm/secrets/max_bot_token}
   max_owner_id:                {file: /etc/helm/secrets/max_owner_id}
+  # Тот же ключ, что в API_SERVER_KEY внутри /home/helm/.hermes/.env —
+  # оба места должны совпадать (host-side секрет Hermes и Docker secret
+  # Control Plane, две стороны одного HTTP-вызова, §10.2).
+  hermes_api_server_key:       {file: /etc/helm/secrets/hermes_api_server_key}
 
 volumes:
   pgdata:       {name: helm_pgdata}
