@@ -147,6 +147,13 @@ services:
       # MAX (helm_core/channels/max.py::ssl_context), не подменяет
       # остальные корни контейнера.
       - /etc/ssl/ru-ca:/etc/ssl/ru-ca:ro
+    # Позволяет контейнеру достучаться до Hermes API (§10.2) — host-сервис
+    # hermes-gateway.service, не контейнер. 127.0.0.1 внутри этого
+    # контейнера означает сам контейнер, а не хост (найдено живьём
+    # 29.08.2026: URLError на каждый живой вызов /v1/responses); Docker
+    # резолвит host.docker.internal в реальный шлюз докер-моста без
+    # хардкода IP, который может смениться при пересоздании сети.
+    extra_hosts: ["host.docker.internal:host-gateway"]
     ports: ["127.0.0.1:8080:8080"]
     healthcheck:
       test: ["CMD", "python", "-c",

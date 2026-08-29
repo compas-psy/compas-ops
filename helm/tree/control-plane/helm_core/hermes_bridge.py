@@ -18,9 +18,18 @@ chief API server» из §10.2 не существует — вывод полу
 Контракт (§10.2, проверено по исходникам `gateway/platforms/api_server.py`,
 живой смоук — `scripts/hermes-responses-diagnose.sh`):
 
-* `http://127.0.0.1:8642/v1/responses` (`DEFAULT_HOST = "127.0.0.1"` —
-  закрыт снаружи уже самим Hermes, наружу тем не менее не публикуется
-  явно нигде — §4.6/test_perimeter.py);
+* `http://host.docker.internal:8642/v1/responses`, НЕ `127.0.0.1`.
+  НАЙДЕНО ЖИВЬЁМ 29.08.2026: Hermes работает на хосте, Control Plane —
+  в Docker-контейнере со своим сетевым namespace; `127.0.0.1` внутри
+  контейнера означает сам контейнер, а сокет Hermes, привязанный строго
+  к `127.0.0.1` хоста, физически не примет пакет с другого интерфейса
+  (докер-мост) — это ограничение ядра на уровне сокета, не файрвола.
+  Поэтому Hermes теперь слушает `0.0.0.0`, а хостовый `ufw` пропускает
+  8642 ТОЛЬКО из подсети докер-моста (`172.18.0.0/16`) — публичный
+  интернет по-прежнему видит только 22/80/443 (`default deny incoming`).
+  `host.docker.internal` резолвится через `extra_hosts: host-gateway`
+  в docker-compose.yml — не хардкодит IP моста, который может смениться
+  при пересоздании сети;
 * `Authorization: Bearer <API_SERVER_KEY>` (тот же ключ, что в
   `~/.hermes/.env`, — секрет `hermes_api_server_key`, тот же формат
   Bearer, что и у остальных маршрутов этого API-сервера);
@@ -46,7 +55,7 @@ import json
 import urllib.error
 import urllib.request
 
-DEFAULT_URL = "http://127.0.0.1:8642/v1/responses"
+DEFAULT_URL = "http://host.docker.internal:8642/v1/responses"
 
 #: Секунды. Реальный ход агента, не быстрый ACK — минуты, если агент
 #: пользуется инструментами. Слишком короткий таймаут здесь означал бы
