@@ -104,6 +104,15 @@ class ApprovalService:
         Уровень берётся из policy и не может быть передан вызывающим:
         предложение приходит от Hermes, а Hermes не имеет права назначать
         уровень (§8.2).
+
+        GREEN/YELLOW исполняются здесь же, автоматически (§8.1) — approval
+        существует только как единообразная запись для аудита/панели, не
+        как ожидание решения владельца. Только RED остаётся PENDING и ждёт
+        `decide()`. НАЙДЕНО на живом P5/Milestone A смоук-тесте: раньше
+        `propose()` создавал PENDING для любого уровня, а вызвать
+        `execute_direct()` было решительно неоткуда — ни один HTTP-роут
+        его не вызывал. Офлайн-тесты (test_red_gate.py) этого не ловили,
+        потому что дёргали `execute_direct()` напрямую в обход propose().
         """
         registered = self.registry.get(action_type)
         spec = self.registry.policy_for(action_type)
@@ -139,6 +148,15 @@ class ApprovalService:
         self._audit(task_id, proposed_by, "action.proposed",
                     {"action_type": action_type, "action_hash": act_hash,
                      "level": spec.initial_level.name})
+
+        if spec.initial_level < Level.RED:
+            approval.status = ApprovalStatus.APPROVED
+            approval.decided_at = utcnow()
+            approval.decided_by = "system"
+            approval.channel = "auto"
+            self.session.flush()
+            self.execute_approved(approval.id)
+
         return approval
 
     # ── решение владельца ───────────────────────────────────────────────────

@@ -86,6 +86,27 @@ def test_green_and_yellow_execute_without_approval(session, approvals, task):
     assert len(direct) == 2, "YELLOW обратимо, но обязано быть записано (§8.1)"
 
 
+def test_propose_auto_executes_green_and_yellow(session, approvals, task):
+    """§8.1 через реальный вход Hermes — propose(), не execute_direct() напрямую.
+
+    НАЙДЕНО на живом смоук-тесте P5/Milestone A: execute_direct() нигде не
+    вызывался ни одним HTTP-роутом control-plane — только тестами напрямую.
+    Через настоящий вход (propose(), которым и пользуется
+    /internal/actions/propose) GREEN/YELLOW зависали в PENDING навсегда,
+    хотя test_green_and_yellow_execute_without_approval выше проходил —
+    он проверяет execute_direct() в обход propose().
+    """
+    green = approvals.propose("notify_owner", {"text": "готово"}, task_id=task.id)
+    yellow = approvals.propose("kanban_snapshot", {"reason": "перед миграцией"},
+                               task_id=task.id)
+    session.flush()
+
+    assert session.get(Approval, green.id).status == ApprovalStatus.EXECUTED
+    assert session.get(Approval, yellow.id).status == ApprovalStatus.EXECUTED
+    assert green.decided_by == "system"
+    assert green.channel == "auto"
+
+
 def test_brand_rules_block_publication(session, approvals, task, monkeypatch):
     """Устав §5.6 / ТЗ §10: запреты бренда сильнее метрик."""
     from helm_core.actions import fixtures

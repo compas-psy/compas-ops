@@ -97,7 +97,10 @@ def test_action_hash_mismatch_rejected(session, approvals, task, monkeypatch):
 
 # 5. expired approval rejected
 def test_expired_approval_rejected(session, approvals, task):
-    approval = approvals.propose("kanban_snapshot", {"reason": "перед миграцией"},
+    # RED, не kanban_snapshot: с автоисполнением GREEN/YELLOW в propose()
+    # (§8.1) только RED реально остаётся PENDING и ждёт decide().
+    approval = approvals.propose("publish_public_content",
+                                 {"channel": "tg_test", "body": "перед миграцией"},
                                  task_id=task.id)
     session.flush()
     approval.expires_at = utcnow() - timedelta(seconds=1)
@@ -110,7 +113,8 @@ def test_expired_approval_rejected(session, approvals, task):
 
 def test_approval_expiring_after_decision_still_blocks_execution(session, approvals, task):
     """TTL проверяется и при исполнении, не только при решении (§8.4)."""
-    approval = approvals.propose("kanban_snapshot", {"reason": "снимок"}, task_id=task.id)
+    approval = approvals.propose("publish_public_content",
+                                 {"channel": "tg_test", "body": "снимок"}, task_id=task.id)
     session.flush()
     approvals.decide(approval.id, approve=True, decided_by=OWNER_ID, channel="panel")
     approval.expires_at = utcnow() - timedelta(seconds=1)
@@ -142,7 +146,9 @@ def test_changed_precondition_rejected(session, approvals, task, monkeypatch):
 
 # 7. unauthorized user rejected
 def test_unauthorized_user_rejected(session, approvals, ingest, task):
-    approval = approvals.propose("kanban_snapshot", {"reason": "снимок"}, task_id=task.id)
+    # RED, не kanban_snapshot — см. комментарий в test_expired_approval_rejected.
+    approval = approvals.propose("publish_public_content",
+                                 {"channel": "tg_test", "body": "снимок"}, task_id=task.id)
     session.flush()
 
     with pytest.raises(NotAuthorized):
