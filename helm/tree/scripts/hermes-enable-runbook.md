@@ -77,19 +77,34 @@ ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "sudo mv /tmp/h
 `"output_text"` — правка в одной функции
 `helm_core/hermes_bridge.py::_extract_reply_text`, не в архитектуре.
 
-## 6. Доставить новый код Control Plane и пересобрать
+## 6. Доставить новый код Control Plane и обновлённый docker-compose.yml
+
+**Важно:** `docker-compose.yml` тоже менялся в этом же коммите — в нём
+объявлен сам секрет `hermes_api_server_key` и его подключение к
+контейнеру `helm-core` (без этого файл секрета лежит на хосте, но
+внутрь контейнера Docker Compose его не пробросит — ровно так и
+случилось при первой попытке 29.08.2026: код был новый, а
+`docker-compose.yml` — старый, и `/run/secrets/hermes_api_server_key`
+внутри контейнера просто не появился).
 
 ```powershell
 scp -i "C:\Users\eliah\.ssh\helm_deploy_key" -r helm\tree\control-plane\helm_core helm@185.250.44.137:/tmp/helm_core
-ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "sudo rm -rf /opt/helm/control-plane/helm_core && sudo mv /tmp/helm_core /opt/helm/control-plane/helm_core && sudo chown -R root:root /opt/helm/control-plane/helm_core && sudo chmod -R go-w /opt/helm/control-plane/helm_core && cd /opt/helm/compose && sudo docker compose build helm-core && sudo docker compose up -d --force-recreate helm-core && sleep 15 && sudo docker compose ps helm-core"
+scp -i "C:\Users\eliah\.ssh\helm_deploy_key" helm\tree\compose\docker-compose.yml helm@185.250.44.137:/tmp/
+ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "sudo rm -rf /opt/helm/control-plane/helm_core && sudo mv /tmp/helm_core /opt/helm/control-plane/helm_core && sudo mv /tmp/docker-compose.yml /opt/helm/compose/docker-compose.yml && sudo chown -R root:root /opt/helm/control-plane/helm_core /opt/helm/compose/docker-compose.yml && sudo chmod -R go-w /opt/helm/control-plane/helm_core && cd /opt/helm/compose && sudo docker compose build helm-core && sudo docker compose up -d --force-recreate helm-core && sleep 15 && sudo docker compose ps helm-core"
 ```
 
 Ожидается `healthy`. Убедиться, что действительно новый код (тот же
-приём, что уже спасал от кэша сборки раньше):
+приём, что уже спасал от кэша сборки раньше) И что секрет реально
+доехал до контейнера:
 
 ```powershell
-ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "cd /opt/helm/compose && sudo docker compose exec -T helm-core grep -A2 'def conversation_name' /opt/helm/control-plane/helm_core/hermes_bridge.py"
+ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "cd /opt/helm/compose && sudo docker compose exec -T helm-core grep -A2 'def conversation_name' /opt/helm/control-plane/helm_core/hermes_bridge.py && sudo docker compose exec -T helm-core ls -la /run/secrets/ | grep hermes_api_server_key"
 ```
+
+Вторая часть команды обязана показать файл `hermes_api_server_key` —
+без него `HermesBridge` получит пустой ключ и вебхук MAX будет отвечать
+транспортным уведомлением о недоступности агента, даже когда сам API
+Hermes работает исправно (ровно так и произошло при первой попытке).
 
 ## 7. Живой конец в конец через MAX
 
