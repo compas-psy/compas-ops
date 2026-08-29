@@ -62,11 +62,16 @@ echo "DOCX_SOURCE_ID=$DOCX_SOURCE_ID"
 echo "PDF_SOURCE_ID=$PDF_SOURCE_ID"
 
 echo "== 2. Ждём воркер (первый запуск Docling может качать модели с huggingface.co — даём до 3 минут) =="
+# НАЙДЕНО живым тестом: KnowledgeIngestStatus — StrEnum со СТРОЧНЫМИ
+# значениями (pending/running/done/needs_review/failed), не ЗАГЛАВНЫМИ
+# именами атрибутов Python. Сравнение с 'PENDING'/'RUNNING' никогда не
+# совпадало — цикл выходил на первой же итерации, ничего не подождав, и
+# статус-проверка ниже показывала состояние сразу после регистрации.
 for _ in $(seq 1 18); do
   PENDING=$(sudo docker exec helm-postgres-1 psql -U helm -d helm -tAc \
     "select count(*) from knowledge_ingest_jobs j
      where j.source_id in ('$DOCX_SOURCE_ID', '$PDF_SOURCE_ID')
-       and j.status in ('PENDING','RUNNING')")
+       and j.status in ('pending','running')")
   [ "$PENDING" = "0" ] && break
   sleep 10
 done
