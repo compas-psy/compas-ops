@@ -251,6 +251,31 @@ jobs:
 
             cp /tmp/helm-control-init.py ~/.hermes/plugins/helm-control/__init__.py
 
+            # Knowledge-бот заводит владелец в BotFather, агент токенов
+            # не создаёт (устав §6, CLAUDE.md §5.4). Но compose монтирует
+            # файл секрета bind-mount-ом и отказывается поднимать
+            # контейнер, если файла нет вовсе, — на этом упал живой выкат
+            # 30.08.2026: helm-core пересоздавался и не встал, потому что
+            # у него в списке появились два ещё не заведённых секрета.
+            #
+            # Пустой файл 0600 — не токен. Код на пустом значении
+            # отказывает: verify_webhook_secret() возвращает False при
+            # пустом ожидаемом секрете, то есть вебхук Knowledge-бота
+            # отвергает вообще всё, пока владелец не впишет настоящий
+            # токен в этот же файл. Это ровно то поведение, которое нужно
+            # для непровизионированного бота.
+            #
+            # Список именной: пустышки создаются только для этих двух
+            # файлов. Делать так для всех секретов нельзя — пропавший
+            # helm_database_url превратился бы из громкого падения в тихо
+            # сломанный рантайм.
+            for s in knowledge_telegram_bot_token knowledge_telegram_webhook_secret; do
+              if [ ! -e /etc/helm/secrets/$s ]; then
+                sudo install -m 600 -o root -g root /dev/null /etc/helm/secrets/$s
+                echo "заведён пустой файл секрета $s: Knowledge-бот не настроен, его вебхук отвергает всё"
+              fi
+            done
+
             cd /opt/helm/compose
             sudo docker compose build helm-core helm-knowledge-worker
             sudo docker compose up -d --force-recreate helm-core helm-knowledge-worker
@@ -258,6 +283,11 @@ jobs:
             sudo systemctl restart hermes-gateway
             sleep 20
             sudo docker compose ps helm-core helm-knowledge-worker caddy
+            if [ -s /etc/helm/secrets/knowledge_telegram_bot_token ]; then
+              echo "Knowledge-бот: токен на месте"
+            else
+              echo "Knowledge-бот: токена нет, бот не работает — задача владельца"
+            fi
           '
 
       # ── migrate: отдельным шагом, после проверки ревизии ─────────────
