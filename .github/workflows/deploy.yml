@@ -30,6 +30,7 @@ on:
           - cleanup       # убрать мусор прошлых выкатов
           - backup-unlock # снять зависшую блокировку репозитория бэкапов
           - backup        # снять точку возврата
+          - logs          # логи helm-core и воркера, ничего не менять
           - deploy        # код + панель + пересборка контейнеров
           - migrate       # alembic upgrade head (после deploy)
           - restore-test  # backup.sh + restore_test.sh
@@ -269,12 +270,26 @@ jobs:
             # файлов. Делать так для всех секретов нельзя — пропавший
             # helm_database_url превратился бы из громкого падения в тихо
             # сломанный рантайм.
+            # Права копируются с уже работающего секрета, а не задаются
+            # числом: контейнер работает не под root, и файл 0600
+            # root:root он прочитать не может — read_secret() видит, что
+            # файл есть, и падает PermissionError на чтении. Именно так
+            # helm-core ушёл в цикл перезапусков 30.08.2026.
             for s in knowledge_telegram_bot_token knowledge_telegram_webhook_secret; do
               if [ ! -e /etc/helm/secrets/$s ]; then
-                sudo install -m 600 -o root -g root /dev/null /etc/helm/secrets/$s
+                sudo install /dev/null /etc/helm/secrets/$s
+                sudo chown --reference=/etc/helm/secrets/telegram_bot_token /etc/helm/secrets/$s
+                sudo chmod --reference=/etc/helm/secrets/telegram_bot_token /etc/helm/secrets/$s
                 echo "заведён пустой файл секрета $s: Knowledge-бот не настроен, его вебхук отвергает всё"
               fi
             done
+            # Если пустышку завёл прошлый выкат с неверными правами —
+            # поправить, иначе контейнер так и будет падать.
+            for s in knowledge_telegram_bot_token knowledge_telegram_webhook_secret; do
+              sudo chown --reference=/etc/helm/secrets/telegram_bot_token /etc/helm/secrets/$s
+              sudo chmod --reference=/etc/helm/secrets/telegram_bot_token /etc/helm/secrets/$s
+            done
+            ls -l /etc/helm/secrets/telegram_bot_token /etc/helm/secrets/knowledge_telegram_bot_token
 
             cd /opt/helm/compose
             sudo docker compose build helm-core helm-knowledge-worker
@@ -303,6 +318,20 @@ jobs:
             sudo systemctl restart hermes-gateway
             sleep 20
             sudo docker compose ps helm-core helm-knowledge-worker caddy
+
+            # Без этой проверки выкат отчитывается успехом, пока сервис
+            # лежит: docker compose ps печатает "Restarting" и выходит с
+            # нулём. Ровно так и случилось 30.08.2026 — helm-core крутился
+            # в цикле перезапусков, а зелёный workflow говорил, что всё
+            # хорошо. Молчаливый провал хуже громкого.
+            for svc in helm-core helm-knowledge-worker; do
+              if ! sudo docker compose ps $svc | grep -q Up; then
+                echo "::error::$svc не поднялся"
+                sudo docker compose logs --tail=80 $svc
+                exit 1
+              fi
+            done
+
             if [ -s /etc/helm/secrets/knowledge_telegram_bot_token ]; then
               echo "Knowledge-бот: токен на месте"
             else
@@ -379,6 +408,22 @@ jobs:
             end
             $chk$;
           SQL
+          '
+
+      - name: Логи сервисов
+        # Отдельным действием: диагностировать упавший контейнер, ничего
+        # при этом не выкатывая и не трогая.
+        if: inputs.action == 'logs'
+        run: |
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
+            cd /opt/helm/compose
+            sudo docker compose ps
+            for svc in helm-core helm-knowledge-worker; do
+              echo "=== $svc ==="
+              sudo docker compose logs --tail=60 $svc
+            done
+            echo "=== права на секреты ==="
+            sudo ls -l /etc/helm/secrets/
           '
 
       - name: Проверка восстановления
