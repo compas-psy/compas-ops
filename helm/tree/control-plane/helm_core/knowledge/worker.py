@@ -24,9 +24,13 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .batch_intake import finalize_batch_if_terminal, sync_item_from_job
 from .ingest import split_chunks
 from .parsers import parse_file
-from ..models import KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus, KnowledgeSource, KnowledgeStatus
+from ..models import (
+    KnowledgeBatchItem, KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus,
+    KnowledgeSource, KnowledgeStatus,
+)
 from ..outbox import enqueue
 
 logger = logging.getLogger(__name__)
@@ -141,6 +145,19 @@ def process_job(session: Session, job: KnowledgeIngestJob) -> None:
         # путём process_job() вышел (return из quality-gate-провала,
         # обычный конец при DONE, или except при исключении).
         _notify_owner_of_result(session, job, source, chunk_count)
+        # v3.7 ZIP batch ingest: job, заведённый expand_batch(), не несёт
+        # channel/recipient (§14.5.2 "no per-file push spam" — за него
+        # уже отвечает _notify_owner_of_result() выше, тихо no-op) — но
+        # batch-item должен узнать результат независимо, чтобы batch мог
+        # когда-нибудь стать terminal и отправить ОДНО финальное
+        # уведомление. Тот же finally, тот же контракт "не крашить
+        # process_job()", что и для обычного уведомления.
+        if job.batch_item_id is not None:
+            item = session.get(KnowledgeBatchItem, job.batch_item_id)
+            if item is not None:
+                sync_item_from_job(session, item, job_status=job.status,
+                                   chunk_count=chunk_count, job_error=job.error)
+                finalize_batch_if_terminal(session, item.batch_id)
 
 
 def _notify_owner_of_result(session: Session, job: KnowledgeIngestJob,

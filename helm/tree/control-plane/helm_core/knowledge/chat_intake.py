@@ -82,17 +82,28 @@ class AttachmentTooLarge(Exception):
         super().__init__(f"вложение {size} байт превышает лимит {limit} байт")
 
 
+def domain_list_lines() -> list[str]:
+    """Пронумерованный список доменов с алиасами — общая часть меню для
+    одиночных вложений (`format_domain_menu`) и ZIP-batch
+    (`batch_intake.py::format_batch_domain_menu`), чтобы формулировки не
+    разошлись между ними (тот же риск, что уже стоил отладки для
+    cross-channel текстов P8.5.7)."""
+    lines = []
+    for i, d in enumerate(_DOMAINS, 1):
+        alias = _ALIAS_BY_DOMAIN.get(d.value)
+        label = f"{d.value} ({alias})" if alias else d.value
+        lines.append(f"{i}. {label}")
+    return lines
+
+
 def format_domain_menu(original_filename: str | None) -> str:
     """Текст владельцу сразу после получения файла — до какого-либо парсинга."""
     lines = [
         f"Файл «{original_filename or 'без имени'}» получен и сохранён.",
         "В какой домен положить? Ответьте номером или именем:",
+        *domain_list_lines(),
+        "Или «отмена» — файл не будет сохранён.",
     ]
-    for i, d in enumerate(_DOMAINS, 1):
-        alias = _ALIAS_BY_DOMAIN.get(d.value)
-        label = f"{d.value} ({alias})" if alias else d.value
-        lines.append(f"{i}. {label}")
-    lines.append("Или «отмена» — файл не будет сохранён.")
     return "\n".join(lines)
 
 

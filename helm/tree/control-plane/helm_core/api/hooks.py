@@ -38,12 +38,19 @@ from ..channels.max import (
 )
 from ..hermes_bridge import HermesUnavailable
 from ..ingest import IngestService, record_channel_event_once
+from ..knowledge.batch_intake import (
+    ArchiveTooLarge, batch_resolve_outcome_text, is_zip_attachment, resolve_batch_domain,
+    stage_batch,
+)
 from ..knowledge.chat_intake import (
     ATTACHMENT_TOO_LARGE_NOTICE, AttachmentTooLarge, format_domain_menu,
     resolve_outcome_text, resolve_pending_domain, stage_attachment,
 )
 from ..knowledge.probe import probe, query_hash
-from ..models import KnowledgeAnswerRun, KnowledgePendingAttachment, TaskEvent
+from ..models import (
+    KnowledgeAnswerRun, KnowledgeBatchStatus, KnowledgeIngestBatch, KnowledgePendingAttachment,
+    TaskEvent,
+)
 from ..outbox import enqueue
 from .deps import get_session
 
@@ -166,8 +173,17 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
         .where(KnowledgePendingAttachment.channel == "max")
         .limit(1)
     ) is not None
+    # v3.7 P8.5.2.1: тот же гейт, что для одиночных вложений, но для
+    # архива, ждущего домена (KnowledgeIngestBatch.status=WAITING_DOMAIN,
+    # не отдельная pending-таблица — см. batch_intake.py docstring).
+    has_pending_batch = session.scalar(
+        select(KnowledgeIngestBatch.id)
+        .where(KnowledgeIngestBatch.channel == "max",
+              KnowledgeIngestBatch.status == KnowledgeBatchStatus.WAITING_DOMAIN)
+        .limit(1)
+    ) is not None
 
-    if inbound.attachments or has_pending:
+    if inbound.attachments or has_pending or has_pending_batch:
         if record_channel_event_once(session, channel="max",
                                      external_message_id=inbound.message_id,
                                      owner_id=request.app.state.owner_id):
@@ -186,6 +202,29 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
                 session.commit()
                 return {"status": "attachment_failed"}
 
+            # §14.4.0: ZIP — контейнер, не документ парсера; перехват до
+            # одиночного chat_intake.py целиком, отдельный диалог.
+            if is_zip_attachment(attachment.filename, None):
+                try:
+                    staged = stage_batch(session, channel="max", data=data,
+                                         original_filename=attachment.filename,
+                                         mime_type=None, recipient=inbound.chat_id)
+                except ArchiveTooLarge as exc:
+                    enqueue(session, channel="max", recipient=inbound.chat_id,
+                            reference=f"batch-too-large:{inbound.message_id}",
+                            payload_reference={
+                                "text": f"Архив слишком большой ({exc.size} байт) — "
+                                       f"лимит {exc.limit} байт."})
+                    session.commit()
+                    return {"status": "batch_too_large"}
+
+                enqueue(session, channel="max", recipient=inbound.chat_id,
+                        reference=f"batch-staged:{staged.batch.id}",
+                        payload_reference={"text": staged.text})
+                session.commit()
+                return {"status": "batch_staged" if staged.waiting_for_domain else "batch_blocked",
+                        "batch_id": str(staged.batch.id)}
+
             try:
                 pending = stage_attachment(session, channel="max", data=data,
                                            original_filename=attachment.filename,
@@ -202,6 +241,17 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
                     payload_reference={"text": format_domain_menu(pending.original_filename)})
             session.commit()
             return {"status": "attachment_staged", "pending_id": str(pending.id)}
+
+        if has_pending_batch:
+            batch_outcome = resolve_batch_domain(session, channel="max", reply_text=inbound.text)
+            if batch_outcome.status != "not_pending":
+                text = batch_resolve_outcome_text(batch_outcome)
+                if text is not None:
+                    enqueue(session, channel="max", recipient=inbound.chat_id,
+                            reference=f"batch-{batch_outcome.status}:{batch_outcome.batch.id}:{inbound.message_id}",
+                            payload_reference={"text": text})
+                    session.commit()
+                    return {"status": f"batch_{batch_outcome.status}"}
 
         resolved = resolve_pending_domain(session, channel="max", reply_text=inbound.text,
                                           recipient=inbound.chat_id)

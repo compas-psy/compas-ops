@@ -27,8 +27,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import TSVECTOR
 
 from .base import (
-    ApprovalStatus, Base, KnowledgeIngestStatus, KnowledgeStatus, TaskStatus, ts_column,
-    utcnow, uuid_pk,
+    ApprovalStatus, Base, KnowledgeBatchItemStatus, KnowledgeBatchStatus, KnowledgeIngestStatus,
+    KnowledgeStatus, TaskStatus, ts_column, utcnow, uuid_pk,
 )
 
 
@@ -466,7 +466,17 @@ class KnowledgeIngestJob(Base):
     #: chat_id/адресат для уведомления о завершении разбора (P8.5.7,
     #: "3 шага": получен -> сохранён, разбор запущен -> разбор завершён).
     #: None для ingest_text()/тестовых путей — уведомлять там некого.
+    #: Также None (намеренно) для job'ов, заведённых из ZIP-batch (v3.7
+    #: §14.5.2 "no per-file push spam") — уведомляет только batch
+    #: целиком, per-item _notify_owner_of_result() не должен сработать.
     recipient: Mapped[str | None] = mapped_column(String(128))
+    #: v3.7 §14.4.0 knowledge_batch_items — заполнено, только если job
+    #: заведён expand_batch() (chat_intake одиночных вложений его не
+    #: трогает). Через это поле worker.py находит, какой batch-item
+    #: обновить и не пора ли финализировать весь batch (см.
+    #: batch_intake.py::finalize_batch_if_terminal()).
+    batch_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_batch_items.id"), unique=True)
     status: Mapped[str] = mapped_column(String(16), default=KnowledgeIngestStatus.PENDING,
                                         nullable=False)
     error: Mapped[str | None] = mapped_column(Text)
@@ -506,6 +516,106 @@ class KnowledgePendingAttachment(Base):
 
     __table_args__ = (Index("ix_knowledge_pending_attachments_channel_created",
                             "channel", "created_at"),)
+
+
+class KnowledgeIngestBatch(Base):
+    """ZIP-архив целиком (v3.7 §14.4.0/P8.5.2.1) — контейнер/оркестрация
+    ПЕРЕД уже существующим одиночным child-pipeline, не замена ему.
+
+    Строка заводится сразу при получении архива (до вопроса о домене —
+    тот же принцип preserve-before-parse, что уже есть у
+    `KnowledgePendingAttachment`) и живёт до самого завершения batch —
+    отдельной "pending"-таблицы для диалога о домене не нужно: `status`
+    сам проходит через `WAITING_DOMAIN`.
+    """
+
+    __tablename__ = "knowledge_ingest_batches"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    #: telegram | max — тот же словарь, что у KnowledgeIngestJob.channel.
+    channel: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: Адресат для итогового уведомления (§14.5.2) — тот же паттерн, что
+    #: KnowledgeIngestJob.recipient.
+    recipient: Mapped[str | None] = mapped_column(String(128))
+    archive_filename: Mapped[str | None] = mapped_column(String(255))
+    archive_mime: Mapped[str | None] = mapped_column(String(128))
+    archive_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    archive_raw_path: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Layer-1 дедуп архива целиком (§14.6 "ZIP-specific dedup") — тот же
+    #: sha256-по-байтам принцип, что уже есть у KnowledgeSource/
+    #: KnowledgePendingAttachment, не новое изобретение.
+    archive_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    domain: Mapped[str | None] = mapped_column(String(32))
+    #: Форсируется как у одиночных вложений (chat_intake.py: simpas/zapiski
+    #: -> client_restricted) — отдельного понятия security_scope не вводим.
+    sensitivity: Mapped[str | None] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(24), default=KnowledgeBatchStatus.RECEIVED,
+                                        nullable=False)
+    total_members: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    eligible_members: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    ready_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    duplicate_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    quarantine_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    skipped_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    chunk_count_total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+    started_at: Mapped[datetime | None] = ts_column()
+    finished_at: Mapped[datetime | None] = ts_column()
+    final_notification_sent_at: Mapped[datetime | None] = ts_column()
+    #: retry_failed увеличивает — новый финальный итог разрешён только для
+    #: этого цикла ретрая (§14.5.2), исходный dedup_key не мешает повтору.
+    completion_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+
+    __table_args__ = (
+        Index("ix_knowledge_ingest_batches_channel_created", "channel", "created_at"),
+        Index("ix_knowledge_ingest_batches_archive_sha256", "archive_sha256"),
+    )
+
+
+class KnowledgeBatchItem(Base):
+    """Один член ZIP-архива (v3.7 §14.4.0). Путь члена внутри архива —
+    ТОЛЬКО метаданные (`archive_member_path_original`), никогда не
+    становится путём на диске напрямую (§14.7.6 anti zip-slip) — реальный
+    child RAW адресуется по `KnowledgeSource.id`/`sha256`, как и у
+    одиночных вложений."""
+
+    __tablename__ = "knowledge_batch_items"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    batch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_ingest_batches.id"), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    archive_member_path_original: Mapped[str] = mapped_column(Text, nullable=False)
+    archive_member_name_normalized: Mapped[str] = mapped_column(Text, nullable=False)
+    declared_compressed_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    declared_uncompressed_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    detected_mime: Mapped[str | None] = mapped_column(String(128))
+    member_sha256: Mapped[str | None] = mapped_column(String(64))
+    source_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("knowledge_sources.id"))
+    #: §14.5.2 disable_created_sources: "applies only to source records
+    #: actually created by this batch, never a pre-existing duplicate".
+    source_created_by_batch: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default=KnowledgeBatchItemStatus.QUEUED,
+                                        nullable=False)
+    #: Только FAILED из-за реальной ошибки парсинга/воркера — не
+    #: QUARANTINE/SKIPPED_*, их retry_failed трогать не должен (§final
+    #: clarifications: "retries only retryable failures").
+    retryable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    chunks: Mapped[int | None] = mapped_column(Integer)
+    #: Graphify не реализован (P8.5.6) — всегда NOT_APPLICABLE, финализация
+    #: batch не ждёт несуществующей стадии.
+    graph_status: Mapped[str | None] = mapped_column(String(32))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_detail_redacted: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_knowledge_batch_items_batch_status", "batch_id", "status"),
+        UniqueConstraint("batch_id", "ordinal", name="uq_knowledge_batch_items_batch_ordinal"),
+    )
 
 
 class KnowledgeAnswerRun(Base):

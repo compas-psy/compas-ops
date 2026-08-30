@@ -133,6 +133,56 @@ class KnowledgeStatus(enum.StrEnum):
     NEEDS_REVIEW = "needs_review"
 
 
+class KnowledgeBatchStatus(enum.StrEnum):
+    """v3.7 §14.4.0 — состояние ZIP-архива целиком (не отдельного члена)."""
+
+    RECEIVED = "received"
+    HASHING = "hashing"
+    WAITING_DOMAIN = "waiting_domain"
+    ARCHIVE_PREFLIGHT = "archive_preflight"
+    EXPANDING = "expanding"
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    FINALIZING = "finalizing"
+    COMPLETED = "completed"
+    COMPLETED_WITH_ERRORS = "completed_with_errors"
+    BLOCKED = "blocked"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+#: Батч завершён и больше не может измениться сам по себе — новую работу
+#: над ним заводит только явный retry_failed/cancel_remaining.
+BATCH_TERMINAL_STATUSES = frozenset({
+    KnowledgeBatchStatus.COMPLETED, KnowledgeBatchStatus.COMPLETED_WITH_ERRORS,
+    KnowledgeBatchStatus.BLOCKED, KnowledgeBatchStatus.FAILED, KnowledgeBatchStatus.CANCELLED,
+})
+
+
+class KnowledgeBatchItemStatus(enum.StrEnum):
+    """v3.7 §14.4.0 — состояние одного члена архива."""
+
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    READY = "ready"
+    EXACT_DUPLICATE = "exact_duplicate"
+    QUARANTINE = "quarantine"
+    SKIPPED_UNSUPPORTED = "skipped_unsupported"
+    SKIPPED_NESTED_ARCHIVE = "skipped_nested_archive"
+    SKIPPED_CANCELLED = "skipped_cancelled"
+    FAILED = "failed"
+
+
+#: §14.4.0: "A batch reaches terminal state only when every batch item is
+#: terminal" — QUEUED/PROCESSING не входят.
+BATCH_ITEM_TERMINAL_STATUSES = frozenset({
+    KnowledgeBatchItemStatus.READY, KnowledgeBatchItemStatus.EXACT_DUPLICATE,
+    KnowledgeBatchItemStatus.QUARANTINE, KnowledgeBatchItemStatus.SKIPPED_UNSUPPORTED,
+    KnowledgeBatchItemStatus.SKIPPED_NESTED_ARCHIVE, KnowledgeBatchItemStatus.SKIPPED_CANCELLED,
+    KnowledgeBatchItemStatus.FAILED,
+})
+
+
 class KnowledgeIngestStatus(enum.StrEnum):
     PENDING = "pending"
     RUNNING = "running"

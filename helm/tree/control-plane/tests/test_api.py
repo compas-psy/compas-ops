@@ -37,6 +37,15 @@ def client(engine, tmp_path, monkeypatch):
                         lambda *a, **kw: real_stage(*a, spool_root=spool_root, **kw))
     monkeypatch.setattr(internal_module, "resolve_pending_domain",
                         lambda *a, **kw: real_resolve(*a, vault_root=vault_root, **kw))
+    # То же самое для ZIP-batch (P8.5.2.1) — raw_batches_root/vault_root
+    # по умолчанию тоже /opt/helm-knowledge/..., та же утечка иначе.
+    raw_batches_root = str(tmp_path / "raw-batches")
+    real_stage_batch = internal_module.stage_batch
+    real_resolve_batch = internal_module.resolve_batch_domain
+    monkeypatch.setattr(internal_module, "stage_batch",
+                        lambda *a, **kw: real_stage_batch(*a, raw_batches_root=raw_batches_root, **kw))
+    monkeypatch.setattr(internal_module, "resolve_batch_domain",
+                        lambda *a, **kw: real_resolve_batch(*a, vault_root=vault_root, **kw))
     return TestClient(create_app(settings, service_secret=SERVICE_SECRET))
 
 
@@ -178,6 +187,82 @@ def test_attachment_resolve_endpoint_requires_service_auth(client):
     r = client.post("/internal/knowledge/attachment/resolve",
                     json={"channel": "telegram", "reply_text": "engineering"})
     assert r.status_code == 422 or r.status_code == 401
+
+
+# ── v3.7 P8.5.2.1: ZIP batch ingest internal endpoints ─────────────────────
+
+def _zip_bytes(entries: dict[str, bytes]) -> bytes:
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, data in entries.items():
+            zf.writestr(name, data)
+    return buf.getvalue()
+
+
+def test_batches_stage_endpoint_returns_domain_menu(client):
+    r = post_internal(client, "/internal/knowledge/batches", {
+        "channel": "telegram",
+        "data_base64": base64.b64encode(_zip_bytes({"a.txt": b"one", "b.txt": b"two"})).decode(),
+        "original_filename": "lectures.zip",
+        "mime_type": "application/zip",
+    })
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "staged"
+    assert "2 файлов" in body["text"]
+    assert "1. personal" in body["text"]
+
+
+def test_batches_stage_endpoint_blocks_encrypted_archive(client):
+    data = bytearray(_zip_bytes({"secret.txt": b"x"}))
+    data[data.index(b"PK\x03\x04") + 6] |= 0x1
+    data[data.index(b"PK\x01\x02") + 8] |= 0x1
+
+    r = post_internal(client, "/internal/knowledge/batches", {
+        "channel": "telegram", "data_base64": base64.b64encode(bytes(data)).decode(),
+        "original_filename": "enc.zip", "mime_type": "application/zip",
+    })
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "blocked"
+    assert "не принят" in body["text"]
+
+
+def test_batches_resolve_domain_endpoint_queues_and_notifies_on_completion(client):
+    post_internal(client, "/internal/knowledge/batches", {
+        "channel": "telegram",
+        "data_base64": base64.b64encode(_zip_bytes({"a.txt": b"one"})).decode(),
+        "original_filename": "a.zip", "mime_type": "application/zip",
+        "recipient": "555",
+    })
+
+    r = post_internal(client, "/internal/knowledge/batches/resolve-domain", {
+        "channel": "telegram", "reply_text": "engineering",
+    })
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "queued"
+    assert "1 " in body["text"] or "Поставил в очередь" in body["text"]
+
+    with client.app.state.session_factory() as session:
+        from sqlalchemy import select
+        from helm_core.models import KnowledgeBatchItem, KnowledgeSource
+        item = session.scalars(select(KnowledgeBatchItem)).one()
+        source = session.get(KnowledgeSource, item.source_id)
+        assert source.domain == "engineering"
+
+
+def test_batches_resolve_domain_not_pending_when_nothing_staged(client):
+    r = post_internal(client, "/internal/knowledge/batches/resolve-domain", {
+        "channel": "telegram", "reply_text": "engineering",
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "not_pending"
 
 
 # ── A-DoD п.4-6: propose()/decision() через реальный HTTP, не сервис напрямую ──

@@ -20,6 +20,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..ingest import IngestService, NotOwner
+from ..knowledge.batch_intake import (
+    ArchiveTooLarge, batch_resolve_outcome_text, cancel_remaining, disable_created_sources,
+    resolve_batch_domain, retry_failed, stage_batch,
+)
 from ..knowledge.chat_intake import (
     ATTACHMENT_TOO_LARGE_NOTICE, AttachmentTooLarge, format_domain_menu,
     resolve_outcome_text, resolve_pending_domain, stage_attachment,
@@ -140,6 +144,84 @@ def knowledge_attachment_resolve(body: AttachmentResolveIn,
                                      recipient=body.recipient)
     session.commit()
     return {"status": outcome.status, "text": resolve_outcome_text(outcome)}
+
+
+class BatchStageIn(BaseModel):
+    channel: str = Field(min_length=1, max_length=32)
+    data_base64: str = Field(min_length=1)
+    original_filename: str | None = Field(default=None, max_length=255)
+    mime_type: str | None = Field(default=None, max_length=128)
+    recipient: str | None = Field(default=None, max_length=128)
+
+
+@router.post("/knowledge/batches")
+def knowledge_batches_stage(body: BatchStageIn,
+                            session: Session = Depends(get_session)) -> dict[str, Any]:
+    """v3.7 P8.5.2.1 — ZIP-архив (spec: `POST /internal/knowledge/batches`).
+    Тот же HMAC/base64-паттерн, что уже есть у одиночных вложений выше;
+    ZIP перехватывается ДО роутера парсеров (§14.4.0), это отдельный
+    диалог, не `chat_intake.py`."""
+    try:
+        data = base64.b64decode(body.data_base64, validate=True)
+    except Exception as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"data_base64 не декодируется: {exc}")
+
+    try:
+        result = stage_batch(session, channel=body.channel, data=data,
+                             original_filename=body.original_filename,
+                             mime_type=body.mime_type, recipient=body.recipient)
+    except ArchiveTooLarge as exc:
+        session.rollback()
+        return {"status": "too_large",
+               "text": f"Архив слишком большой ({exc.size} байт) — лимит {exc.limit} байт."}
+    session.commit()
+    return {"status": "staged" if result.waiting_for_domain else "blocked",
+            "batch_id": str(result.batch.id), "text": result.text}
+
+
+class BatchResolveIn(BaseModel):
+    channel: str = Field(min_length=1, max_length=32)
+    reply_text: str = Field(min_length=1)
+
+
+@router.post("/knowledge/batches/resolve-domain")
+def knowledge_batches_resolve_domain(body: BatchResolveIn,
+                                     session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Шаг 2 диалога batch (§14.5.1) — тот же `not_pending`-контракт, что
+    у `/knowledge/attachment/resolve`: вызывающая сторона (`hooks.py`/
+    `helm-control`) продолжает обычный путь, если это не про batch."""
+    outcome = resolve_batch_domain(session, channel=body.channel, reply_text=body.reply_text)
+    session.commit()
+    return {"status": outcome.status, "text": batch_resolve_outcome_text(outcome),
+            "batch_id": str(outcome.batch.id) if outcome.batch else None}
+
+
+@router.post("/knowledge/batches/{batch_id}/retry-failed")
+def knowledge_batches_retry_failed(batch_id: uuid.UUID,
+                                   session: Session = Depends(get_session)) -> dict[str, Any]:
+    batch = retry_failed(session, batch_id)
+    session.commit()
+    if batch is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "batch не найден")
+    return {"status": batch.status}
+
+
+@router.post("/knowledge/batches/{batch_id}/cancel-remaining")
+def knowledge_batches_cancel_remaining(batch_id: uuid.UUID,
+                                       session: Session = Depends(get_session)) -> dict[str, Any]:
+    batch = cancel_remaining(session, batch_id)
+    session.commit()
+    if batch is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "batch не найден")
+    return {"status": batch.status}
+
+
+@router.post("/knowledge/batches/{batch_id}/disable-created-sources")
+def knowledge_batches_disable_created_sources(
+        batch_id: uuid.UUID, session: Session = Depends(get_session)) -> dict[str, Any]:
+    count = disable_created_sources(session, batch_id)
+    session.commit()
+    return {"disabled_count": count}
 
 
 class OutboundMessage(BaseModel):

@@ -341,6 +341,10 @@
     {
       "item": "Milestone A — A-DoD п.9 (reboot) и полное закрытие",
       "note": "sudo reboot на живом сервере; все сервисы (4 контейнера, hermes-gateway, sing-box-прокси, оба systemd-таймера) поднялись сами без ручного вмешательства; живое Telegram-сообщение после ребута получило реальный ответ модели. Все 10 пунктов A-DoD закрыты живыми проверками."
+    },
+    {
+      "item": "v3.7 P8.5.2.1 — ZIP batch ingest реализован, ждёт живого деплоя (30.08.2026)",
+      "note": "По прямой директиве владельца: v3.7 принят как source of truth ТОЛЬКО для ZIP-batch-слоя (P8.5.2.1), остальные 10 подпунктов P8.5 v3.7 (domain registry, Ollama, zero-paid router и т.д.) не затронуты — see V3.7-DELTA.md. Три новых модуля (zip_safety.py — preflight/extract_member, безопасная потоковая распаковка без extractall/unzip, zip-slip/symlink/bomb/encrypted/nested все проверены; batch_intake.py — оркестрация stage/resolve/retry/cancel/disable; +8 строк в worker.py для агрегации), 2 новые таблицы (knowledge_ingest_batches, knowledge_batch_items, миграция f6617c6739ee) + knowledge_ingest_jobs.batch_item_id. Каждый eligible-член идёт через уже работающий register_file_for_ingest() — тот же SHA256-дедуп, тот же worker.py pipeline, ничего не задублировано. Найден и исправлен живым тестированием баг ретрая: retry_failed() для item'а, провалившегося на этапе ПАРСИНГА (source уже существует), вызывал register_file_for_ingest() заново и получал EXACT_DUPLICATE вместо повторного разбора — исправлено различением extraction-failure (source_id пуст, извлекаем заново) vs parse-failure (source_id заполнен, просто перевзводим job). Оба канала (MAX hooks.py, Telegram helm-control) подключены — ZIP перехватывается ДО одиночного chat_intake.py диалога. 250/250 тестов зелёных (было 215), включая все 11 acceptance-тестов из CONTINUE_HELM_TO_v3.7_ZIP_BATCH_INGEST.md §10. ЧЕСТНО НЕ ПРОВЕРЕНО: ни один тест не проходил против реального Telegram/MAX — ждёт живого деплоя (ADR-024)."
     }
   ],
   "found_and_fixed_this_bring_up": [

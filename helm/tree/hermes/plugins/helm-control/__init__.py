@@ -83,6 +83,11 @@ CONTROL_PLANE_URL = "http://127.0.0.1:8080/internal/inbound"
 KNOWLEDGE_PROBE_URL = "http://127.0.0.1:8080/internal/knowledge/probe"
 ATTACHMENT_STAGE_URL = "http://127.0.0.1:8080/internal/knowledge/attachment/stage"
 ATTACHMENT_RESOLVE_URL = "http://127.0.0.1:8080/internal/knowledge/attachment/resolve"
+#: v3.7 P8.5.2.1 (ZIP batch ingest) — тот же HMAC/base64-паттерн, что и
+#: у одиночных вложений выше, отдельные эндпоинты (см. helm_core/api/
+#: internal.py: POST /internal/knowledge/batches, .../resolve-domain).
+BATCH_STAGE_URL = "http://127.0.0.1:8080/internal/knowledge/batches"
+BATCH_RESOLVE_URL = "http://127.0.0.1:8080/internal/knowledge/batches/resolve-domain"
 HMAC_SECRET_PATH = "/etc/helm/secrets/hermes_service_hmac"
 REQUEST_TIMEOUT = 5
 #: §14.5.1 "bounded size" — тот же потолок, что уже применяется на
@@ -216,6 +221,71 @@ def _resolve_attachment(channel: str, reply_text: str, recipient: str | None) ->
         return None
 
 
+def _stage_batch(channel: str, data_base64: str, original_filename: str | None,
+                 mime_type: str | None, recipient: str | None) -> dict:
+    """POST /internal/knowledge/batches. Fail-closed, как `_stage_
+    attachment()` — архив без подтверждённого сохранения на Control
+    Plane не считается принятым."""
+    body = json.dumps({
+        "channel": channel, "data_base64": data_base64,
+        "original_filename": original_filename, "mime_type": mime_type,
+        "recipient": recipient,
+    }).encode("utf-8")
+    ts = str(time.time())
+    sig = _sign(_read_secret(), ts, body)
+    req = urllib.request.Request(
+        BATCH_STAGE_URL, data=body, method="POST",
+        headers={"Content-Type": "application/json", "X-Helm-Timestamp": ts,
+                "X-Helm-Signature": sig},
+    )
+    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        return json.loads(resp.read().decode())
+
+
+def _resolve_batch(channel: str, reply_text: str) -> dict | None:
+    """POST /internal/knowledge/batches/resolve-domain. Fail-open, как
+    `_resolve_attachment()` — недоступность Control Plane не блокирует
+    обычное сообщение, оно просто идёт своим путём."""
+    body = json.dumps({"channel": channel, "reply_text": reply_text}).encode("utf-8")
+    ts = str(time.time())
+    sig = _sign(_read_secret(), ts, body)
+    req = urllib.request.Request(
+        BATCH_RESOLVE_URL, data=body, method="POST",
+        headers={"Content-Type": "application/json", "X-Helm-Timestamp": ts,
+                "X-Helm-Signature": sig},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+            return json.loads(resp.read().decode())
+    except Exception as exc:
+        print(f"[helm-control] knowledge_batches_resolve_domain failed: {exc}", flush=True)
+        return None
+
+
+#: §14.4.0: "ZIP must no longer be treated as a MarkItDown document
+#: format" — тот же критерий, что helm_core.knowledge.batch_intake.
+#: is_zip_attachment() на стороне Control Plane. Этот процесс живёт вне
+#: пакета helm_core (свой venv на хосте Hermes) и не может импортировать
+#: её напрямую — критерий продублирован, держать в синхроне вручную при
+#: изменении одной из двух копий.
+_ZIP_MIME_TYPES = {"application/zip", "application/x-zip-compressed", "application/x-zip"}
+
+
+def _is_zip_attachment(filename: str | None, mime_type: str | None) -> bool:
+    if mime_type in _ZIP_MIME_TYPES:
+        return True
+    return bool(filename) and filename.lower().endswith(".zip")
+
+
+def _attachment_is_zip(message) -> bool:
+    """Только `document` может быть ZIP — photo/voice/audio/video нет
+    смысла проверять вовсе."""
+    doc = getattr(message, "document", None)
+    if doc is None:
+        return False
+    return _is_zip_attachment(getattr(doc, "file_name", None), getattr(doc, "mime_type", None))
+
+
 def _message_has_attachment(message) -> bool:
     """Только document/photo/voice/audio/video поддерживаются P8.5.7 —
     то же подмножество, что уже умеет adapter.py для agentic-чтения.
@@ -307,6 +377,38 @@ async def _handle_attachment_async(event, gateway, source, channel: str) -> None
         _send_reply(gateway, source, staged["text"])
 
 
+async def _handle_batch_attachment_async(event, gateway, source, channel: str) -> None:
+    """ZIP-вариант `_handle_attachment_async()` — §14.4.0: контейнер
+    перехватывается раньше одиночного диалога вложений целиком, но
+    скачивание — тот же `_download_message_attachment()` (`document` —
+    тот же `get_file()`-путь, что и для одиночного файла). Пред-проверка
+    размера внутри неё — `MAX_ATTACHMENT_BYTES` (20MB): это НЕ наш
+    собственный лимит на архив (`MAX_ARCHIVE_BYTES=1GB` на стороне
+    Control Plane), а реальное ограничение самого Telegram Bot API —
+    обычный бот (не self-hosted Local Bot API Server) не отдаёт `getFile`
+    крупнее 20MB вообще, независимо от того, что настроено у нас."""
+    try:
+        result = await _download_message_attachment(event.raw_message)
+    except Exception as exc:
+        print(f"[helm-control] не удалось скачать архив: {exc!r}", flush=True)
+        _send_reply(gateway, source, "Не смог скачать архив — попробуйте прислать ещё раз.")
+        return
+    if result is None:
+        return
+    data, filename, mime_type = result
+
+    recipient = str(source.chat_id) if source and source.chat_id is not None else None
+    try:
+        staged = _stage_batch(channel, base64.b64encode(data).decode("ascii"),
+                              filename, mime_type, recipient)
+    except Exception as exc:
+        print(f"[helm-control] stage_batch failed: {exc!r}", flush=True)
+        _send_reply(gateway, source, "Не получилось сохранить архив — попробуйте ещё раз.")
+        return
+    if staged.get("text"):
+        _send_reply(gateway, source, staged["text"])
+
+
 def _probe_local_answer(text: str) -> dict | None:
     """Free-first Knowledge Probe (ТЗ §14.11, v3.4), ДО обращения к LLM.
 
@@ -354,6 +456,13 @@ def _on_pre_gateway_dispatch(event, gateway):
     # пуст, есть только caption) — старая проверка пропустила бы такое
     # сообщение мимо гейта целиком.
     if _message_has_attachment(event.raw_message):
+        # v3.7 §14.4.0: ZIP — контейнер, не документ парсера, перехват
+        # раньше одиночного диалога вложений целиком (не после него).
+        if _attachment_is_zip(event.raw_message):
+            asyncio.get_running_loop().create_task(
+                _handle_batch_attachment_async(event, gateway, source, channel)
+            )
+            return {"action": "skip", "reason": "knowledge_batch_pending"}
         asyncio.get_running_loop().create_task(
             _handle_attachment_async(event, gateway, source, channel)
         )
@@ -396,6 +505,16 @@ def _on_pre_gateway_dispatch(event, gateway):
             _send_reply(gateway, source, attachment_result["text"])
         return {"action": "skip",
                "reason": "knowledge_attachment_" + attachment_result["status"]}
+
+    # v3.7 P8.5.2.1: тот же fail-open диалог, но для batch — проверяется
+    # ПОСЛЕ одиночного вложения (разные таблицы состояния, не могут
+    # совпасть, порядок здесь не критичен, но так симметрично тому же
+    # порядку в helm_core/api/hooks.py).
+    batch_result = _resolve_batch(channel, event.text)
+    if batch_result and batch_result.get("status") != "not_pending":
+        if batch_result.get("text"):
+            _send_reply(gateway, source, batch_result["text"])
+        return {"action": "skip", "reason": "knowledge_batch_" + batch_result["status"]}
 
     try:
         result = _register_task(channel, external_message_id, owner_id, event.text)

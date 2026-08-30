@@ -28,7 +28,8 @@ from helm_core.dispatch import BACKOFF, MAX_ATTEMPTS, deliver_pending
 from helm_core.hermes_bridge import HermesUnavailable
 from helm_core.ingest import CROSS_CHANNEL_WINDOW, strip_force_prefix
 from helm_core.models import (
-    Base, ChannelEvent, KnowledgePendingAttachment, KnowledgeSource, OutboxMessage, Task, utcnow,
+    Base, ChannelEvent, KnowledgeBatchItem, KnowledgeIngestBatch, KnowledgePendingAttachment,
+    KnowledgeSource, OutboxMessage, Task, utcnow,
 )
 from helm_core.outbox import enqueue
 
@@ -309,6 +310,15 @@ def app(engine, tmp_path, monkeypatch):
                         lambda *a, **kw: real_stage(*a, spool_root=spool_root, **kw))
     monkeypatch.setattr(hooks_module, "resolve_pending_domain",
                         lambda *a, **kw: real_resolve(*a, vault_root=vault_root, **kw))
+    # То же самое для ZIP-batch (P8.5.2.1, v3.7) — raw_batches_root/
+    # vault_root по умолчанию тоже /opt/helm-knowledge/..., та же утечка.
+    raw_batches_root = str(tmp_path / "raw-batches")
+    real_stage_batch = hooks_module.stage_batch
+    real_resolve_batch = hooks_module.resolve_batch_domain
+    monkeypatch.setattr(hooks_module, "stage_batch",
+                        lambda *a, **kw: real_stage_batch(*a, raw_batches_root=raw_batches_root, **kw))
+    monkeypatch.setattr(hooks_module, "resolve_batch_domain",
+                        lambda *a, **kw: real_resolve_batch(*a, vault_root=vault_root, **kw))
     return application
 
 
@@ -547,6 +557,61 @@ def test_webhook_unknown_attachment_shape_notifies_owner_instead_of_crashing(app
     assert response.json()["status"] == "attachment_failed"
     with app.state.session_factory() as session:
         assert session.scalars(select(KnowledgePendingAttachment)).all() == []
+
+
+# ── v3.7 P8.5.2.1: ZIP batch ingest через /hooks/max ─────────────────────
+
+def _zip_bytes(entries: dict[str, bytes]) -> bytes:
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, data in entries.items():
+            zf.writestr(name, data)
+    return buf.getvalue()
+
+
+def _zip_attachment_update(*, mid: str = "mid.zip", text: str = "") -> dict:
+    update = _update(text=text, mid=mid)
+    update["message"]["body"]["attachments"] = [
+        {"type": "file", "filename": "lectures.zip",
+        "payload": {"url": "https://cdn.max.ru/f/zip"}}
+    ]
+    return update
+
+
+def test_webhook_zip_attachment_routes_to_batch_not_single_attachment(app, client):
+    data = _zip_bytes({"one.txt": b"first", "two.txt": b"second"})
+    with patch("helm_core.api.hooks.download_attachment", return_value=data):
+        response = post_hook(client, _zip_attachment_update())
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "batch_staged"
+    with app.state.session_factory() as session:
+        # Не одиночный диалог — ZIP не попадает в KnowledgePendingAttachment.
+        assert session.scalars(select(KnowledgePendingAttachment)).all() == []
+        batch = session.scalars(select(KnowledgeIngestBatch)).one()
+        assert batch.channel == "max"
+        assert batch.total_members == 2
+        message = session.scalars(select(OutboxMessage)).one()
+        assert "2 файлов" in message.payload_reference["text"]
+
+
+def test_webhook_zip_domain_reply_queues_children_without_calling_chief(app, client):
+    data = _zip_bytes({"one.txt": b"first"})
+    with patch("helm_core.api.hooks.download_attachment", return_value=data):
+        post_hook(client, _zip_attachment_update())
+
+    response = post_hook(client, _update(text="engineering", mid="mid.zip-domain"))
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "batch_queued"
+    assert app.state.hermes_bridge.calls == []
+    with app.state.session_factory() as session:
+        item = session.scalars(select(KnowledgeBatchItem)).one()
+        source = session.get(KnowledgeSource, item.source_id)
+        assert source.domain == "engineering"
+        assert session.scalars(select(Task)).all() == []
 
 
 def test_webhook_answers_locally_without_calling_chief_when_probe_finds_answer(app, client):

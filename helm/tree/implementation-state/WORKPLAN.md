@@ -195,6 +195,65 @@ huggingface.co) — эти четыре бага нашлись ТОЛЬКО н�
 `knowledge-bootstrap.sh`, `group_add: ["10001", "1001"]` в
 docker-compose (GID `helm-secrets` + GID хостовой группы `helm`).
 
+### P8.5.2.1 — ZIP batch ingest (v3.7): код готов, ждёт живого деплоя (30.08.2026)
+
+Прямая директива владельца: принять v3.7 как source of truth ТОЛЬКО для
+ZIP-batch-слоя, не переделывая работающий single-document pipeline —
+`implementation-state/V3.7-DELTA.md` фиксирует ровно эту границу
+(что взято из v3.7 дословно, что осознанно упрощено, что не в объёме
+этого захода вовсе — domain registry/Ollama/zero-paid router и
+остальные 10 подпунктов P8.5 v3.7). Полный технический разбор —
+`docs/adr/ADR-024-zip-batch-ingest.md`.
+
+Три новых модуля в `helm_core/knowledge/`: `zip_safety.py` (preflight
+central directory + потоковое извлечение, БЕЗ `shutil`/`zipfile.
+extractall()` — zip-slip/symlink/zip-bomb/encrypted/nested все явно
+проверены и покрыты тестами), `batch_intake.py` (stage_batch/
+resolve_batch_domain/retry_failed/cancel_remaining/
+disable_created_sources/finalize_batch_if_terminal), +8 строк в
+`worker.py::process_job()` для агрегации batch по завершении child job.
+Схема: `knowledge_ingest_batches`+`knowledge_batch_items` (миграция
+`f6617c6739ee`) + `knowledge_ingest_jobs.batch_item_id`.
+
+Ключевое: каждый eligible-член архива идёт через УЖЕ РАБОТАЮЩИЙ
+`register_file_for_ingest()` — тот же SHA256-дедуп, тот же
+`worker.py`-пайплайн, ничего не задублировано. `channel=None,
+recipient=None` при регистрации batch-члена — единственный трюк для
+"no per-file push spam" (§14.5.2): существующий
+`_notify_owner_of_result()` уже тихо no-op без них.
+
+**Найден и исправлен тестами баг ретрая** (не живым деплоем — юнит-
+тестом на этапе разработки): `retry_failed()` для item'а, провалившегося
+на этапе ПАРСИНГА (`KnowledgeSource` уже существует, провалился только
+`worker.py`), вызывал `register_file_for_ingest()` заново — тот находил
+существующий source по тому же SHA256 и отдавал `EXACT_DUPLICATE`
+вместо повторного разбора, тихо "чинил" провал в неверную сторону.
+Исправлено различением по `item.source_id`: пусто — провал был на
+извлечении, извлекаем заново; заполнено — провал был на парсинге,
+просто перевзводим существующий `KnowledgeIngestJob` (`status=PENDING`).
+
+Оба канала подключены: `hooks.py` (MAX) и `helm-control/__init__.py`
+(Telegram) перехватывают ZIP ДО одиночного `chat_intake.py` диалога —
+`is_zip_attachment()`/`_is_zip_attachment()` (по расширению/MIME),
+критерий продублирован между Control Plane и Hermes-плагином (разные
+процессы, разные venv, как и весь остальной P8.5.7 Telegram-код).
+
+250/250 тестов зелёных (было 215) — все 11 acceptance-тестов из
+владельческой директивы (CONTINUE_HELM_TO_v3.7_ZIP_BATCH_INGEST.md §10,
+файл не в репозитории — прислан как вложение, не коммитится, как и
+полная спека v3.7) покрыты (`tests/test_knowledge_zip_safety.py`,
+`tests/test_knowledge_batch_intake.py`, плюс API/MAX-webhook уровень в
+`test_api.py`/`test_max_channel.py`).
+
+**Честно не проверено**: ни один тест не проходил против реального
+Telegram/MAX — untestable локально тот же класс, что весь Telegram-код
+P8.5.7 (`helm-control` вне пакета `helm_core`). Живой деплой ещё не
+выполнялся. Backup/restore архива новых строк в `backup.sh` не
+потребовал — `/opt/helm-knowledge/raw-batches/<batch_id>/original.zip`
+(путь спеки дословно) уже внутри существующего `restic backup /opt/
+helm-knowledge`, но факт восстановления архива с тем же SHA256 живьём
+тоже не проверялся.
+
 ### P8.5.7 — вложения Telegram/MAX: MAX-сторона ЗАДЕПЛОЕНА И ПОДТВЕРЖДЕНА ЖИВЬЁМ 29.08.2026; Telegram открыт
 
 Владелец выбрал UX (двухшаговый диалог из двух вариантов — спека не

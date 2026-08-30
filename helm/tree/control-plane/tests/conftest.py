@@ -38,6 +38,7 @@ def session(engine):
             "TRUNCATE task_events, channel_events, approvals, outbox, action_trust, "
             "artifacts, model_runs, tasks, knowledge_answer_runs, knowledge_relations, "
             "knowledge_ingest_jobs, knowledge_pending_attachments, knowledge_chunks, "
+            "knowledge_batch_items, knowledge_ingest_batches, "
             "knowledge_notes, knowledge_sources "
             "RESTART IDENTITY CASCADE"
         ))
