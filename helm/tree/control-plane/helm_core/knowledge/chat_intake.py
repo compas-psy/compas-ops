@@ -42,6 +42,7 @@ from sqlalchemy.orm import Session
 
 from ..models import KnowledgeDomain, KnowledgePendingAttachment, KnowledgeSensitivity, KnowledgeSource
 from .ingest import DEFAULT_VAULT_ROOT, RegisterFileResult, register_file_for_ingest
+from .tenancy import resolve_system_owner_id
 
 #: §14.5.1: "bounded size". Telegram Bot API само не отдаёт файлы крупнее
 #: 20MB обычному боту (getFile) — берём тот же потолок для обоих каналов,
@@ -133,12 +134,20 @@ def parse_domain_reply(text: str) -> str | None:
 def stage_attachment(session: Session, *, channel: str, data: bytes,
                      original_filename: str | None, mime_type: str | None,
                      caption: str | None = None,
-                     spool_root: str = DEFAULT_SPOOL_ROOT) -> KnowledgePendingAttachment:
+                     spool_root: str = DEFAULT_SPOOL_ROOT,
+                     knowledge_user_id: uuid.UUID | None = None) -> KnowledgePendingAttachment:
     """§14.5.1 spool: owner-only каталог, bounded size. Имя файла в spool —
     случайный token, НЕ sha256: два вложения с одинаковым содержимым,
     ожидающие ответа одновременно (FIFO), не должны делить один physical
     файл — иначе резолв первого (rename) оставляет второе указывающим в
-    никуда."""
+    никуда.
+
+    `knowledge_user_id=None` — существующие call sites (P8.6.2 Dedicated
+    Knowledge Bot ещё не существует): разрешается в SYSTEM_OWNER.
+    """
+    if knowledge_user_id is None:
+        knowledge_user_id = resolve_system_owner_id(session)
+
     if len(data) > MAX_ATTACHMENT_BYTES:
         raise AttachmentTooLarge(len(data), MAX_ATTACHMENT_BYTES)
 
@@ -150,6 +159,7 @@ def stage_attachment(session: Session, *, channel: str, data: bytes,
     spool_path.write_bytes(data)
 
     pending = KnowledgePendingAttachment(
+        knowledge_user_id=knowledge_user_id,
         channel=channel, sha256=sha256, spool_path=str(spool_path),
         original_filename=original_filename, mime_type=mime_type, caption=caption,
     )
@@ -186,6 +196,15 @@ def resolve_pending_domain(session: Session, *, channel: str, reply_text: str,
     if pending is None:
         return ResolveOutcome(status="not_pending")
 
+    # Тенант — тот, что уже записан на самой pending-строке (её задал
+    # stage_attachment() в момент получения файла), не повторное
+    # разрешение в SYSTEM_OWNER по умолчанию — иначе при появлении
+    # Dedicated Knowledge Bot (P8.6.2) эта проверка молча сверялась бы не
+    # с тем tenant'ом, что реально прислал вложение.
+    knowledge_user_id = pending.knowledge_user_id
+    if knowledge_user_id is None:
+        knowledge_user_id = resolve_system_owner_id(session)
+
     parsed = parse_domain_reply(reply_text)
     if parsed is None:
         return ResolveOutcome(status="invalid", pending=pending)
@@ -220,7 +239,10 @@ def resolve_pending_domain(session: Session, *, channel: str, reply_text: str,
     # файл в другой домен, менять domain существующего source — отдельная
     # операция, не эта функция; здесь только "не создавай дубликат втихую".
     existing_source = session.scalar(
-        select(KnowledgeSource).where(KnowledgeSource.sha256 == pending.sha256)
+        select(KnowledgeSource).where(
+            KnowledgeSource.knowledge_user_id == knowledge_user_id,
+            KnowledgeSource.sha256 == pending.sha256,
+        )
     )
     if existing_source is not None:
         spool_path.unlink(missing_ok=True)
@@ -269,6 +291,7 @@ def resolve_pending_domain(session: Session, *, channel: str, reply_text: str,
         session, domain=domain, raw_path=raw_path,
         original_filename=pending.original_filename, mime_type=pending.mime_type,
         sensitivity=sensitivity, channel=channel, recipient=recipient, vault_root=vault_root,
+        knowledge_user_id=knowledge_user_id,
     )
     session.delete(pending)
     session.flush()

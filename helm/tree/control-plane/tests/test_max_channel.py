@@ -33,7 +33,7 @@ from helm_core.models import (
 )
 from helm_core.outbox import enqueue
 
-from conftest import DB_URL, OWNER_ID, POLICY_PATH
+from conftest import DB_URL, OWNER_ID, POLICY_PATH, seed_system_owner
 
 SERVICE_SECRET = "test-service-secret"
 WEBHOOK_SECRET = "test-max-webhook-secret"
@@ -288,6 +288,7 @@ class FakeBridge:
 def app(engine, tmp_path, monkeypatch):
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
+    seed_system_owner(engine)
     settings = Settings(database_url=DB_URL, policy_path=POLICY_PATH, owner_id=OWNER_ID,
                         max_owner_id=MAX_OWNER_ID)
     application = create_app(settings, service_secret=SERVICE_SECRET)

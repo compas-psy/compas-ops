@@ -198,3 +198,39 @@ class KnowledgeAnswerMode(enum.StrEnum):
     Z1 = "Z1"
     Z2 = "Z2"
     C1 = "C1"
+
+
+class KnowledgeUserRole(enum.StrEnum):
+    """v3.8 §14.2 — НЕ multi-owner HELM: SYSTEM_OWNER = существующий
+    единственный владелец (полный HELM), KNOWLEDGE_USER = только
+    собственный Second Brain, без доступа к остальному HELM."""
+
+    SYSTEM_OWNER = "SYSTEM_OWNER"
+    KNOWLEDGE_USER = "KNOWLEDGE_USER"
+
+
+class KnowledgeUserStatus(enum.StrEnum):
+    INVITED = "INVITED"
+    ACTIVE = "ACTIVE"
+    SUSPENDED = "SUSPENDED"
+    DELETED = "DELETED"
+
+
+class KnowledgeMemoryKind(enum.StrEnum):
+    """v3.8 §14.10 — "не создавать десятки схем": kind оптимизирует
+    рендер/поиск, canonical_text+payload_json остаются гибкими."""
+
+    FACT = "fact"
+    BOOKMARK = "bookmark"
+    IDENTIFIER = "identifier"
+    NOTE = "note"
+    PREFERENCE = "preference"
+    TEMPORARY = "temporary"
+
+
+class KnowledgeMemoryStatus(enum.StrEnum):
+    ACTIVE = "ACTIVE"
+    DISABLED = "DISABLED"
+    SUPERSEDED = "SUPERSEDED"
+    EXPIRED = "EXPIRED"
+    DELETED = "DELETED"

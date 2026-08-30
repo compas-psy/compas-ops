@@ -28,7 +28,8 @@ from sqlalchemy.dialects.postgresql import TSVECTOR
 
 from .base import (
     ApprovalStatus, Base, KnowledgeBatchItemStatus, KnowledgeBatchStatus, KnowledgeIngestStatus,
-    KnowledgeStatus, TaskStatus, ts_column, utcnow, uuid_pk,
+    KnowledgeMemoryStatus, KnowledgeStatus, KnowledgeUserStatus, TaskStatus, ts_column, utcnow,
+    uuid_pk,
 )
 
 
@@ -356,9 +357,20 @@ class KnowledgeSource(Base):
     __tablename__ = "knowledge_sources"
 
     id: Mapped[uuid.UUID] = uuid_pk()
+    #: v3.8 §14.2 — hard tenant key. Nullable ради additive-миграции
+    #: (существующие строки бэкафилятся к SYSTEM_OWNER отдельным шагом
+    #: миграции, не NOT NULL с ходу — см. V3.8-DELTA.md); новый код
+    #: обязан заполнять его всегда.
+    knowledge_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_users.id"))
     domain: Mapped[str] = mapped_column(String(32), nullable=False)
     #: По этому хэшу распознаётся повтор (§14.5: «Повторный файл с тем же
     #: SHA256 не обрабатывается заново — связывается с существующим source»).
+    #: УНИКАЛЬНОСТЬ ПО ПАРЕ (knowledge_user_id, sha256), НЕ по одному
+    #: sha256 — v3.8 §14.2 явно запрещает cross-user dedup ("user A
+    #: content != user B content... no shared chunk-set or
+    #: content-existence side channel"); глобальная уникальность отдала бы
+    #: User B готовый source User A просто по совпадению байт.
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     raw_path: Mapped[str] = mapped_column(Text, nullable=False)
     source_path: Mapped[str | None] = mapped_column(Text)
@@ -373,8 +385,9 @@ class KnowledgeSource(Base):
     updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow, nullable=False)
 
     __table_args__ = (
-        UniqueConstraint("sha256", name="uq_knowledge_sources_sha256"),
+        UniqueConstraint("knowledge_user_id", "sha256", name="uq_knowledge_sources_user_sha256"),
         Index("ix_knowledge_sources_domain_status", "domain", "status"),
+        Index("ix_knowledge_sources_user", "knowledge_user_id"),
     )
 
 
@@ -384,6 +397,11 @@ class KnowledgeChunk(Base):
     __tablename__ = "knowledge_chunks"
 
     id: Mapped[uuid.UUID] = uuid_pk()
+    #: v3.8 §14.2 — денормализовано с родительского source (не только join)
+    #: ради прямого RLS-предиката на этой таблице без обращения к
+    #: knowledge_sources в каждой политике.
+    knowledge_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_users.id"))
     source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("knowledge_sources.id"), nullable=False)
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
@@ -400,6 +418,7 @@ class KnowledgeChunk(Base):
     __table_args__ = (
         UniqueConstraint("source_id", "ordinal", name="uq_knowledge_chunks_source_ordinal"),
         Index("ix_knowledge_chunks_tsv", "tsv", postgresql_using="gin"),
+        Index("ix_knowledge_chunks_user", "knowledge_user_id"),
     )
 
 
@@ -411,6 +430,8 @@ class KnowledgeNote(Base):
     __tablename__ = "knowledge_notes"
 
     id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_users.id"))
     #: Стабильный id/slug из frontmatter (§14.3: «id: stable.uuid-or-slug»)
     #: — то, на что ссылаются wikilinks [[concept-id]], не суррогатный PK.
     slug: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -430,7 +451,9 @@ class KnowledgeNote(Base):
     created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow, nullable=False)
 
-    __table_args__ = (UniqueConstraint("slug", name="uq_knowledge_notes_slug"),)
+    __table_args__ = (
+        UniqueConstraint("knowledge_user_id", "slug", name="uq_knowledge_notes_user_slug"),
+    )
 
 
 class KnowledgeRelation(Base):
@@ -439,6 +462,8 @@ class KnowledgeRelation(Base):
     __tablename__ = "knowledge_relations"
 
     id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_users.id"))
     #: Слаг заметки или id source — не FK: узел связи может указывать на
     #: заметку, которой ещё нет как строки knowledge_notes (owner пишет
     #: wikilink на будущую заметку) — то же допущение, что у wikilinks в
@@ -460,6 +485,8 @@ class KnowledgeIngestJob(Base):
     __tablename__ = "knowledge_ingest_jobs"
 
     id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_users.id"))
     source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("knowledge_sources.id"), nullable=False)
     #: telegram | max | manual — откуда пришёл файл (§14.5.1).
     channel: Mapped[str | None] = mapped_column(String(32))
@@ -503,6 +530,8 @@ class KnowledgePendingAttachment(Base):
     __tablename__ = "knowledge_pending_attachments"
 
     id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_users.id"))
     #: telegram | max — тот же словарь, что у KnowledgeIngestJob.channel.
     channel: Mapped[str] = mapped_column(String(32), nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -532,6 +561,11 @@ class KnowledgeIngestBatch(Base):
     __tablename__ = "knowledge_ingest_batches"
 
     id: Mapped[uuid.UUID] = uuid_pk()
+    #: v3.8 §14.2 — та же анти-cross-user-dedup логика, что у
+    #: KnowledgeSource.sha256: lookup по archive_sha256 фильтруется и по
+    #: этому полю (batch_intake.py::stage_batch()).
+    knowledge_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_users.id"))
     #: telegram | max — тот же словарь, что у KnowledgeIngestJob.channel.
     channel: Mapped[str] = mapped_column(String(32), nullable=False)
     #: Адресат для итогового уведомления (§14.5.2) — тот же паттерн, что
@@ -570,7 +604,7 @@ class KnowledgeIngestBatch(Base):
 
     __table_args__ = (
         Index("ix_knowledge_ingest_batches_channel_created", "channel", "created_at"),
-        Index("ix_knowledge_ingest_batches_archive_sha256", "archive_sha256"),
+        Index("ix_knowledge_ingest_batches_user_sha256", "knowledge_user_id", "archive_sha256"),
     )
 
 
@@ -584,6 +618,8 @@ class KnowledgeBatchItem(Base):
     __tablename__ = "knowledge_batch_items"
 
     id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_users.id"))
     batch_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("knowledge_ingest_batches.id"), nullable=False)
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -626,6 +662,7 @@ class KnowledgeAnswerRun(Base):
     __tablename__ = "knowledge_answer_runs"
 
     id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("knowledge_users.id"))
     created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
     query_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     domain: Mapped[str | None] = mapped_column(String(32))
@@ -637,4 +674,155 @@ class KnowledgeAnswerRun(Base):
     cloud_model: Mapped[str | None] = mapped_column(String(128))
     escalation_reason: Mapped[str | None] = mapped_column(String(128))
 
-    __table_args__ = (Index("ix_knowledge_answer_runs_created", "created_at"),)
+    __table_args__ = (
+        Index("ix_knowledge_answer_runs_created", "created_at"),
+        Index("ix_knowledge_answer_runs_user", "knowledge_user_id"),
+    )
+
+
+class KnowledgeUser(Base):
+    """v3.8 §14.2 — тенант Knowledge, НЕ владелец HELM. Ровно одна строка
+    `role=SYSTEM_OWNER` соответствует единственному сегодняшнему владельцу
+    (backfill существующих данных при миграции); дополнительные строки —
+    `role=KNOWLEDGE_USER`, каждая видит только собственный Second Brain."""
+
+    __tablename__ = "knowledge_users"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default=KnowledgeUserStatus.ACTIVE,
+                                        nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(128))
+    locale: Mapped[str] = mapped_column(String(8), default="ru", nullable=False)
+    timezone: Mapped[str] = mapped_column(String(64), default="Europe/Moscow", nullable=False)
+    storage_quota_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    daily_ingest_quota_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    #: §14.1: KNOWLEDGE_USER по умолчанию НЕ может дойти до платной модели
+    #: вообще — это не "предпочтение", а гейт, который вызывающий код
+    #: обязан проверить до любой попытки эскалации к Hermes/OpenRouter.
+    allow_paid_ai: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    style_profile_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+    activated_at: Mapped[datetime | None] = ts_column()
+    suspended_at: Mapped[datetime | None] = ts_column()
+
+
+class KnowledgeChannelIdentity(Base):
+    """v3.8 §14.3 — Telegram `from.id` (не введённый вручную chat_id) как
+    единственное доказательство identity. Уникальность на (channel,
+    external_user_id): один и тот же живой Telegram-аккаунт не может
+    одновременно принадлежать двум knowledge_user одновременно."""
+
+    __tablename__ = "knowledge_channel_identities"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_users.id"), nullable=False)
+    #: telegram_owner | telegram_knowledge | max
+    channel: Mapped[str] = mapped_column(String(32), nullable=False)
+    external_user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    external_chat_id: Mapped[str | None] = mapped_column(String(64))
+    verified_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    revoked_at: Mapped[datetime | None] = ts_column()
+
+    __table_args__ = (
+        UniqueConstraint("channel", "external_user_id",
+                        name="uq_knowledge_channel_identities_channel_user"),
+        Index("ix_knowledge_channel_identities_user", "knowledge_user_id"),
+    )
+
+
+class KnowledgeInvite(Base):
+    """v3.8 §14.3 — одноразовый deep-link токен для onboarding'а
+    Dedicated Knowledge Bot. `token_hash`, не сам токен — та же
+    дисциплина, что у `panel_enrollment_tokens` (владелец не хранит
+    секрет, который можно предъявить, в открытом виде)."""
+
+    __tablename__ = "knowledge_invites"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_users.id"), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expected_external_user_id: Mapped[str | None] = mapped_column(String(64))
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+    expires_at: Mapped[datetime] = ts_column(nullable=False)
+    used_at: Mapped[datetime | None] = ts_column()
+    revoked_at: Mapped[datetime | None] = ts_column()
+
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_knowledge_invites_token_hash"),
+    )
+
+
+class KnowledgeUserUsage(Base):
+    """v3.8 §14.4 — квоты/backpressure, не биллинг (спека дословно)."""
+
+    __tablename__ = "knowledge_user_usage"
+
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_users.id"), primary_key=True)
+    storage_bytes: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    sources_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    memories_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    queued_jobs: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    ingest_bytes_today: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class KnowledgeMemory(Base):
+    """v3.8 §14.10 Micro-Memory («Запомни») — НЕ document source: нет
+    парсера/chunker'а, прямой FTS-юнит (эта кодовая база не строит
+    embeddings ни для документов, ни для памяти — pgvector/embeddings,
+    P8.5.4 остаток, не реализован, см. V3.8-DELTA.md)."""
+
+    __tablename__ = "knowledge_memories"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_users.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: Точный текст владельца, сохранённый как есть — §14.10 "preserve
+    #: exact owner payload", никогда не переписывается генеративно.
+    canonical_text: Mapped[str] = mapped_column(Text, nullable=False)
+    display_label: Mapped[str | None] = mapped_column(String(255))
+    payload_json: Mapped[dict | None] = mapped_column(JSONB)
+    #: `str` через существующий `KnowledgeDomain` enum, как везде в
+    #: кодовой базе — не `primary_domain_id` FK на несуществующий реестр
+    #: доменов (тот же принцип, что уже применён для ZIP batch, см.
+    #: V3.7-DELTA.md). Nullable — "высокая уверенность или ничего", не
+    #: обязательный выбор при каждой записи (§14.10).
+    domain: Mapped[str | None] = mapped_column(String(32))
+    sensitivity: Mapped[str] = mapped_column(String(32), default="internal", nullable=False)
+    trust: Mapped[str] = mapped_column(String(32), default="owner_asserted", nullable=False)
+    valid_from: Mapped[datetime | None] = ts_column()
+    expires_at: Mapped[datetime | None] = ts_column()
+    status: Mapped[str] = mapped_column(String(16), default=KnowledgeMemoryStatus.ACTIVE,
+                                        nullable=False)
+    supersedes_memory_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_memories.id"))
+    #: SHA256(normalized canonical_text/payload) в пределах knowledge_user
+    #: — точный повтор не создаёт второй активный item (§14.10 "Exact
+    #: Micro-Memory dedup"). Не UNIQUE constraint: SUPERSEDED/EXPIRED
+    #: версии того же хэша легитимно сосуществуют, уникальность
+    #: "не более одного ACTIVE" проверяется в коде, не в схеме.
+    dedup_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    origin_channel: Mapped[str | None] = mapped_column(String(32))
+    origin_message_id: Mapped[str | None] = mapped_column(String(128))
+    #: text | voice
+    origin_kind: Mapped[str | None] = mapped_column(String(8))
+    #: Graphify не реализован (P8.5.6) — всегда NOT_APPLICABLE, как и у
+    #: KnowledgeBatchItem.graph_status.
+    graph_status: Mapped[str | None] = mapped_column(String(32))
+    tsv: Mapped[str | None] = mapped_column(TSVECTOR)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow, nullable=False)
+    last_used_at: Mapped[datetime | None] = ts_column()
+
+    __table_args__ = (
+        Index("ix_knowledge_memories_user_status", "knowledge_user_id", "status"),
+        Index("ix_knowledge_memories_user_dedup", "knowledge_user_id", "dedup_hash"),
+        Index("ix_knowledge_memories_tsv", "tsv", postgresql_using="gin"),
+    )

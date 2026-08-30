@@ -42,6 +42,7 @@ from sqlalchemy.orm import Session
 from . import zip_safety
 from .chat_intake import _CANCEL_SENTINEL, domain_list_lines, parse_domain_reply
 from .ingest import DEFAULT_VAULT_ROOT, register_file_for_ingest
+from .tenancy import resolve_system_owner_id
 from ..models import (
     BATCH_ITEM_TERMINAL_STATUSES, KnowledgeBatchItem, KnowledgeBatchItemStatus,
     KnowledgeBatchStatus, KnowledgeDomain, KnowledgeIngestBatch, KnowledgeIngestJob,
@@ -111,13 +112,20 @@ class StageBatchResult:
 def stage_batch(session: Session, *, channel: str, data: bytes,
                 original_filename: str | None, mime_type: str | None,
                 recipient: str | None = None,
-                raw_batches_root: str = DEFAULT_RAW_BATCHES_ROOT) -> StageBatchResult:
+                raw_batches_root: str = DEFAULT_RAW_BATCHES_ROOT,
+                knowledge_user_id: uuid.UUID | None = None) -> StageBatchResult:
     """Сохранить архив, посчитать preflight, вернуть текст для владельца.
 
     Не создаёт `KnowledgeBatchItem` строки — они заводятся в
     `resolve_batch_domain()`, когда домен уже известен, чтобы не тратить
     работу на архив, который может быть отменён на этом же шаге.
+
+    `knowledge_user_id=None` — существующие call sites (P8.6.2 Dedicated
+    Knowledge Bot ещё не существует): разрешается в SYSTEM_OWNER.
     """
+    if knowledge_user_id is None:
+        knowledge_user_id = resolve_system_owner_id(session)
+
     if len(data) > MAX_ARCHIVE_BYTES:
         raise ArchiveTooLarge(len(data), MAX_ARCHIVE_BYTES)
 
@@ -125,9 +133,12 @@ def stage_batch(session: Session, *, channel: str, data: bytes,
 
     # §14.6 "ZIP-specific dedup", Layer 1: тот же архив уже видели —
     # не разворачиваем повторно, просто ссылаемся на прошлый результат.
+    # Per-tenant (v3.8 §14.4): тот же архив у другого knowledge_user_id —
+    # не совпадение, разворачивается заново.
     existing = session.scalar(
         select(KnowledgeIngestBatch)
-        .where(KnowledgeIngestBatch.archive_sha256 == archive_sha256)
+        .where(KnowledgeIngestBatch.knowledge_user_id == knowledge_user_id,
+              KnowledgeIngestBatch.archive_sha256 == archive_sha256)
         .order_by(KnowledgeIngestBatch.created_at.desc())
         .limit(1)
     )
@@ -136,6 +147,7 @@ def stage_batch(session: Session, *, channel: str, data: bytes,
                                 waiting_for_domain=False)
 
     batch = KnowledgeIngestBatch(
+        knowledge_user_id=knowledge_user_id,
         channel=channel, recipient=recipient, archive_filename=original_filename,
         archive_mime=mime_type, archive_size_bytes=len(data), archive_raw_path="",
         archive_sha256=archive_sha256, status=KnowledgeBatchStatus.HASHING,
@@ -227,6 +239,7 @@ def resolve_batch_domain(session: Session, *, channel: str, reply_text: str,
 
     for decision in decisions:
         item = KnowledgeBatchItem(
+            knowledge_user_id=batch.knowledge_user_id,
             batch_id=batch.id, ordinal=decision.ordinal,
             archive_member_path_original=decision.path_original,
             archive_member_name_normalized=decision.path_normalized,
@@ -314,6 +327,9 @@ def _process_item(session: Session, batch: KnowledgeIngestBatch, item: Knowledge
         # нужно (§14.5.2 "No per-file push spam"); worker.py::
         # _notify_owner_of_result() уже тихо no-op, если их нет.
         channel=None, recipient=None, vault_root=vault_root,
+        # Тенант члена архива — тенант самого батча, не отдельное
+        # разрешение через resolve_system_owner_id() (v3.8 §14.4).
+        knowledge_user_id=batch.knowledge_user_id,
     )
     item.source_id = result.source.id
     item.source_created_by_batch = result.created

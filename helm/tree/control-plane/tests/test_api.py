@@ -13,7 +13,7 @@ from helm_core.app import create_app
 from helm_core.config import Settings
 from helm_core.models import Base, Task
 
-from conftest import DB_URL, OWNER_ID, POLICY_PATH
+from conftest import DB_URL, OWNER_ID, POLICY_PATH, seed_system_owner
 
 SERVICE_SECRET = "test-service-secret"
 
@@ -22,6 +22,7 @@ SERVICE_SECRET = "test-service-secret"
 def client(engine, tmp_path, monkeypatch):
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
+    seed_system_owner(engine)
     settings = Settings(database_url=DB_URL, policy_path=POLICY_PATH, owner_id=OWNER_ID)
     # /internal/knowledge/attachment/* (P8.5.7, Telegram) зовёт stage_
     # attachment()/resolve_pending_domain() без spool_root/vault_root —
