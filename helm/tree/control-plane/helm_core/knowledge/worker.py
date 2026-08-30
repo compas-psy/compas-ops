@@ -51,6 +51,37 @@ def claim_next_job(session: Session) -> KnowledgeIngestJob | None:
     return job
 
 
+def _frontmatter(source: KnowledgeSource) -> str:
+    """§14.3 markdown contract — обязательный YAML-блок для каждой
+    normalized note. Собирается вручную, не через PyYAML: все значения —
+    UUID/enum-строки/ISO-таймстемпы/hex-хэш, никогда свободный текст
+    документа, экранирование не нужно, а зависимость не добавляется в
+    Dockerfile.worker ради тривиального формата.
+
+    `confidence`/`supersedes`/`contradicts` спека резервирует под derived/
+    L2 note (`KnowledgeNote`, ещё не реализован, P8.5.6+) — L1 SOURCE
+    (`type: source`) всегда `primary`/`extracted`, никогда `inferred`, и
+    ничего не supersedes; не заполняются пустыми значениями, а не пишутся
+    вовсе.
+    """
+    return "\n".join([
+        "---",
+        f"id: {source.id}",
+        "type: source",
+        f"domain: {source.domain}",
+        f"created_at: {source.created_at.isoformat()}",
+        f"updated_at: {source.updated_at.isoformat()}",
+        f'source_ids: ["{source.id}"]',
+        f'source_sha256: ["{source.sha256}"]',
+        f"sensitivity: {source.sensitivity}",
+        f"trust: {source.trust}",
+        f"status: {source.status}",
+        "---",
+        "",
+        "",
+    ])
+
+
 def process_job(session: Session, job: KnowledgeIngestJob) -> None:
     """Разобрать один job. Не коммитит — вызывающий код решает транзакцию.
 
@@ -84,8 +115,14 @@ def process_job(session: Session, job: KnowledgeIngestJob) -> None:
         # L1 SOURCE (§14.1): нормализованный Markdown — реальный файл, не
         # только запись в БД, чтобы Vault оставался открываемым обычным
         # Obsidian-совместимым клиентом (§14.2), не только через Postgres.
+        # НАЙДЕНО аудитом 29.08.2026: раньше писался голый текст, без
+        # frontmatter — §14.3 markdown contract требует его для КАЖДОЙ
+        # normalized note; без него domain/sensitivity/status файла видны
+        # только через Postgres, а Vault, открытый напрямую (Obsidian,
+        # SFTP), показывает неотличимые друг от друга .md-файлы — включая
+        # health/client_restricted содержимое без единой видимой пометки.
         Path(source.source_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(source.source_path).write_text(result.text, encoding="utf-8")
+        Path(source.source_path).write_text(_frontmatter(source) + result.text, encoding="utf-8")
 
         for ordinal, chunk_text in enumerate(split_chunks(result.text)):
             session.add(KnowledgeChunk(

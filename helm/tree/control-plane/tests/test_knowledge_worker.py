@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from helm_core.knowledge.ingest import register_file_for_ingest
 from helm_core.knowledge import worker as worker_module
-from helm_core.knowledge.worker import claim_next_job, process_job
+from helm_core.knowledge.worker import _frontmatter, claim_next_job, process_job
 from helm_core.models import (
     KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus, KnowledgeSource, KnowledgeStatus,
     OutboxMessage,
@@ -86,6 +86,33 @@ def test_claim_next_job_returns_oldest_pending_and_marks_running(session, tmp_pa
     assert claimed.status == KnowledgeIngestStatus.RUNNING
 
 
+# ── §14.3 markdown contract: YAML frontmatter ─────────────────────────────
+
+def test_frontmatter_contains_required_fields_self_referencing(session, tmp_path):
+    raw = tmp_path / "note.txt"
+    raw.write_text("x", encoding="utf-8")
+    result = register_file_for_ingest(session, domain="health", raw_path=raw)
+    session.flush()
+    source = result.source
+
+    fm = _frontmatter(source)
+
+    assert fm.startswith("---\n")
+    assert fm.count("---") == 2, "ровно один блок frontmatter, не больше"
+    assert f"id: {source.id}" in fm
+    assert "type: source" in fm
+    assert "domain: health" in fm
+    assert f'source_ids: ["{source.id}"]' in fm, "L1 SOURCE ссылается сама на себя"
+    assert f'source_sha256: ["{source.sha256}"]' in fm
+    assert "sensitivity: internal" in fm
+    assert "trust: extracted" in fm
+    assert "status: active" in fm
+    # §14.3: confidence/supersedes/contradicts — только для derived/L2 note.
+    assert "confidence" not in fm
+    assert "supersedes" not in fm
+    assert "contradicts" not in fm
+
+
 # ── process_job() — оркестрация, parse_file() подменён ────────────────────
 
 @dataclass
@@ -109,7 +136,19 @@ def test_process_job_success_creates_chunks_and_marks_done(session, tmp_path, mo
     assert source.parser == "markitdown"
     assert source.status == KnowledgeStatus.ACTIVE
     # L1 SOURCE (§14.1/§14.2) — реальный .md-файл, не только строки в БД.
-    assert Path(source.source_path).read_text(encoding="utf-8") == "Решение: используем Postgres."
+    written = Path(source.source_path).read_text(encoding="utf-8")
+    # §14.3 markdown contract — YAML frontmatter обязателен для каждой
+    # normalized note (id/type/domain/sensitivity/trust/status/...), не
+    # только сам извлечённый текст — иначе Vault, открытый напрямую
+    # (Obsidian/SFTP), не отличает health/client_restricted файлы от прочих.
+    assert written.startswith("---\n")
+    assert f"id: {source.id}" in written
+    assert "type: source" in written
+    assert "domain: engineering" in written
+    assert "sensitivity: internal" in written
+    assert "trust: extracted" in written
+    assert "status: active" in written
+    assert written.endswith("Решение: используем Postgres.")
     chunks = session.scalars(select(KnowledgeChunk).where(KnowledgeChunk.source_id == source.id)).all()
     assert [c.text for c in chunks] == ["Решение: используем Postgres."]
 
