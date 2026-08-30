@@ -45,6 +45,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .ingest import DEFAULT_VAULT_ROOT, ingest_text
+from .quotas import record_entry_formed
 from .tenancy import bind_knowledge_user
 from ..models import KnowledgeDomain, KnowledgeMemory, KnowledgeMemoryStatus, KnowledgeSource, KnowledgeUser
 from ..models.base import utcnow
@@ -280,6 +281,7 @@ def try_remember(session: Session, *, channel: str, text: str,
     )
     session.add(memory)
     session.flush()
+    record_entry_formed(session, knowledge_user_id=knowledge_user_id, memories=1)
     _write_markdown_mirror(memory, vault_root=vault_root)
 
     return RememberOutcome(status="stored", memory=memory, text=_confirmation_text(memory))

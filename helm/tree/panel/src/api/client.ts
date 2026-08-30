@@ -100,6 +100,57 @@ export const api = {
     request<{ status: string }>(`/api/panel/v1/users/${userId}/${action}`, {
       method: 'POST', headers: { 'X-Helm-StepUp': stepUpId },
     }),
+
+  /**
+   * Одноразовый токен доступа в панель для KNOWLEDGE_USER. Владелец
+   * передаёт его человеку сам — HELM за этот канал не отвечает, поэтому
+   * срок короткий и токен одноразовый.
+   */
+  invitePanelAccess: (userId: string, stepUpId: string) =>
+    request<{ enrollment_token: string; panel_url: string; expires_at: string }>(
+      `/api/panel/v1/users/${userId}/panel-invite`,
+      { method: 'POST', headers: { 'X-Helm-StepUp': stepUpId } },
+    ),
+
+  /** Какую оболочку рисовать: владельца или Knowledge-only. */
+  session: () => request<{ role: PanelRole }>('/api/panel/v1/session'),
+
+  /** Свой Второй мозг — и ничей больше: тенант берётся из сессии. */
+  knowledge: () => request<KnowledgeShell>('/api/panel/v1/knowledge'),
+}
+
+export type PanelRole = 'SYSTEM_OWNER' | 'KNOWLEDGE_USER'
+
+/**
+ * Ответ Knowledge-оболочки. Полей, ссылающихся на чужого пользователя,
+ * здесь нет по построению: сервер не принимает knowledge_user_id
+ * параметром, он берёт его из сессии.
+ */
+export interface KnowledgeShell {
+  role: PanelRole | null
+  display_name: string | null
+  timezone: string | null
+  usage: {
+    storage_bytes: number
+    sources_count: number
+    memories_count: number
+    storage_quota_bytes: number | null
+  }
+  memories: {
+    id: string
+    kind: string
+    text: string
+    status: string
+    created_at: string
+    expires_at: string | null
+  }[]
+  sources: {
+    id: string
+    title: string | null
+    domain: string | null
+    status: string
+    created_at: string
+  }[]
 }
 
 // ── формы ответов ───────────────────────────────────────────────────────────

@@ -33,7 +33,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models import KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus, KnowledgeSource, KnowledgeStatus
-from .quotas import check_and_record_ingest, check_queue_depth
+from .quotas import check_and_record_ingest, check_queue_depth, record_entry_formed
 from .tenancy import bind_knowledge_user
 
 #: Корень Vault (§14.2). Параметр, а не только константа: тесты обязаны
@@ -90,6 +90,7 @@ def ingest_text(session: Session, *, domain: str, text: str,
     )
     session.add(source)
     session.flush()
+    record_entry_formed(session, knowledge_user_id=knowledge_user_id, sources=1)
 
     for ordinal, chunk_text in enumerate(split_chunks(text)):
         session.add(KnowledgeChunk(
@@ -160,6 +161,7 @@ def register_file_for_ingest(session: Session, *, domain: str, raw_path: Path,
     )
     session.add(source)
     session.flush()
+    record_entry_formed(session, knowledge_user_id=knowledge_user_id, sources=1)
 
     job = KnowledgeIngestJob(knowledge_user_id=knowledge_user_id, source_id=source.id,
                              channel=channel, recipient=recipient,

@@ -11,6 +11,8 @@ Hermes/LiteLLM», поэтому в модуле нет ни одного имп
 
 from __future__ import annotations
 
+import hashlib
+import secrets
 import uuid
 from datetime import timedelta
 from decimal import Decimal
@@ -23,12 +25,17 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
 from ..knowledge.onboarding import create_invite, reactivate_user, suspend_user
+from ..knowledge.tenancy import bind_knowledge_user
 from ..models import (
     ActionTrust, Approval, ApprovalStatus, BudgetDaily, KnowledgeChannelIdentity,
-    KnowledgeUser, KnowledgeUserRole, KnowledgeUserUsage, MetricPoint, ModelRun,
+    KnowledgeMemory, KnowledgeMemoryStatus, KnowledgeSource, KnowledgeUser, KnowledgeUserRole,
+    KnowledgeUserStatus, KnowledgeUserUsage, MetricPoint, ModelRun, PanelEnrollmentToken,
     Routine, Task, TaskEvent, TaskStatus, utcnow,
 )
-from .deps import PanelIdentity, get_session, require_panel_session, require_stepup
+from .deps import (
+    PanelIdentity, get_session, knowledge_principal, require_owner_session,
+    require_panel_session, require_stepup,
+)
 
 router = APIRouter(prefix="/api/panel/v1", tags=["panel"])
 
@@ -56,7 +63,7 @@ def _approval_brief(approval: Approval, policy) -> dict[str, Any]:
 
 @router.get("/today")
 def today(request: Request, session: Session = Depends(get_session),
-          identity: PanelIdentity = Depends(require_panel_session)) -> dict[str, Any]:
+          identity: PanelIdentity = Depends(require_owner_session)) -> dict[str, Any]:
     """Стартовый экран (бриф §3.1).
 
     Порядок блоков — по срочности, как в брифе. Каждый блок отдаётся
@@ -124,7 +131,7 @@ def today(request: Request, session: Session = Depends(get_session),
 @router.get("/approvals")
 def list_approvals(request: Request, state: str = "pending",
                    session: Session = Depends(get_session),
-                   identity: PanelIdentity = Depends(require_panel_session)) -> dict[str, Any]:
+                   identity: PanelIdentity = Depends(require_owner_session)) -> dict[str, Any]:
     policy = request.app.state.registry._policy
     query = select(Approval).order_by(Approval.requested_at.desc())
     if state == "pending":
@@ -137,7 +144,7 @@ def list_approvals(request: Request, state: str = "pending",
 @router.get("/approvals/{approval_id}")
 def approval_detail(approval_id: uuid.UUID, request: Request,
                     session: Session = Depends(get_session),
-                    identity: PanelIdentity = Depends(require_panel_session)) -> dict[str, Any]:
+                    identity: PanelIdentity = Depends(require_owner_session)) -> dict[str, Any]:
     """Полная карточка (бриф §3.2).
 
     Отдаёт суть действия «в его родной форме» и фактический статус каждого
@@ -192,7 +199,7 @@ class _ReadOnlyCtx:
 
 @router.get("/tasks")
 def list_tasks(session: Session = Depends(get_session),
-               identity: PanelIdentity = Depends(require_panel_session)) -> dict[str, Any]:
+               identity: PanelIdentity = Depends(require_owner_session)) -> dict[str, Any]:
     """Задачи, сгруппированные по состоянию (бриф §3.3)."""
     groups = {"stuck": [], "running": [], "needs_approval": [], "done_today": []}
     now = utcnow()
@@ -214,7 +221,7 @@ def list_tasks(session: Session = Depends(get_session),
 
 @router.get("/tasks/{task_id}")
 def task_detail(task_id: uuid.UUID, session: Session = Depends(get_session),
-                identity: PanelIdentity = Depends(require_panel_session)) -> dict[str, Any]:
+                identity: PanelIdentity = Depends(require_owner_session)) -> dict[str, Any]:
     task = session.get(Task, task_id)
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "задача не найдена")
@@ -247,7 +254,7 @@ def task_detail(task_id: uuid.UUID, session: Session = Depends(get_session),
 
 @router.get("/money")
 def money(session: Session = Depends(get_session),
-          identity: PanelIdentity = Depends(require_panel_session)) -> dict[str, Any]:
+          identity: PanelIdentity = Depends(require_owner_session)) -> dict[str, Any]:
     """Деньги (бриф §3.4). Никаких процентов без абсолюта."""
     now = utcnow()
     rows = session.scalars(
@@ -284,7 +291,7 @@ def money(session: Session = Depends(get_session),
 
 @router.get("/system")
 def system(session: Session = Depends(get_session),
-           identity: PanelIdentity = Depends(require_panel_session)) -> dict[str, Any]:
+           identity: PanelIdentity = Depends(require_owner_session)) -> dict[str, Any]:
     """Система (бриф §3.5). Только то, у чего есть порог."""
     now = utcnow()
     latest: dict[str, MetricPoint] = {}
@@ -329,6 +336,15 @@ def system(session: Session = Depends(get_session),
 #: У приглашения нет цели-пользователя: он ещё не существует.
 SCOPE_INVITE = "panel:users:invite"
 
+#: Срок enrollment-токена панели. Короче суточного инвайта в бот: токен
+#: доставляется владельцем вручную и используется сразу, а не «когда-нибудь
+#: за день».
+PANEL_INVITE_TTL = timedelta(hours=2)
+
+#: Сколько записей отдаёт Knowledge-оболочка за раз. Пагинации нет —
+#: заводить её до появления живого корпуса второго пользователя незачем.
+SHELL_PAGE_SIZE = 100
+
 
 def _knowledge_user_view(user: KnowledgeUser, usage: KnowledgeUserUsage | None,
                          identities: list[KnowledgeChannelIdentity]) -> dict[str, Any]:
@@ -342,12 +358,16 @@ def _knowledge_user_view(user: KnowledgeUser, usage: KnowledgeUserUsage | None,
         "allow_paid_ai": user.allow_paid_ai,
         "storage_quota_bytes": user.storage_quota_bytes,
         "daily_ingest_quota_bytes": user.daily_ingest_quota_bytes,
-        # Только те счётчики, которые реально ведутся (`quotas.py`).
-        # `sources_count`/`memories_count`/`queued_jobs` в схеме есть, но
-        # никем не обновляются — показывать вечные нули хуже, чем не
-        # показывать (см. V3.8-DELTA.md, находка).
+        # Счётчики сформированных записей ведёт `quotas.record_entry_formed()`
+        # (распоряжение владельца 30.08.2026, «принцип Obsidian»: считаем
+        # сформированные записи, архивирование их не уменьшает).
+        # `queued_jobs` сюда не выводится: он вычисляется на лету
+        # (`check_queue_depth`), хранить его копию было бы вторым источником
+        # правды о том же.
         "storage_bytes": usage.storage_bytes if usage else 0,
         "ingest_bytes_today": usage.ingest_bytes_today if usage else 0,
+        "sources_count": usage.sources_count if usage else 0,
+        "memories_count": usage.memories_count if usage else 0,
         "created_at": user.created_at.isoformat(),
         "activated_at": user.activated_at.isoformat() if user.activated_at else None,
         "suspended_at": user.suspended_at.isoformat() if user.suspended_at else None,
@@ -364,7 +384,7 @@ def _knowledge_user_view(user: KnowledgeUser, usage: KnowledgeUserUsage | None,
 
 @router.get("/users")
 def list_knowledge_users(session: Session = Depends(get_session),
-                         identity: PanelIdentity = Depends(require_panel_session),
+                         identity: PanelIdentity = Depends(require_owner_session),
                          ) -> dict[str, Any]:
     """§14.3 «Система → Пользователи» — метаданные и квоты, не контент.
 
@@ -396,7 +416,7 @@ class PanelInviteIn(BaseModel):
 @router.post("/users/invite", status_code=status.HTTP_201_CREATED)
 def invite_knowledge_user(body: PanelInviteIn, request: Request,
                           session: Session = Depends(get_session),
-                          identity: PanelIdentity = Depends(require_panel_session),
+                          identity: PanelIdentity = Depends(require_owner_session),
                           stepup=Depends(require_stepup)) -> dict[str, Any]:
     """Пригласить нового `KNOWLEDGE_USER` (P8.6.5 заменяет собой стенд-ин
     `POST /internal/knowledge/users/invite`, но не отменяет его —
@@ -449,7 +469,7 @@ def _require_manageable_user(session: Session, knowledge_user_id: uuid.UUID) -> 
 @router.post("/users/{knowledge_user_id}/suspend")
 def suspend_knowledge_user(knowledge_user_id: uuid.UUID,
                            session: Session = Depends(get_session),
-                           identity: PanelIdentity = Depends(require_panel_session),
+                           identity: PanelIdentity = Depends(require_owner_session),
                            stepup=Depends(require_stepup)) -> dict[str, Any]:
     """§14.3 «Suspend/offboard»: доступ к боту/панели закрыт, данные
     сохранены. Необратимого удаления здесь нет — оно RED и отдельное."""
@@ -463,7 +483,7 @@ def suspend_knowledge_user(knowledge_user_id: uuid.UUID,
 @router.post("/users/{knowledge_user_id}/reactivate")
 def reactivate_knowledge_user(knowledge_user_id: uuid.UUID,
                               session: Session = Depends(get_session),
-                              identity: PanelIdentity = Depends(require_panel_session),
+                              identity: PanelIdentity = Depends(require_owner_session),
                               stepup=Depends(require_stepup)) -> dict[str, Any]:
     stepup.assert_scope(f"panel:users:reactivate:{knowledge_user_id}")
     _require_manageable_user(session, knowledge_user_id)
@@ -482,7 +502,7 @@ class PanelQuotaIn(BaseModel):
 @router.post("/users/{knowledge_user_id}/quota")
 def set_knowledge_user_quota(knowledge_user_id: uuid.UUID, body: PanelQuotaIn,
                              session: Session = Depends(get_session),
-                             identity: PanelIdentity = Depends(require_panel_session),
+                             identity: PanelIdentity = Depends(require_owner_session),
                              stepup=Depends(require_stepup)) -> dict[str, Any]:
     """§14.3 «metadata/quota» — правка квот из панели вместо
     единственного прежнего момента (создание инвайта)."""
@@ -497,12 +517,121 @@ def set_knowledge_user_quota(knowledge_user_id: uuid.UUID, body: PanelQuotaIn,
             "daily_ingest_quota_bytes": user.daily_ingest_quota_bytes}
 
 
+@router.post("/users/{knowledge_user_id}/panel-invite", status_code=status.HTTP_201_CREATED)
+def invite_knowledge_user_to_panel(knowledge_user_id: uuid.UUID, request: Request,
+                                   session: Session = Depends(get_session),
+                                   identity: PanelIdentity = Depends(require_owner_session),
+                                   stepup=Depends(require_stepup)) -> dict[str, Any]:
+    """Выдать KNOWLEDGE_USER одноразовый enrollment-токен для входа в панель.
+
+    Решение владельца от 30.08.2026: доступ в панель — ОТДЕЛЬНЫМ токеном, не
+    через Dedicated Knowledge Bot. Токен доставляет человеку сам владелец,
+    вне HELM; система за этот канал не отвечает и потому даёт короткий
+    срок и однократность.
+
+    Только для уже ACTIVE-пользователя: панель не должна становиться
+    обходным входом для того, кому бот ещё (или уже) отказывает.
+    """
+    stepup.assert_scope(f"panel:users:panel-invite:{knowledge_user_id}")
+    user = _require_manageable_user(session, knowledge_user_id)
+    if user.status != KnowledgeUserStatus.ACTIVE:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "сначала пользователь должен подключиться к боту по инвайту")
+
+    settings = request.app.state.settings
+    raw_token = secrets.token_urlsafe(32)
+    session.add(PanelEnrollmentToken(
+        token_hash=hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
+        owner_id=knowledge_principal(knowledge_user_id),
+        expires_at=utcnow() + PANEL_INVITE_TTL,
+    ))
+    session.commit()
+    return {
+        "knowledge_user_id": str(knowledge_user_id),
+        # Единственный раз, когда токен существует вне сообщения владельцу.
+        "enrollment_token": raw_token,
+        "panel_url": f"https://{settings.panel_rp_id}/login?step=knowledge-enroll",
+        "expires_at": (utcnow() + PANEL_INVITE_TTL).isoformat(),
+    }
+
+
+@router.get("/session")
+def session_role(identity: PanelIdentity = Depends(require_panel_session)) -> dict[str, Any]:
+    """Кто вошёл — чтобы фронт знал, какую оболочку рисовать.
+
+    Отдельный дешёвый эндпоинт вместо «попробовать owner-раздел и поймать
+    403»: роль решает, какой интерфейс показать, и узнавать её ошибкой —
+    значит гарантировать мигание чужого экрана перед отказом.
+    """
+    return {
+        "role": (KnowledgeUserRole.KNOWLEDGE_USER if identity.knowledge_user_id
+                 else KnowledgeUserRole.SYSTEM_OWNER),
+    }
+
+
+# ── Knowledge-оболочка (v3.8 §14.3 "KNOWLEDGE_USER: own memories/docs only") ──
+
+
+@router.get("/knowledge")
+def knowledge_shell(session: Session = Depends(get_session),
+                    identity: PanelIdentity = Depends(require_panel_session)) -> dict[str, Any]:
+    """Свой Второй мозг — и ничей больше.
+
+    Единственный эндпоинт панели, доступный обеим ролям, и именно потому,
+    что тенант берётся ИЗ СЕССИИ, а не из параметра запроса: подставить
+    чужой `knowledge_user_id` физически нечем. Владелец видит здесь свой
+    корпус (это заодно закрывает P8.5.8 «Panel строка Knowledge» для него),
+    KNOWLEDGE_USER — свой.
+
+    `bind_knowledge_user()` привязывает GUC до единого запроса, поэтому
+    промах explicit-предиката всё равно был бы пойман RLS.
+    """
+    tenant_id = bind_knowledge_user(session, identity.knowledge_user_id)
+
+    memories = session.scalars(
+        select(KnowledgeMemory)
+        .where(KnowledgeMemory.knowledge_user_id == tenant_id,
+               KnowledgeMemory.status != KnowledgeMemoryStatus.DELETED)
+        .order_by(KnowledgeMemory.created_at.desc()).limit(SHELL_PAGE_SIZE)
+    ).all()
+    sources = session.scalars(
+        select(KnowledgeSource)
+        .where(KnowledgeSource.knowledge_user_id == tenant_id)
+        .order_by(KnowledgeSource.created_at.desc()).limit(SHELL_PAGE_SIZE)
+    ).all()
+    usage = session.get(KnowledgeUserUsage, tenant_id)
+    user = session.get(KnowledgeUser, tenant_id)
+
+    return {
+        "role": user.role if user else None,
+        "display_name": user.display_name if user else None,
+        "timezone": user.timezone if user else None,
+        "usage": {
+            "storage_bytes": usage.storage_bytes if usage else 0,
+            "sources_count": usage.sources_count if usage else 0,
+            "memories_count": usage.memories_count if usage else 0,
+            "storage_quota_bytes": user.storage_quota_bytes if user else None,
+        },
+        "memories": [
+            {"id": str(m.id), "kind": m.kind, "text": m.canonical_text, "status": m.status,
+             "created_at": m.created_at.isoformat(),
+             "expires_at": m.expires_at.isoformat() if m.expires_at else None}
+            for m in memories
+        ],
+        "sources": [
+            {"id": str(s.id), "title": s.original_filename, "domain": s.domain,
+             "status": s.status, "created_at": s.created_at.isoformat()}
+            for s in sources
+        ],
+    }
+
+
 # ── запись: только через action registry, с обязательным step-up ────────────
 
 @router.post("/actions/{approval_id}/approve")
 def approve(approval_id: uuid.UUID, request: Request,
             session: Session = Depends(get_session),
-            identity: PanelIdentity = Depends(require_panel_session),
+            identity: PanelIdentity = Depends(require_owner_session),
             stepup=Depends(require_stepup)) -> dict[str, Any]:
     """Одобрить из панели.
 
@@ -522,7 +651,7 @@ def approve(approval_id: uuid.UUID, request: Request,
 @router.post("/actions/{approval_id}/reject")
 def reject(approval_id: uuid.UUID, request: Request, reason: str | None = None,
            session: Session = Depends(get_session),
-           identity: PanelIdentity = Depends(require_panel_session),
+           identity: PanelIdentity = Depends(require_owner_session),
            stepup=Depends(require_stepup)) -> dict[str, Any]:
     service = request.app.state.approval_service_factory(session)
     stepup.assert_binds(approval_id, session)

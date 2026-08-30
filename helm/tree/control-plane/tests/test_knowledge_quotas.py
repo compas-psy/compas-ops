@@ -5,7 +5,9 @@ from datetime import timedelta
 import pytest
 
 from helm_core.knowledge import quotas as quotas_module
-from helm_core.knowledge.ingest import register_file_for_ingest
+from helm_core.knowledge.memory import try_remember
+from helm_core.knowledge.tenancy import bind_knowledge_user
+from helm_core.knowledge.ingest import ingest_text, register_file_for_ingest
 from helm_core.knowledge.quotas import QuotaExceeded, check_and_record_ingest, check_queue_depth
 from helm_core.models import KnowledgeUser, KnowledgeUserRole, KnowledgeUserUsage
 from helm_core.models.base import utcnow
@@ -100,3 +102,57 @@ def test_register_file_for_ingest_rejects_when_storage_quota_exceeded(session, q
     from sqlalchemy import select
     from helm_core.models import KnowledgeSource
     assert session.scalars(select(KnowledgeSource)).all() == []
+
+
+# ── счётчик сформированных записей («принцип Obsidian», 30.08.2026) ──────
+
+def test_ingest_text_counts_the_formed_source(session, quota_user):
+    ingest_text(session, domain="personal", text="Первый документ",
+                knowledge_user_id=quota_user.id)
+    session.flush()
+
+    usage = session.get(KnowledgeUserUsage, quota_user.id)
+    assert usage.sources_count == 1
+    assert usage.memories_count == 0
+
+
+def test_repeated_ingest_of_the_same_text_does_not_double_count(session, quota_user):
+    """Дедуп возвращает уже существующий источник — новой записи не
+    формируется, значит и считать нечего."""
+    ingest_text(session, domain="personal", text="Тот же самый текст",
+                knowledge_user_id=quota_user.id)
+    session.flush()
+    ingest_text(session, domain="personal", text="Тот же самый текст",
+                knowledge_user_id=quota_user.id)
+    session.flush()
+
+    assert session.get(KnowledgeUserUsage, quota_user.id).sources_count == 1
+
+
+def test_remember_counts_the_formed_memory(session, quota_user, tmp_path):
+    try_remember(session, channel="telegram_knowledge", text="Запомни: код 1234",
+                 knowledge_user_id=quota_user.id, vault_root=str(tmp_path))
+    session.flush()
+
+    usage = session.get(KnowledgeUserUsage, quota_user.id)
+    assert usage.memories_count == 1
+    assert usage.sources_count == 0
+
+
+def test_duplicate_remember_does_not_double_count(session, quota_user, tmp_path):
+    for _ in range(2):
+        try_remember(session, channel="telegram_knowledge", text="Запомни: код 1234",
+                     knowledge_user_id=quota_user.id, vault_root=str(tmp_path))
+        session.flush()
+
+    assert session.get(KnowledgeUserUsage, quota_user.id).memories_count == 1
+
+
+def test_counts_do_not_leak_between_users(session, quota_user, tmp_path):
+    owner_id = bind_knowledge_user(session, None)
+    try_remember(session, channel="max", text="Запомни: заметка владельца",
+                 knowledge_user_id=owner_id, vault_root=str(tmp_path))
+    session.flush()
+
+    assert session.get(KnowledgeUserUsage, quota_user.id) is None
+    assert session.get(KnowledgeUserUsage, owner_id).memories_count == 1

@@ -96,11 +96,11 @@ def test_list_users_returns_owner_and_secondary(app, client):
     assert secondary["allow_paid_ai"] is False
 
 
-def test_list_users_reports_maintained_usage_only(app, client):
+def test_list_users_reports_usage(app, client):
     user_id = _make_user(app)
     with app.state.session_factory() as db:
         db.add(KnowledgeUserUsage(knowledge_user_id=user_id, storage_bytes=777,
-                                  ingest_bytes_today=55))
+                                  ingest_bytes_today=55, sources_count=3, memories_count=9))
         db.commit()
 
     item = next(i for i in client.get("/api/panel/v1/users").json()["items"]
@@ -108,10 +108,11 @@ def test_list_users_reports_maintained_usage_only(app, client):
 
     assert item["storage_bytes"] == 777
     assert item["ingest_bytes_today"] == 55
-    # Неведущиеся счётчики схемы не выдаются вовсе — вечный ноль в
-    # интерфейсе владельца хуже отсутствующего поля.
-    assert "sources_count" not in item
-    assert "memories_count" not in item
+    assert item["sources_count"] == 3
+    assert item["memories_count"] == 9
+    # `queued_jobs` вычисляется на лету (`check_queue_depth`) — копия в
+    # ответе была бы вторым источником правды о том же.
+    assert "queued_jobs" not in item
 
 
 def test_list_users_never_exposes_content_or_telegram_id(app, client):

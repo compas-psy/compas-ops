@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react'
 import { api } from './api/client'
 import { useBlock } from './api/useBlock'
 import { ApprovalCard } from './sections/ApprovalCard'
+import { Knowledge } from './sections/Knowledge'
 import { Money, System, Tasks } from './sections/Simple'
 import { Today } from './sections/Today'
 import { Block, Empty, SecondaryButton } from './components/primitives'
@@ -24,6 +25,27 @@ const SECTIONS = [
 type SectionId = (typeof SECTIONS)[number]['id']
 
 export function App() {
+  // v3.8 §14.3, P8.6.5: KNOWLEDGE_USER получает Knowledge-only оболочку, а
+  // не урезанный интерфейс владельца. Роль спрашивается отдельным дешёвым
+  // эндпоинтом, а не выводится из 403 на owner-разделе: узнавать роль
+  // ошибкой значит гарантировать мигание чужого экрана перед отказом.
+  // Настоящий запрет всё равно на сервере (`require_owner_session`) — это
+  // про то, что рисовать, а не про то, что разрешено.
+  const role = useBlock(() => api.session())
+  if (role.data?.role === 'KNOWLEDGE_USER') return <KnowledgeShellApp />
+  return <OwnerApp />
+}
+
+function KnowledgeShellApp() {
+  return (
+    <div style={{ maxWidth: 720, margin: '0 auto', padding: 14 }}>
+      <p className="h-label" style={{ margin: '0 0 10px' }}>Второй мозг</p>
+      <Knowledge />
+    </div>
+  )
+}
+
+function OwnerApp() {
   const [section, setSection] = useState<SectionId>('today')
   const [openApproval, setOpenApproval] = useState<string | null>(null)
   const [wide, setWide] = useState(() => window.matchMedia('(min-width: 900px)').matches)

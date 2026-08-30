@@ -24,6 +24,8 @@ export function Login() {
   const step = new URLSearchParams(window.location.search).get('step')
   if (step === 'enroll') return <Enroll />
   if (step === 'login') return <PasskeyLoginScreen />
+  if (step === 'knowledge-enroll') return <Enroll knowledge />
+  if (step === 'knowledge-login') return <PasskeyLoginScreen knowledge />
   return <StartScreen />
 }
 
@@ -57,7 +59,15 @@ function StartScreen() {
   )
 }
 
-function Enroll() {
+/* `knowledge` — вход KNOWLEDGE_USER (v3.8 §14.3, P8.6.5).
+ *
+ * Отличие ровно одно: у владельца перед этим экраном был Telegram-виджет,
+ * который поставил переходную cookie, а у secondary-пользователя его нет —
+ * cookie ставит /auth/knowledge/enroll/start по тому же одноразовому
+ * токену. Дальше церемония буквально та же, поэтому это флаг, а не второй
+ * почти-такой-же компонент.
+ */
+function Enroll({ knowledge = false }: { knowledge?: boolean }) {
   const [token, setToken] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -66,6 +76,19 @@ function Enroll() {
     setBusy(true)
     setError(null)
     try {
+      if (knowledge) {
+        const started = await fetch('/auth/knowledge/enroll/start', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enrollment_token: token }),
+        })
+        if (!started.ok) {
+          throw new Error(started.status === 403
+            ? 'Доступ закрыт. Сначала подключитесь к боту по приглашению.'
+            : 'Токен не принят')
+        }
+      }
       const optionsResponse = await fetch('/auth/passkey/register/options', {
         method: 'POST',
         credentials: 'same-origin',
@@ -121,7 +144,9 @@ function Enroll() {
   return (
     <Screen title="Первый passkey">
       <p style={{ margin: 0, color: 'var(--h-mut)' }}>
-        Telegram подтверждён. Введите одноразовый enrollment-токен, выданный при настройке.
+        {knowledge
+          ? 'Введите одноразовый токен доступа, который вам выдал владелец.'
+          : 'Telegram подтверждён. Введите одноразовый enrollment-токен, выданный при настройке.'}
       </p>
       <input
         value={token}
@@ -140,7 +165,7 @@ function Enroll() {
   )
 }
 
-function PasskeyLoginScreen() {
+function PasskeyLoginScreen({ knowledge = false }: { knowledge?: boolean }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -148,6 +173,11 @@ function PasskeyLoginScreen() {
     setBusy(true)
     setError(null)
     try {
+      if (knowledge) {
+        // Usernameless: сервер не знает, кто пришёл, пока аутентификатор не
+        // предъявит свой discoverable credential. Имя/UUID вводить не надо.
+        await fetch('/auth/knowledge/login/start', { method: 'POST', credentials: 'same-origin' })
+      }
       const optionsResponse = await fetch('/auth/passkey/login/options', {
         method: 'POST',
         credentials: 'same-origin',
@@ -196,7 +226,9 @@ function PasskeyLoginScreen() {
 
   return (
     <Screen title="Вход">
-      <p style={{ margin: 0, color: 'var(--h-mut)' }}>Telegram подтверждён. Подтвердите passkey.</p>
+      <p style={{ margin: 0, color: 'var(--h-mut)' }}>
+        {knowledge ? 'Подтвердите passkey.' : 'Telegram подтверждён. Подтвердите passkey.'}
+      </p>
       {error && <p role="alert" style={{ margin: 0, color: 'var(--h-crit)' }}>{error}</p>}
       <PrimaryButton onClick={submit} disabled={busy} busy={busy}>
         Войти с passkey

@@ -62,7 +62,11 @@ from webauthn.helpers.structs import (
 
 from ..config import Settings
 from ..models import PanelEnrollmentToken, PanelSession, PanelStepUpChallenge, WebauthnCredential, utcnow
-from .deps import SESSION_COOKIE, PanelIdentity, get_session, require_panel_session
+from ..models import KnowledgeUser, KnowledgeUserStatus
+from .deps import (
+    SESSION_COOKIE, PanelIdentity, get_session, knowledge_principal,
+    parse_knowledge_principal, require_panel_session,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -319,21 +323,107 @@ def register_verify(body: RegisterVerifyIn, request: Request,
     return response
 
 
+# ── вход KNOWLEDGE_USER (v3.8 §14.3, P8.6.5) ────────────────────────────────
+#
+# Решение владельца от 30.08.2026: secondary-пользователь получает доступ в
+# панель ОТДЕЛЬНЫМ enrollment-токеном, а не через Dedicated Knowledge Bot.
+# Следствие, которое надо назвать прямо: у владельца два фактора на
+# enrollment (Telegram-виджет + токен), у KNOWLEDGE_USER — один (токен).
+# Компенсируется тем, что токен одноразовый, короткоживущий, выдаётся
+# владельцем лично, и тем, что аккаунт обязан быть уже ACTIVE — то есть
+# человек ранее прошёл onboarding в боте с verified Telegram `from.id`.
+# Кто ещё не подключился к боту, панель получить не может в принципе.
+#
+# Telegram-виджет для secondary НЕ используется намеренно: он завязан на
+# `settings.owner_id` и трогать его ради вторых пользователей директива
+# запрещает.
+
+
+class KnowledgeEnrollStartIn(BaseModel):
+    enrollment_token: str = Field(min_length=1, max_length=256)
+
+
+@router.post("/knowledge/enroll/start")
+def knowledge_enroll_start(body: KnowledgeEnrollStartIn, request: Request,
+                           session: Session = Depends(get_session)) -> Response:
+    """Открыть церемонию регистрации passkey для KNOWLEDGE_USER.
+
+    Ставит ту же переходную cookie, что Telegram-виджет ставит владельцу, —
+    дальше работает уже существующий, протестированный путь
+    `/auth/passkey/register/options` → `/register/verify`. Токен здесь НЕ
+    потребляется: его гасит `register_verify` по факту успешной регистрации,
+    иначе оборванная церемония сжигала бы приглашение впустую.
+    """
+    token_hash = hashlib.sha256(body.enrollment_token.encode()).hexdigest()
+    token = session.scalar(
+        select(PanelEnrollmentToken).where(PanelEnrollmentToken.token_hash == token_hash))
+    if token is None or token.used_at is not None or token.expires_at <= utcnow():
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "enrollment-токен недействителен")
+
+    knowledge_user_id = parse_knowledge_principal(token.owner_id)
+    if knowledge_user_id is None:
+        # Токен владельца сюда не подходит: его путь — Telegram-виджет.
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "enrollment-токен недействителен")
+
+    user = session.get(KnowledgeUser, knowledge_user_id)
+    if user is None or user.status != KnowledgeUserStatus.ACTIVE:
+        # Приглашённый, но не подключившийся к боту; приостановленный;
+        # удалённый — панель не должна становиться обходным входом для тех,
+        # кому бот уже отказывает.
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "доступ к панели закрыт")
+
+    response = JSONResponse({"status": "ok"})
+    _set_pending(response, request, {
+        "purpose": "enroll", "owner_id": token.owner_id,
+        "exp": time.time() + PENDING_TTL_SECONDS,
+    })
+    return response
+
+
+@router.post("/knowledge/login/start")
+def knowledge_login_start(request: Request) -> Response:
+    """Открыть usernameless-церемонию входа для KNOWLEDGE_USER.
+
+    Тела нет намеренно: заставлять человека вводить свой UUID неудобно и
+    бессмысленно (это не секрет), а спрашивать что-то ещё — значит заводить
+    второй идентификатор. Кто именно вошёл, решает `/passkey/login/verify`
+    по credential_id, проверив подпись; сессию владельца этот путь выдать
+    не может (см. проверку там).
+    """
+    response = JSONResponse({"status": "ok"})
+    _set_pending(response, request,
+                 {"purpose": "login", "exp": time.time() + PENDING_TTL_SECONDS})
+    return response
+
+
 # ── passkey-логин, когда credential уже есть (§10.5.7 "после первого enrollment") ──
 
 @router.post("/passkey/login/options")
 def login_options(request: Request, session: Session = Depends(get_session)) -> Response:
     pending = _require_pending(request, purpose="login")
-    owner_id = pending["owner_id"]
-    creds = session.scalars(
-        select(WebauthnCredential).where(WebauthnCredential.owner_id == owner_id,
-                                         WebauthnCredential.revoked_at.is_(None))
-    ).all()
-    if not creds:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
-                            "нет активного passkey — нужно восстановление (panel-passkey-recover)")
-
     settings: Settings = request.app.state.settings
+    owner_id = pending.get("owner_id")
+
+    if owner_id is None:
+        # v3.8 P8.6.5: вход KNOWLEDGE_USER. Владелец приходит сюда уже
+        # опознанным Telegram-виджетом, secondary-пользователь — нет, и
+        # заставлять его вводить свой UUID было бы и неудобно, и бессмысленно
+        # (это не секрет). Поэтому usernameless-церемония: пустой
+        # allow_credentials, аутентификатор сам предъявляет свой discoverable
+        # credential, а КТО это — решает `login_verify` по credential_id,
+        # проверив подпись. Список чужих credential_id при этом никому не
+        # выдаётся — в owner-режиме он выдаётся только уже опознанному
+        # владельцу, здесь опознавать некого.
+        creds = []
+    else:
+        creds = session.scalars(
+            select(WebauthnCredential).where(WebauthnCredential.owner_id == owner_id,
+                                             WebauthnCredential.revoked_at.is_(None))
+        ).all()
+        if not creds:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                                "нет активного passkey — нужно восстановление (panel-passkey-recover)")
+
     options = webauthn.generate_authentication_options(
         rp_id=settings.panel_rp_id,
         allow_credentials=[PublicKeyCredentialDescriptor(id=c.credential_id) for c in creds],
@@ -363,16 +453,28 @@ def login_verify(body: LoginVerifyIn, request: Request,
     pending = _require_pending(request, purpose="login")
     if "challenge" not in pending:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "начните вход заново")
-    owner_id = pending["owner_id"]
+    owner_id = pending.get("owner_id")
 
     credential_id_bytes = _from_b64u(body.credential_id)
-    stored = session.scalar(
-        select(WebauthnCredential).where(WebauthnCredential.owner_id == owner_id,
-                                         WebauthnCredential.credential_id == credential_id_bytes,
-                                         WebauthnCredential.revoked_at.is_(None))
-    )
+    query = select(WebauthnCredential).where(
+        WebauthnCredential.credential_id == credential_id_bytes,
+        WebauthnCredential.revoked_at.is_(None))
+    if owner_id is not None:
+        query = query.where(WebauthnCredential.owner_id == owner_id)
+    stored = session.scalar(query)
     if stored is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "passkey не найден")
+
+    if owner_id is None:
+        # Usernameless-путь существует ТОЛЬКО для KNOWLEDGE_USER. Если бы он
+        # умел выдавать сессию владельца, он был бы обходом Telegram-виджета:
+        # достаточно было бы владельческого passkey без второго фактора.
+        # Директива прямо запрещает ослаблять owner-вход ради secondary —
+        # поэтому здесь отказ, а не «ну это же его собственный ключ».
+        if parse_knowledge_principal(stored.owner_id) is None:
+            raise HTTPException(status.HTTP_403_FORBIDDEN,
+                                "владелец входит через Telegram-подтверждение, не этим путём")
+        owner_id = stored.owner_id
 
     settings: Settings = request.app.state.settings
     credential = AuthenticationCredential(

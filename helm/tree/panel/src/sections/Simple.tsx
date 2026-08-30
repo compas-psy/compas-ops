@@ -282,6 +282,14 @@ function KnowledgeUsers() {
     })
   }
 
+  // Доступ в панель — отдельный одноразовый токен (решение владельца от
+  // 30.08.2026), а не тот же инвайт, которым человек подключался к боту.
+  const onPanelAccess = (user: KnowledgeUserRow) => run(`panel:${user.id}`, async () => {
+    const stepUpId = await stepUpForScope(`panel:users:panel-invite:${user.id}`)
+    const created = await api.invitePanelAccess(user.id, stepUpId)
+    setInvite(created.enrollment_token)
+  })
+
   const rows = users.data?.items ?? []
 
   return (
@@ -294,7 +302,7 @@ function KnowledgeUsers() {
 
       {invite && (
         <p style={{ margin: '0 0 12px', fontSize: 'var(--h-fs-label)' }}>
-          Ссылка-приглашение (действует сутки, показывается один раз):{' '}
+          Одноразовое приглашение — показывается один раз, второй раз узнать негде:{' '}
           <Mono value={invite} full={invite} />
         </p>
       )}
@@ -321,9 +329,16 @@ function KnowledgeUsers() {
               {user.role === 'SYSTEM_OWNER' ? (
                 <Ago at={user.created_at} />
               ) : (
-                <SecondaryButton onClick={() => onToggle(user)} disabled={busy !== null}>
-                  {user.status === 'SUSPENDED' ? 'Вернуть доступ' : 'Приостановить'}
-                </SecondaryButton>
+                <span style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                  {user.status === 'ACTIVE' && (
+                    <SecondaryButton onClick={() => onPanelAccess(user)} disabled={busy !== null}>
+                      Доступ в панель
+                    </SecondaryButton>
+                  )}
+                  <SecondaryButton onClick={() => onToggle(user)} disabled={busy !== null}>
+                    {user.status === 'SUSPENDED' ? 'Вернуть доступ' : 'Приостановить'}
+                  </SecondaryButton>
+                </span>
               )}
             </li>
           ))}

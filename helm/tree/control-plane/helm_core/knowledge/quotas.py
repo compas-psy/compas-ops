@@ -106,3 +106,24 @@ def check_queue_depth(session: Session, *, knowledge_user_id: uuid.UUID | None) 
     if count is not None and count >= MAX_QUEUED_JOBS_PER_USER:
         raise QuotaExceeded(
             "queue_depth", f"слишком много задач в очереди (лимит {MAX_QUEUED_JOBS_PER_USER})")
+
+
+def record_entry_formed(session: Session, *, knowledge_user_id: uuid.UUID,
+                        sources: int = 0, memories: int = 0) -> None:
+    """Счётчик сформированных записей Второго мозга.
+
+    Распоряжение владельца от 30.08.2026 — «веди по принципу Obsidian, где
+    записи формируются в облако»: счётчик считает СФОРМИРОВАННЫЕ записи,
+    ровно как хранилище заметок считает файлы в хранилище. Архивирование
+    источника не уменьшает счётчик — в Obsidian перенос заметки в папку
+    «архив» не убирает её из хранилища; RED-удаление (когда появится)
+    обязано уменьшить, и это единственный случай.
+
+    Вызывается там, где запись действительно материализуется, а не там,
+    где она задумана: до `flush()` строки счётчик не про что увеличивать.
+    """
+    usage = _get_or_create_usage(session, knowledge_user_id)
+    usage.sources_count += sources
+    usage.memories_count += memories
+    session.flush()
+

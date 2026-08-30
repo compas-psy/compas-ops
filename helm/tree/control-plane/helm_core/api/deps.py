@@ -24,6 +24,40 @@ def get_session(request: Request) -> Session:
 class PanelIdentity:
     owner_id: str
     session_id: uuid.UUID
+    #: v3.8 P8.6.5: заполнено, только если сессия принадлежит
+    #: KNOWLEDGE_USER. `None` = сессия владельца.
+    knowledge_user_id: uuid.UUID | None = None
+
+
+#: Префикс принципала KNOWLEDGE_USER в `panel_sessions`,
+#: `webauthn_credentials` и `panel_enrollment_tokens`.
+#:
+#: Отдельная колонка не заводится намеренно: `owner_id` — уже строка-
+#: принципал, а не внешний ключ, и префикс делает коллизию с владельцем
+#: невозможной по построению (его принципал — Telegram id, то есть цифры,
+#: либо "tg:"-форма). Ноль изменений схемы, ноль миграций, ноль риска для
+#: существующего входа владельца — что прямо требует директива: owner-вход
+#: не трогать ради secondary-пользователей.
+KNOWLEDGE_PRINCIPAL_PREFIX = "ku:"
+
+
+def knowledge_principal(knowledge_user_id: uuid.UUID) -> str:
+    return f"{KNOWLEDGE_PRINCIPAL_PREFIX}{knowledge_user_id}"
+
+
+def parse_knowledge_principal(owner_id: str) -> uuid.UUID | None:
+    """UUID тенанта — или None, если это принципал владельца.
+
+    Возвращает None и на «похожем, но битом» значении (`ku:` + не-UUID):
+    неразобранный принципал обязан читаться как «не KNOWLEDGE_USER», а не
+    как исключение посреди проверки доступа.
+    """
+    if not owner_id.startswith(KNOWLEDGE_PRINCIPAL_PREFIX):
+        return None
+    try:
+        return uuid.UUID(owner_id[len(KNOWLEDGE_PRINCIPAL_PREFIX):])
+    except ValueError:
+        return None
 
 
 def require_panel_session(
@@ -51,7 +85,23 @@ def require_panel_session(
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "сессия недействительна")
         record.last_seen_at = now
         db.commit()
-        return PanelIdentity(owner_id=record.owner_id, session_id=record.id)
+        return PanelIdentity(owner_id=record.owner_id, session_id=record.id,
+                             knowledge_user_id=parse_knowledge_principal(record.owner_id))
+
+
+def require_owner_session(
+    identity: PanelIdentity = Depends(require_panel_session),
+) -> PanelIdentity:
+    """Разделы владельца (§14.3 "KNOWLEDGE_USER: Knowledge-only panel shell").
+
+    KNOWLEDGE_USER не должен видеть ни одобрения, ни задачи, ни деньги, ни
+    систему, ни список других пользователей — и не «по недосмотру фронта»,
+    а отказом на сервере. Проверка одна и в одном месте: сессия с
+    принципалом `ku:` не проходит дальше.
+    """
+    if identity.knowledge_user_id is not None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "раздел доступен только владельцу")
+    return identity
 
 
 @dataclass
