@@ -137,6 +137,26 @@ export const api = {
   /** Какую оболочку рисовать: владельца или Knowledge-only. */
   session: () => request<{ role: PanelRole }>('/api/panel/v1/session'),
 
+  /**
+   * Исходные байты документа (§14.15). POST, а не ссылка: свежее
+   * passkey-подтверждение приходит заголовком, которого у обычной
+   * ссылки нет. Возвращает сам файл, поэтому идёт мимо request().
+   */
+  downloadSource: async (sourceId: string, stepUpId: string): Promise<{ blob: Blob; filename: string }> => {
+    const response = await fetch(`/api/panel/v1/knowledge/sources/${sourceId}/download`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'X-Helm-StepUp': stepUpId },
+    })
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '')
+      throw new ApiError(response.status, detail.slice(0, 200) || 'Не удалось скачать')
+    }
+    const disposition = response.headers.get('Content-Disposition') ?? ''
+    const match = /filename="([^"]+)"/.exec(disposition)
+    return { blob: await response.blob(), filename: match?.[1] ?? sourceId }
+  },
+
   /** Свой Второй мозг — и ничей больше: тенант берётся из сессии. */
   knowledge: () => request<KnowledgeShell>('/api/panel/v1/knowledge'),
 }

@@ -10,6 +10,7 @@ enrollment-токеном и Knowledge-оболочка.
 """
 
 import hashlib
+import tempfile
 import uuid
 from datetime import timedelta
 
@@ -547,3 +548,88 @@ def test_knowledge_user_cannot_export_or_delete_anyone(app):
     assert ku.post(f"/api/panel/v1/users/{victim}/export").status_code == 403
     assert ku.post(f"/api/panel/v1/users/{victim}/delete",
                    json={"export_taken": True}).status_code == 403
+
+
+# ── §14.15: выдача оригинала документа ───────────────────────────────────
+
+PDF = b"%PDF-1.4 owner contract"
+
+
+def _upload_for(app, user_id, *, name="contract.pdf", data=PDF):
+    import hashlib
+    from pathlib import Path
+    from helm_core.knowledge.ingest import register_file_for_ingest
+    with app.state.session_factory() as db:
+        raw_dir = Path(tempfile.mkdtemp())
+        raw_path = raw_dir / f"{hashlib.sha256(data).hexdigest()}-{name}"
+        raw_path.write_bytes(data)
+        result = register_file_for_ingest(
+            db, domain="engineering", raw_path=raw_path, original_filename=name,
+            mime_type="application/pdf", vault_root=str(raw_dir / "vault"),
+            knowledge_user_id=user_id)
+        db.commit()
+        return result.source.id
+
+
+def test_owner_downloads_the_exact_original_bytes(app):
+    owner = _owner_session(app)
+    with app.state.session_factory() as db:
+        owner_tenant = bind_knowledge_user(db, None)
+    source_id = _upload_for(app, owner_tenant)
+
+    r = owner.post(f"/api/panel/v1/knowledge/sources/{source_id}/download",
+                   headers=_stepup(app, owner, f"panel:knowledge:download:{source_id}"))
+
+    assert r.status_code == 200
+    assert r.content == PDF
+    assert "contract.pdf" in r.headers["Content-Disposition"]
+    assert r.headers["X-Helm-Sha256"] == hashlib.sha256(PDF).hexdigest()
+
+
+def test_download_requires_a_fresh_passkey(app):
+    owner = _owner_session(app)
+    with app.state.session_factory() as db:
+        owner_tenant = bind_knowledge_user(db, None)
+    source_id = _upload_for(app, owner_tenant)
+
+    assert owner.post(
+        f"/api/panel/v1/knowledge/sources/{source_id}/download").status_code == 401
+
+
+def test_wrong_user_cannot_download_someone_elses_document(app):
+    """Прямое требование владельца: проверять принадлежность на каждом
+    скачивании. До этого эндпоинта проверять было нечего."""
+    with app.state.session_factory() as db:
+        owner_tenant = bind_knowledge_user(db, None)
+    source_id = _upload_for(app, owner_tenant)
+    ku = _knowledge_session(app, _make_active_user(app))
+
+    r = ku.post(f"/api/panel/v1/knowledge/sources/{source_id}/download",
+                headers=_stepup(app, ku, f"panel:knowledge:download:{source_id}"))
+
+    assert r.status_code == 404
+    assert r.content != PDF
+
+
+def test_download_scope_is_bound_to_the_document(app):
+    owner = _owner_session(app)
+    with app.state.session_factory() as db:
+        owner_tenant = bind_knowledge_user(db, None)
+    source_id = _upload_for(app, owner_tenant)
+    other_id = uuid.uuid4()
+
+    r = owner.post(f"/api/panel/v1/knowledge/sources/{source_id}/download",
+                   headers=_stepup(app, owner, f"panel:knowledge:download:{other_id}"))
+
+    assert r.status_code == 403
+
+
+def test_source_search_is_scoped_to_the_session(app):
+    with app.state.session_factory() as db:
+        owner_tenant = bind_knowledge_user(db, None)
+    _upload_for(app, owner_tenant, name="owner-secret.pdf")
+    ku = _knowledge_session(app, _make_active_user(app))
+
+    assert ku.get("/api/panel/v1/knowledge/sources?q=owner-secret").json()["items"] == []
+    owner = _owner_session(app)
+    assert len(owner.get("/api/panel/v1/knowledge/sources?q=owner-secret").json()["items"]) == 1

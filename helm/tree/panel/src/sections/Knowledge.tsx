@@ -9,9 +9,12 @@
  * первая версия «Panel строка Knowledge» (P8.5.8) для него.
  */
 
+import { useState } from 'react'
+
 import { api } from '../api/client'
 import { useBlock } from '../api/useBlock'
-import { Ago, Block, Empty, MetricRow, Mono } from '../components/primitives'
+import { PasskeyCancelled, stepUpForScope } from '../components/passkey'
+import { Ago, Block, Empty, MetricRow, Mono, SecondaryButton } from '../components/primitives'
 
 function megabytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`
@@ -19,7 +22,32 @@ function megabytes(bytes: number): string {
 
 export function Knowledge() {
   const shell = useBlock(() => api.knowledge())
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const data = shell.data
+
+  // §14.15: отдаются исходные байты, а не пересказ. Файл приходит ответом
+  // на POST (свежий passkey — заголовком), поэтому сохраняем его сами.
+  const onDownload = async (sourceId: string) => {
+    setBusy(sourceId)
+    setError(null)
+    try {
+      const stepUpId = await stepUpForScope(`panel:knowledge:download:${sourceId}`)
+      const { blob, filename } = await api.downloadSource(sourceId, stepUpId)
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (cause) {
+      if (!(cause instanceof PasskeyCancelled)) {
+        setError(cause instanceof Error ? cause.message : 'Не удалось скачать')
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--h-block-gap)' }}>
@@ -72,6 +100,7 @@ export function Knowledge() {
 
       <Block title={`Документы${data?.sources.length ? ` · ${data.sources.length}` : ''}`}
              error={shell.error} loadedAt={shell.loadedAt} onRetry={shell.reload}>
+        {error && <p style={{ color: 'var(--h-crit)', margin: '0 0 10px' }}>{error}</p>}
         {!data || data.sources.length === 0 ? (
           <Empty>Документов пока нет</Empty>
         ) : (
@@ -90,7 +119,13 @@ export function Knowledge() {
                     {source.domain ?? 'без домена'} · {source.status.toLowerCase()}
                   </span>
                 </span>
-                <Ago at={source.created_at} />
+                <span style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+                  <Ago at={source.created_at} />
+                  <SecondaryButton onClick={() => onDownload(source.id)}
+                                   disabled={busy !== null}>
+                    Скачать оригинал
+                  </SecondaryButton>
+                </span>
               </li>
             ))}
           </ul>

@@ -19,12 +19,13 @@ from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from pydantic import BaseModel, Field
 
+from ..knowledge.documents import DocumentUnavailable, find_sources, read_original
 from ..knowledge.ingest import DEFAULT_VAULT_ROOT
 from ..knowledge.offboarding import (
     BACKUP_RETENTION_NOTICE, DeleteRefused, delete_user_permanently, export_user_vault,
@@ -725,6 +726,62 @@ def knowledge_shell(session: Session = Depends(get_session),
             for s in sources
         ],
     }
+
+
+# ── §14.15: оригинал документа, а не пересказ ────────────────────────────
+
+
+@router.get("/knowledge/sources")
+def search_own_sources(q: str, session: Session = Depends(get_session),
+                       identity: PanelIdentity = Depends(require_panel_session),
+                       ) -> dict[str, Any]:
+    """Найти свои документы. Тенант — из сессии, как и в оболочке:
+    подставить чужой идентификатор нечем."""
+    found = find_sources(session, query=q, knowledge_user_id=identity.knowledge_user_id)
+    return {"items": [
+        {"id": c.source_id, "title": c.original_filename, "domain": c.domain,
+         "status": c.status, "sensitivity": c.sensitivity, "sha256": c.sha256,
+         "created_at": c.created_at}
+        for c in found
+    ]}
+
+
+@router.post("/knowledge/sources/{source_id}/download")
+def download_own_source(source_id: uuid.UUID, session: Session = Depends(get_session),
+                        identity: PanelIdentity = Depends(require_panel_session),
+                        stepup=Depends(require_stepup)) -> Response:
+    """Исходные байты (§14.15 «RAW original bytes»).
+
+    POST, а не GET, по двум причинам сразу: §14.15 требует, чтобы
+    чувствительное скачивание подчинялось passkey-правилам, а свежее
+    подтверждение приходит заголовком, которого у обычной ссылки нет;
+    и правило раздела «GET не запускает LLM» проще держать, когда GET'ы
+    остаются чистым чтением состояния.
+
+    Passkey требуется на ЛЮБОЙ оригинал, не только на клиентский: спека
+    называет отдельно чувствительные, но выдача исходного файла и так
+    поступок, а не просмотр, и одно правило без исключений надёжнее
+    двух с оговоркой.
+    """
+    stepup.assert_scope(f"panel:knowledge:download:{source_id}")
+    try:
+        original = read_original(session, source_id,
+                                 knowledge_user_id=identity.knowledge_user_id)
+    except DocumentUnavailable as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{original.filename}"',
+        # Контрольная сумма рядом с файлом: получатель может убедиться,
+        # что скачал ровно то, что было записано при приёме.
+        "X-Helm-Sha256": original.sha256,
+    }
+    if original.review_only:
+        # §14.15: скачать для разбора можно, использовать в обычных
+        # ответах — нет. Пусть это видно и в ответе, не только в коде.
+        headers["X-Helm-Review-Only"] = "1"
+    return Response(content=original.data, media_type=original.media_type,
+                    headers=headers)
 
 
 # ── запись: только через action registry, с обязательным step-up ────────────
