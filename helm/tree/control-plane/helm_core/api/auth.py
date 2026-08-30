@@ -411,7 +411,13 @@ def login_verify(body: LoginVerifyIn, request: Request,
 # раньше этого модуля — имена полей здесь подстроены под него, не наоборот.
 
 class AssertOptionsIn(BaseModel):
-    approval_ids: list[str] = Field(min_length=1)
+    #: Пусто — церемония НЕ для одобрения (v3.8 P8.6.5: приглашение/
+    #: suspend/квота в разделе «Пользователи»). Такой challenge не может
+    #: одобрить ничего: `StepUp.assert_binds()` ищет `approval_id` в этом
+    #: списке и на пустом отказывает — сужение, не расширение.
+    approval_ids: list[str] = Field(default_factory=list)
+    #: Всегда непусто: церемония обязана называть, что именно подписывает —
+    #: хэш действия для одобрения либо scope-строку для админ-операции.
     action_hashes: list[str] = Field(min_length=1)
 
 

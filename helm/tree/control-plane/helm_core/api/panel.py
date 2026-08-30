@@ -20,8 +20,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from pydantic import BaseModel, Field
+
+from ..knowledge.onboarding import create_invite, reactivate_user, suspend_user
 from ..models import (
-    ActionTrust, Approval, ApprovalStatus, BudgetDaily, MetricPoint, ModelRun,
+    ActionTrust, Approval, ApprovalStatus, BudgetDaily, KnowledgeChannelIdentity,
+    KnowledgeUser, KnowledgeUserRole, KnowledgeUserUsage, MetricPoint, ModelRun,
     Routine, Task, TaskEvent, TaskStatus, utcnow,
 )
 from .deps import PanelIdentity, get_session, require_panel_session, require_stepup
@@ -303,6 +307,194 @@ def system(session: Session = Depends(get_session),
              "consecutive_failures": r.consecutive_failures} for r in routines
         ],
     }
+
+
+# ── Система → Пользователи (v3.8 §14.3, P8.6.5) ─────────────────────────────
+#
+# Спека прямо запрещает владельцу «normal content browser across users»:
+# управление людьми — не доступ к их Второму мозгу. Здесь это не рантайм-
+# проверка, а свойство того, какие таблицы вообще названы в коде — все
+# эндпоинты ниже читают ТОЛЬКО реестр тенантов (`knowledge_users`,
+# `knowledge_channel_identities`, `knowledge_user_usage`) и ни одной
+# tenant-scoped таблицы с контентом (`knowledge_sources`,
+# `knowledge_memories`, …). Дотянуться до чужого документа отсюда нельзя
+# не потому, что что-то это ловит, а потому, что запроса нет.
+#
+# Каждая запись требует свежей passkey-церемонии, привязанной к ЭТОЙ
+# операции и ЭТОМУ пользователю (`StepUp.assert_scope()`) — то же правило
+# §10.5.8.1, что защищает одобрения: подтверждение, полученное на
+# «пригласить», не подойдёт к «приостановить», а полученное на
+# приостановку A — к приостановке B.
+
+#: У приглашения нет цели-пользователя: он ещё не существует.
+SCOPE_INVITE = "panel:users:invite"
+
+
+def _knowledge_user_view(user: KnowledgeUser, usage: KnowledgeUserUsage | None,
+                         identities: list[KnowledgeChannelIdentity]) -> dict[str, Any]:
+    return {
+        "id": str(user.id),
+        "role": user.role,
+        "status": user.status,
+        "display_name": user.display_name,
+        "locale": user.locale,
+        "timezone": user.timezone,
+        "allow_paid_ai": user.allow_paid_ai,
+        "storage_quota_bytes": user.storage_quota_bytes,
+        "daily_ingest_quota_bytes": user.daily_ingest_quota_bytes,
+        # Только те счётчики, которые реально ведутся (`quotas.py`).
+        # `sources_count`/`memories_count`/`queued_jobs` в схеме есть, но
+        # никем не обновляются — показывать вечные нули хуже, чем не
+        # показывать (см. V3.8-DELTA.md, находка).
+        "storage_bytes": usage.storage_bytes if usage else 0,
+        "ingest_bytes_today": usage.ingest_bytes_today if usage else 0,
+        "created_at": user.created_at.isoformat(),
+        "activated_at": user.activated_at.isoformat() if user.activated_at else None,
+        "suspended_at": user.suspended_at.isoformat() if user.suspended_at else None,
+        # Без `external_user_id`: владельцу для управления учёткой нужен
+        # факт «канал привязан», а не Telegram-идентификатор живого
+        # человека (CLAUDE.md §5.2 — минимум персональных данных).
+        "channels": [
+            {"channel": i.channel, "verified_at": i.verified_at.isoformat(),
+             "is_primary": i.is_primary}
+            for i in identities if i.revoked_at is None
+        ],
+    }
+
+
+@router.get("/users")
+def list_knowledge_users(session: Session = Depends(get_session),
+                         identity: PanelIdentity = Depends(require_panel_session),
+                         ) -> dict[str, Any]:
+    """§14.3 «Система → Пользователи» — метаданные и квоты, не контент.
+
+    `SYSTEM_OWNER` в списке присутствует (это тоже строка реестра, и его
+    расход места владельцу видеть полезно), но не может быть suspend'нут —
+    см. `_require_manageable_user()`.
+    """
+    users = session.scalars(select(KnowledgeUser).order_by(KnowledgeUser.created_at)).all()
+    usages = {u.knowledge_user_id: u for u in session.scalars(select(KnowledgeUserUsage))}
+    identities: dict[uuid.UUID, list[KnowledgeChannelIdentity]] = {}
+    for record in session.scalars(select(KnowledgeChannelIdentity)):
+        identities.setdefault(record.knowledge_user_id, []).append(record)
+
+    return {"items": [
+        _knowledge_user_view(u, usages.get(u.id), identities.get(u.id, []))
+        for u in users
+    ]}
+
+
+class PanelInviteIn(BaseModel):
+    display_name: str | None = Field(default=None, max_length=128)
+    timezone: str = Field(default="Europe/Moscow", max_length=64)
+    locale: str = Field(default="ru", max_length=8)
+    storage_quota_bytes: int | None = Field(default=None, ge=0)
+    daily_ingest_quota_bytes: int | None = Field(default=None, ge=0)
+    expected_external_user_id: str | None = Field(default=None, max_length=64)
+
+
+@router.post("/users/invite", status_code=status.HTTP_201_CREATED)
+def invite_knowledge_user(body: PanelInviteIn, request: Request,
+                          session: Session = Depends(get_session),
+                          identity: PanelIdentity = Depends(require_panel_session),
+                          stepup=Depends(require_stepup)) -> dict[str, Any]:
+    """Пригласить нового `KNOWLEDGE_USER` (P8.6.5 заменяет собой стенд-ин
+    `POST /internal/knowledge/users/invite`, но не отменяет его —
+    internal-путь остаётся для скриптов).
+
+    Свежий passkey обязателен: приглашение заводит человеку доступ ко
+    Второму мозгу, это не read-only просмотр. `assert_binds()` не
+    вызывается — он привязывает церемонию к конкретному `approval_id`,
+    а здесь одобрения нет; требуется именно свежесть подтверждения
+    (§10.5.8: 60 секунд, одноразово).
+
+    Сырой токен возвращается ЕДИНСТВЕННЫЙ раз — в БД только его хэш.
+    """
+    stepup.assert_scope(SCOPE_INVITE)
+    result = create_invite(
+        session, created_by=identity.owner_id, display_name=body.display_name,
+        timezone=body.timezone, locale=body.locale,
+        storage_quota_bytes=body.storage_quota_bytes,
+        daily_ingest_quota_bytes=body.daily_ingest_quota_bytes,
+        expected_external_user_id=body.expected_external_user_id,
+    )
+    session.commit()
+    bot_username = request.app.state.settings.knowledge_telegram_bot_username
+    deep_link = (f"https://t.me/{bot_username}?start=kb_{result.raw_token}"
+                 if bot_username else None)
+    return {
+        "knowledge_user_id": str(result.user.id),
+        "invite_token": result.raw_token,
+        "deep_link": deep_link,
+        "expires_at": result.invite.expires_at.isoformat(),
+    }
+
+
+def _require_manageable_user(session: Session, knowledge_user_id: uuid.UUID) -> KnowledgeUser:
+    """`SYSTEM_OWNER` не управляется через этот раздел.
+
+    Suspend владельца перекрыл бы доступ к его собственному HELM'у из
+    интерфейса, задуманного для управления ЧУЖИМИ учётками, и сделал бы
+    это без единого способа откатить — панель после этого недоступна.
+    """
+    user = session.get(KnowledgeUser, knowledge_user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "пользователь не найден")
+    if user.role == KnowledgeUserRole.SYSTEM_OWNER:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "SYSTEM_OWNER не управляется через раздел «Пользователи»")
+    return user
+
+
+@router.post("/users/{knowledge_user_id}/suspend")
+def suspend_knowledge_user(knowledge_user_id: uuid.UUID,
+                           session: Session = Depends(get_session),
+                           identity: PanelIdentity = Depends(require_panel_session),
+                           stepup=Depends(require_stepup)) -> dict[str, Any]:
+    """§14.3 «Suspend/offboard»: доступ к боту/панели закрыт, данные
+    сохранены. Необратимого удаления здесь нет — оно RED и отдельное."""
+    stepup.assert_scope(f"panel:users:suspend:{knowledge_user_id}")
+    _require_manageable_user(session, knowledge_user_id)
+    outcome = suspend_user(session, knowledge_user_id)
+    session.commit()
+    return {"status": outcome.status, "knowledge_user_id": str(knowledge_user_id)}
+
+
+@router.post("/users/{knowledge_user_id}/reactivate")
+def reactivate_knowledge_user(knowledge_user_id: uuid.UUID,
+                              session: Session = Depends(get_session),
+                              identity: PanelIdentity = Depends(require_panel_session),
+                              stepup=Depends(require_stepup)) -> dict[str, Any]:
+    stepup.assert_scope(f"panel:users:reactivate:{knowledge_user_id}")
+    _require_manageable_user(session, knowledge_user_id)
+    outcome = reactivate_user(session, knowledge_user_id)
+    session.commit()
+    return {"status": outcome.status, "knowledge_user_id": str(knowledge_user_id)}
+
+
+class PanelQuotaIn(BaseModel):
+    """`None` — снять лимит; поле, которого нет в теле, не меняется."""
+
+    storage_quota_bytes: int | None = Field(default=None, ge=0)
+    daily_ingest_quota_bytes: int | None = Field(default=None, ge=0)
+
+
+@router.post("/users/{knowledge_user_id}/quota")
+def set_knowledge_user_quota(knowledge_user_id: uuid.UUID, body: PanelQuotaIn,
+                             session: Session = Depends(get_session),
+                             identity: PanelIdentity = Depends(require_panel_session),
+                             stepup=Depends(require_stepup)) -> dict[str, Any]:
+    """§14.3 «metadata/quota» — правка квот из панели вместо
+    единственного прежнего момента (создание инвайта)."""
+    stepup.assert_scope(f"panel:users:quota:{knowledge_user_id}")
+    user = _require_manageable_user(session, knowledge_user_id)
+    fields = body.model_dump(exclude_unset=True)
+    for field, value in fields.items():
+        setattr(user, field, value)
+    session.commit()
+    return {"knowledge_user_id": str(knowledge_user_id),
+            "storage_quota_bytes": user.storage_quota_bytes,
+            "daily_ingest_quota_bytes": user.daily_ingest_quota_bytes}
 
 
 # ── запись: только через action registry, с обязательным step-up ────────────

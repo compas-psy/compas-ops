@@ -5,9 +5,12 @@
  * три уровня вложенности без единого нового поведения.
  */
 
-import { api, type TaskGroups } from '../api/client'
+import { useState } from 'react'
+
+import { api, type KnowledgeUserRow, type TaskGroups } from '../api/client'
 import { useBlock } from '../api/useBlock'
-import { Ago, Block, Empty, MetricRow, Mono } from '../components/primitives'
+import { PasskeyCancelled, stepUpForScope } from '../components/passkey'
+import { Ago, Block, Empty, MetricRow, Mono, SecondaryButton } from '../components/primitives'
 
 const GROUP_TITLES: Record<keyof TaskGroups, string> = {
   stuck: 'Застряли',
@@ -216,6 +219,116 @@ export function System() {
           </ul>
         )}
       </Block>
+
+      <KnowledgeUsers />
     </div>
+  )
+}
+
+/* Система → Пользователи (v3.8 §14.3, P8.6.5).
+ *
+ * Раздел управляет ДОСТУПОМ, а не содержимым: спека прямо запрещает
+ * владельцу «normal content browser across users», поэтому здесь нет и не
+ * должно появиться ни одной ссылки внутрь чужого Второго мозга — только
+ * метаданные, квота и переключатель доступа.
+ */
+
+const STATUS_LABELS: Record<KnowledgeUserRow['status'], string> = {
+  INVITED: 'приглашён',
+  ACTIVE: 'активен',
+  SUSPENDED: 'приостановлен',
+  DELETED: 'удалён',
+}
+
+function megabytes(bytes: number | null): string {
+  if (bytes === null) return 'без лимита'
+  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`
+}
+
+function KnowledgeUsers() {
+  const users = useBlock(() => api.knowledgeUsers())
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  // Одноразовая ссылка приглашения: показывается один раз и нигде не
+  // сохраняется — в базе только хэш токена, второй раз узнать негде.
+  const [invite, setInvite] = useState<string | null>(null)
+
+  const run = async (key: string, action: () => Promise<void>) => {
+    setBusy(key)
+    setError(null)
+    try {
+      await action()
+      users.reload()
+    } catch (cause) {
+      if (!(cause instanceof PasskeyCancelled)) {
+        setError(cause instanceof Error ? cause.message : 'Не получилось')
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const onInvite = () => run('invite', async () => {
+    const stepUpId = await stepUpForScope('panel:users:invite')
+    const created = await api.inviteKnowledgeUser({}, stepUpId)
+    setInvite(created.deep_link ?? created.invite_token)
+  })
+
+  const onToggle = (user: KnowledgeUserRow) => {
+    const action = user.status === 'SUSPENDED' ? 'reactivate' : 'suspend'
+    return run(user.id, async () => {
+      const stepUpId = await stepUpForScope(`panel:users:${action}:${user.id}`)
+      await api.setKnowledgeUserAccess(user.id, action, stepUpId)
+    })
+  }
+
+  const rows = users.data?.items ?? []
+
+  return (
+    <Block title="Пользователи" error={users.error} offline={users.offline}
+           loadedAt={users.loadedAt} onRetry={users.reload}
+           action={<SecondaryButton onClick={onInvite} disabled={busy !== null}>
+             Пригласить
+           </SecondaryButton>}>
+      {error && <p style={{ color: 'var(--h-crit)', margin: '0 0 10px' }}>{error}</p>}
+
+      {invite && (
+        <p style={{ margin: '0 0 12px', fontSize: 'var(--h-fs-label)' }}>
+          Ссылка-приглашение (действует сутки, показывается один раз):{' '}
+          <Mono value={invite} full={invite} />
+        </p>
+      )}
+
+      {rows.length === 0 ? (
+        <Empty>Кроме вас — никого</Empty>
+      ) : (
+        <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+          {rows.map((user) => (
+            <li key={user.id} style={{
+              display: 'flex', justifyContent: 'space-between', gap: 10,
+              minHeight: 'var(--h-row-min)', alignItems: 'center',
+            }}>
+              <span style={{ minWidth: 0 }}>
+                <span style={{ display: 'block' }}>
+                  {user.display_name ?? (user.role === 'SYSTEM_OWNER' ? 'Владелец' : 'без имени')}
+                </span>
+                <span style={{ fontSize: 'var(--h-fs-label)', color: 'var(--h-faint)' }}>
+                  {STATUS_LABELS[user.status]} · {megabytes(user.storage_bytes)}
+                  {user.storage_quota_bytes !== null &&
+                    ` из ${megabytes(user.storage_quota_bytes)}`}
+                </span>
+              </span>
+              {user.role === 'SYSTEM_OWNER' ? (
+                <Ago at={user.created_at} />
+              ) : (
+                <SecondaryButton onClick={() => onToggle(user)} disabled={busy !== null}>
+                  {user.status === 'SUSPENDED' ? 'Вернуть доступ' : 'Приостановить'}
+                </SecondaryButton>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Block>
   )
 }

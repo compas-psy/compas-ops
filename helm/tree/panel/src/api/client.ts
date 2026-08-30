@@ -81,6 +81,25 @@ export const api = {
       `/api/panel/v1/actions/${approvalId}/${decision}`,
       { method: 'POST', headers: { 'X-Helm-StepUp': stepUpId } },
     ),
+
+  /** Пользователи Второго мозга — метаданные и квоты, не их содержимое. */
+  knowledgeUsers: () => request<{ items: KnowledgeUserRow[] }>('/api/panel/v1/users'),
+
+  /**
+   * Пригласить нового пользователя. Ответ содержит одноразовую ссылку —
+   * второй раз её узнать негде: в базе только хэш токена.
+   */
+  inviteKnowledgeUser: (body: { display_name?: string }, stepUpId: string) =>
+    request<KnowledgeInvite>('/api/panel/v1/users/invite', {
+      method: 'POST',
+      headers: { 'X-Helm-StepUp': stepUpId, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+
+  setKnowledgeUserAccess: (userId: string, action: 'suspend' | 'reactivate', stepUpId: string) =>
+    request<{ status: string }>(`/api/panel/v1/users/${userId}/${action}`, {
+      method: 'POST', headers: { 'X-Helm-StepUp': stepUpId },
+    }),
 }
 
 // ── формы ответов ───────────────────────────────────────────────────────────
@@ -169,6 +188,37 @@ export interface MoneyPayload {
     cost_usd: string | null
     reason_short: string | null
   }[]
+}
+
+/**
+ * Строка раздела «Пользователи» (v3.8 §14.3). Полей с содержимым Второго
+ * мозга здесь нет и не должно появиться: спека прямо запрещает владельцу
+ * «normal content browser across users» — раздел управляет доступом, а не
+ * читает чужие документы и память.
+ */
+export interface KnowledgeUserRow {
+  id: string
+  role: 'SYSTEM_OWNER' | 'KNOWLEDGE_USER'
+  status: 'INVITED' | 'ACTIVE' | 'SUSPENDED' | 'DELETED'
+  display_name: string | null
+  locale: string
+  timezone: string
+  allow_paid_ai: boolean
+  storage_quota_bytes: number | null
+  daily_ingest_quota_bytes: number | null
+  storage_bytes: number
+  ingest_bytes_today: number
+  created_at: string
+  activated_at: string | null
+  suspended_at: string | null
+  channels: { channel: string; verified_at: string; is_primary: boolean }[]
+}
+
+export interface KnowledgeInvite {
+  knowledge_user_id: string
+  invite_token: string
+  deep_link: string | null
+  expires_at: string
 }
 
 export interface SystemPayload {

@@ -23,6 +23,21 @@ interface ChallengeResponse {
  * подтверждения для заголовка X-Helm-StepUp.
  */
 export async function stepUpFor(approvalId: string, actionHash: string): Promise<string> {
+  return ceremony({ approval_ids: [approvalId], action_hashes: [actionHash] })
+}
+
+/**
+ * Церемония для операции БЕЗ одобрения — раздел «Пользователи» (v3.8
+ * §14.3, P8.6.5). `approval_ids` пуст намеренно: такое подтверждение
+ * физически не может одобрить действие (сервер ищет approval_id в этом
+ * списке), а `scope` привязывает его к конкретной операции над
+ * конкретным пользователем, как action_hash привязывает к одобрению.
+ */
+export async function stepUpForScope(scope: string): Promise<string> {
+  return ceremony({ approval_ids: [], action_hashes: [scope] })
+}
+
+async function ceremony(binding: { approval_ids: string[]; action_hashes: string[] }): Promise<string> {
   if (!window.PublicKeyCredential) {
     throw new Error('Браузер не поддерживает passkey — вход невозможен')
   }
@@ -31,7 +46,7 @@ export async function stepUpFor(approvalId: string, actionHash: string): Promise
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ approval_ids: [approvalId], action_hashes: [actionHash] }),
+    body: JSON.stringify(binding),
   })
   if (!optionsResponse.ok) throw new Error('Не удалось начать подтверждение')
   const options = (await optionsResponse.json()) as ChallengeResponse
