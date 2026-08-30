@@ -10,10 +10,10 @@ sudo docker exec helm-postgres-1 psql -U helm -d helm -c \
    order by j.created_at desc limit 5;"
 
 echo
-echo "=== Последние outbox_messages ==="
+echo "=== Последние outbox ==="
 sudo docker exec helm-postgres-1 psql -U helm -d helm -c \
-  "select id, channel, recipient, status, attempts, next_attempt_at, created_at
-   from outbox_messages order by created_at desc limit 5;"
+  "select id, channel, recipient, status, attempts, next_attempt_at
+   from outbox order by next_attempt_at desc limit 10;"
 
 echo
 echo "=== helm-knowledge-worker: контейнер жив? ==="
