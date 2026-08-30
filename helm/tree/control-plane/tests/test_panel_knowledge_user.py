@@ -437,3 +437,113 @@ def test_reset_passkey_scope_is_bound_to_the_target_user(app):
                    headers=_stepup(app, owner, f"panel:users:reset-passkey:{other}"))
 
     assert r.status_code == 403
+
+
+# ── §14.3 offboarding: suspend → export → delete ─────────────────────────
+
+def _fill_vault(app, user_id):
+    from helm_core.knowledge.memory import try_remember
+    with app.state.session_factory() as db:
+        try_remember(db, channel="telegram_knowledge", text="Запомни: код 4512",
+                     knowledge_user_id=user_id)
+        db.commit()
+
+
+def test_export_returns_a_path_not_the_contents(app):
+    """Владелец получает файл, чтобы отдать его человеку, но панель чужой
+    Второй мозг не показывает (§14.3 «no normal content browser»)."""
+    user_id = _make_active_user(app)
+    _fill_vault(app, user_id)
+    owner = _owner_session(app)
+
+    r = owner.post(f"/api/panel/v1/users/{user_id}/export",
+                   headers=_stepup(app, owner, f"panel:users:export:{user_id}"))
+
+    assert r.status_code == 201
+    body = r.json()
+    assert body["archive_path"].endswith(".zip")
+    assert body["memories"] == 1
+    assert body["backup_retention"]
+    # Ни одной записи памяти в самом ответе.
+    assert "4512" not in str(body)
+
+
+def test_delete_refuses_while_user_is_still_active(app):
+    user_id = _make_active_user(app)
+    owner = _owner_session(app)
+
+    r = owner.post(f"/api/panel/v1/users/{user_id}/delete", json={"export_taken": True},
+                   headers=_stepup(app, owner, f"panel:users:delete:{user_id}"))
+
+    assert r.status_code == 409
+    assert "приостанов" in r.text
+
+
+def test_delete_refuses_without_an_explicit_answer_about_the_export(app):
+    """Отказ от выгрузки — тоже решение, но его надо принять, а не
+    проскочить."""
+    user_id = _make_active_user(app)
+    owner = _owner_session(app)
+    owner.post(f"/api/panel/v1/users/{user_id}/suspend",
+               headers=_stepup(app, owner, f"panel:users:suspend:{user_id}"))
+
+    r = owner.post(f"/api/panel/v1/users/{user_id}/delete", json={"export_taken": False},
+                   headers=_stepup(app, owner, f"panel:users:delete:{user_id}"))
+
+    assert r.status_code == 409
+    with app.state.session_factory() as db:
+        assert db.get(KnowledgeUser, user_id).status == KnowledgeUserStatus.SUSPENDED
+
+
+def test_full_offboarding_sequence(app):
+    user_id = _make_active_user(app)
+    _fill_vault(app, user_id)
+    owner = _owner_session(app)
+
+    owner.post(f"/api/panel/v1/users/{user_id}/suspend",
+               headers=_stepup(app, owner, f"panel:users:suspend:{user_id}"))
+    exported = owner.post(f"/api/panel/v1/users/{user_id}/export",
+                          headers=_stepup(app, owner, f"panel:users:export:{user_id}"))
+    deleted = owner.post(f"/api/panel/v1/users/{user_id}/delete",
+                         json={"export_taken": True},
+                         headers=_stepup(app, owner, f"panel:users:delete:{user_id}"))
+
+    assert exported.status_code == 201
+    assert deleted.status_code == 200
+    assert deleted.json()["backup_retention"]
+    with app.state.session_factory() as db:
+        assert db.get(KnowledgeUser, user_id).status == KnowledgeUserStatus.DELETED
+
+
+def test_delete_scope_is_bound_to_the_target_user(app):
+    victim = _make_active_user(app)
+    other = _make_active_user(app)
+    owner = _owner_session(app)
+    owner.post(f"/api/panel/v1/users/{victim}/suspend",
+               headers=_stepup(app, owner, f"panel:users:suspend:{victim}"))
+
+    r = owner.post(f"/api/panel/v1/users/{victim}/delete", json={"export_taken": True},
+                   headers=_stepup(app, owner, f"panel:users:delete:{other}"))
+
+    assert r.status_code == 403
+    with app.state.session_factory() as db:
+        assert db.get(KnowledgeUser, victim).status == KnowledgeUserStatus.SUSPENDED
+
+
+def test_owner_account_cannot_be_deleted(app):
+    owner = _owner_session(app)
+
+    r = owner.post(f"/api/panel/v1/users/{SYSTEM_OWNER_ID}/delete",
+                   json={"export_taken": True},
+                   headers=_stepup(app, owner, f"panel:users:delete:{SYSTEM_OWNER_ID}"))
+
+    assert r.status_code == 409
+
+
+def test_knowledge_user_cannot_export_or_delete_anyone(app):
+    victim = _make_active_user(app)
+    ku = _knowledge_session(app, _make_active_user(app))
+
+    assert ku.post(f"/api/panel/v1/users/{victim}/export").status_code == 403
+    assert ku.post(f"/api/panel/v1/users/{victim}/delete",
+                   json={"export_taken": True}).status_code == 403

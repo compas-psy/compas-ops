@@ -252,6 +252,9 @@ function KnowledgeUsers() {
   // Одноразовая ссылка приглашения: показывается один раз и нигде не
   // сохраняется — в базе только хэш токена, второй раз узнать негде.
   const [invite, setInvite] = useState<string | null>(null)
+  // Сообщение о результате выгрузки или удаления: путь к архиву и срок
+  // хранения в бэкапах человеку нужно увидеть, а не угадать.
+  const [notice, setNotice] = useState<string | null>(null)
 
   const run = async (key: string, action: () => Promise<void>) => {
     setBusy(key)
@@ -290,6 +293,28 @@ function KnowledgeUsers() {
     setInvite(created.enrollment_token)
   })
 
+  const onExport = (user: KnowledgeUserRow) => run(`export:${user.id}`, async () => {
+    const stepUpId = await stepUpForScope(`panel:users:export:${user.id}`)
+    const done = await api.exportKnowledgeUser(user.id, stepUpId)
+    setNotice(`Архив собран: ${done.archive_path} — ${done.memories} записей памяти, `
+      + `${done.sources} документов. ${done.backup_retention}`)
+  })
+
+  // Необратимое действие. Подтверждение — не украшение: после него данных
+  // человека в рабочей системе не остаётся, и отменить это нечем.
+  const onDelete = (user: KnowledgeUserRow) => {
+    const ok = window.confirm(
+      `Удалить навсегда Второй мозг «${user.display_name ?? 'без имени'}»?\n\n`
+      + 'Все его документы и память будут уничтожены. Отменить нельзя.\n\n'
+      + 'Нажимайте только если выгрузка уже забрана или сознательно не нужна.')
+    if (!ok) return
+    return run(`delete:${user.id}`, async () => {
+      const stepUpId = await stepUpForScope(`panel:users:delete:${user.id}`)
+      const done = await api.deleteKnowledgeUser(user.id, true, stepUpId)
+      setNotice(`Удалено. ${done.backup_retention}`)
+    })
+  }
+
   const rows = users.data?.items ?? []
 
   return (
@@ -299,6 +324,11 @@ function KnowledgeUsers() {
              Пригласить
            </SecondaryButton>}>
       {error && <p style={{ color: 'var(--h-crit)', margin: '0 0 10px' }}>{error}</p>}
+
+      {notice && (
+        <p style={{ margin: '0 0 12px', fontSize: 'var(--h-fs-label)',
+                    color: 'var(--h-mut)' }}>{notice}</p>
+      )}
 
       {invite && (
         <p style={{ margin: '0 0 12px', fontSize: 'var(--h-fs-label)' }}>
@@ -329,15 +359,29 @@ function KnowledgeUsers() {
               {user.role === 'SYSTEM_OWNER' ? (
                 <Ago at={user.created_at} />
               ) : (
-                <span style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                <span style={{ display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap' }}>
                   {user.status === 'ACTIVE' && (
                     <SecondaryButton onClick={() => onPanelAccess(user)} disabled={busy !== null}>
                       Доступ в панель
                     </SecondaryButton>
                   )}
-                  <SecondaryButton onClick={() => onToggle(user)} disabled={busy !== null}>
-                    {user.status === 'SUSPENDED' ? 'Вернуть доступ' : 'Приостановить'}
-                  </SecondaryButton>
+                  {user.status !== 'DELETED' && (
+                    <SecondaryButton onClick={() => onToggle(user)} disabled={busy !== null}>
+                      {user.status === 'SUSPENDED' ? 'Вернуть доступ' : 'Приостановить'}
+                    </SecondaryButton>
+                  )}
+                  {/* Выгрузка и удаление — только после приостановки: тот
+                      же порядок, что требует спека, видимый в интерфейсе. */}
+                  {user.status === 'SUSPENDED' && (
+                    <>
+                      <SecondaryButton onClick={() => onExport(user)} disabled={busy !== null}>
+                        Выгрузить архив
+                      </SecondaryButton>
+                      <SecondaryButton onClick={() => onDelete(user)} disabled={busy !== null}>
+                        Удалить навсегда
+                      </SecondaryButton>
+                    </>
+                  )}
                 </span>
               )}
             </li>

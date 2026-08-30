@@ -101,3 +101,24 @@ def task(session, ingest):
                              owner_id=OWNER_ID, text="исходная задача")
     session.flush()
     return result.task
+
+@pytest.fixture(autouse=True, scope="session")
+def _never_touch_the_real_vault(tmp_path_factory):
+    """Ни один тест не должен писать в настоящее хранилище знаний.
+
+    Найдено 30.08.2026: часть тестов вызывала `try_remember()` и выгрузку
+    без явного `vault_root` и создавала каталоги прямо в
+    `/opt/helm-knowledge`. На машине разработчика это означало бы, что
+    прогон тестов подмешивает мусор в реальные заметки владельца.
+    Подменяется именно модульная константа, а значения по умолчанию в
+    сигнатурах заменены на `None` с разрешением при вызове — иначе
+    подмена не подействовала бы: значение по умолчанию вычисляется один
+    раз, при определении функции.
+    """
+    root = str(tmp_path_factory.mktemp("vault"))
+    from helm_core.api import panel as panel_module
+    from helm_core.knowledge import ingest, memory, offboarding
+    for module in (ingest, memory, offboarding, panel_module):
+        if hasattr(module, "DEFAULT_VAULT_ROOT"):
+            module.DEFAULT_VAULT_ROOT = root
+    yield root

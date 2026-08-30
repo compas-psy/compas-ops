@@ -112,6 +112,28 @@ export const api = {
       { method: 'POST', headers: { 'X-Helm-StepUp': stepUpId } },
     ),
 
+  /**
+   * Выгрузка Второго мозга человека перед offboarding'ом. Возвращает путь
+   * к файлу на сервере, а не содержимое: панель чужой Второй мозг не
+   * показывает.
+   */
+  exportKnowledgeUser: (userId: string, stepUpId: string) =>
+    request<{ archive_path: string; memories: number; sources: number; backup_retention: string }>(
+      `/api/panel/v1/users/${userId}/export`,
+      { method: 'POST', headers: { 'X-Helm-StepUp': stepUpId } },
+    ),
+
+  /** Необратимо. Требует заранее приостановленного аккаунта. */
+  deleteKnowledgeUser: (userId: string, exportTaken: boolean, stepUpId: string) =>
+    request<{ rows_deleted: number; backup_retention: string }>(
+      `/api/panel/v1/users/${userId}/delete`,
+      {
+        method: 'POST',
+        headers: { 'X-Helm-StepUp': stepUpId, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ export_taken: exportTaken }),
+      },
+    ),
+
   /** Какую оболочку рисовать: владельца или Knowledge-only. */
   session: () => request<{ role: PanelRole }>('/api/panel/v1/session'),
 

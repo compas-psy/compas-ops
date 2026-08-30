@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import uuid
+from pathlib import Path
 from datetime import timedelta
 from decimal import Decimal
 from typing import Any
@@ -24,6 +25,10 @@ from sqlalchemy.orm import Session
 
 from pydantic import BaseModel, Field
 
+from ..knowledge.ingest import DEFAULT_VAULT_ROOT
+from ..knowledge.offboarding import (
+    BACKUP_RETENTION_NOTICE, DeleteRefused, delete_user_permanently, export_user_vault,
+)
 from ..knowledge.onboarding import (
     create_invite, reactivate_user, reset_panel_passkey, suspend_user,
 )
@@ -588,6 +593,80 @@ def session_role(identity: PanelIdentity = Depends(require_panel_session)) -> di
     return {
         "role": (KnowledgeUserRole.KNOWLEDGE_USER if identity.knowledge_user_id
                  else KnowledgeUserRole.SYSTEM_OWNER),
+    }
+
+
+class PanelDeleteIn(BaseModel):
+    """Владелец обязан сказать вслух, что с выгрузкой: забрал или
+    осознанно отказался. Умолчания нет намеренно — §14.3 ставит выгрузку
+    между приостановкой и удалением, и «я не подумал» не должно быть
+    самым лёгким путём."""
+
+    export_taken: bool
+
+
+@router.post("/users/{knowledge_user_id}/export", status_code=status.HTTP_201_CREATED)
+def export_knowledge_user_vault(knowledge_user_id: uuid.UUID, request: Request,
+                                session: Session = Depends(get_session),
+                                identity: PanelIdentity = Depends(require_owner_session),
+                                stepup=Depends(require_stepup)) -> dict[str, Any]:
+    """§14.3 «optional user vault export» перед offboarding'ом.
+
+    Архив кладётся на диск сервера и ЕГО СОДЕРЖИМОЕ В ПАНЕЛЬ НЕ
+    ВОЗВРАЩАЕТСЯ: спека запрещает владельцу обычный просмотр чужого
+    Второго мозга, а выгрузка нужна, чтобы отдать данные их хозяину.
+    Владелец получает путь к файлу и передаёт его человеку сам. Создать
+    архив может только он — после приостановки человек уже не войдёт.
+    """
+    stepup.assert_scope(f"panel:users:export:{knowledge_user_id}")
+    _require_manageable_user(session, knowledge_user_id)
+    # Тот же корень хранилища, что у всего остального кода Knowledge —
+    # модульная константа, не новая настройка: настройки, о которой не
+    # просили, здесь не заводится.
+    result = export_user_vault(session, knowledge_user_id,
+                               out_dir=Path(DEFAULT_VAULT_ROOT) / "exports")
+    session.commit()
+    return {
+        "knowledge_user_id": str(knowledge_user_id),
+        "archive_path": str(result.archive_path),
+        "memories": result.memories,
+        "sources": result.sources,
+        "bytes": result.bytes_written,
+        "backup_retention": BACKUP_RETENTION_NOTICE,
+    }
+
+
+@router.post("/users/{knowledge_user_id}/delete")
+def delete_knowledge_user(knowledge_user_id: uuid.UUID, body: PanelDeleteIn,
+                          request: Request, session: Session = Depends(get_session),
+                          identity: PanelIdentity = Depends(require_owner_session),
+                          stepup=Depends(require_stepup)) -> dict[str, Any]:
+    """§14.3 «explicit RED delete if requested». Необратимо.
+
+    Три защиты вместо записи одобрения (разбор решения — в
+    `knowledge/offboarding.py` и `V3.8-DELTA.md`): аккаунт обязан быть
+    заранее приостановлен, passkey привязан именно к этому
+    пользователю, и владелец обязан явно указать судьбу выгрузки.
+    Агентского пути сюда нет вовсе.
+    """
+    stepup.assert_scope(f"panel:users:delete:{knowledge_user_id}")
+    _require_manageable_user(session, knowledge_user_id)
+    if not body.export_taken:
+        # Не запрет, а вынужденная остановка: отказ от выгрузки — тоже
+        # решение, но его надо принять, а не проскочить.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "подтвердите, что выгрузка забрана или сознательно не нужна")
+    try:
+        result = delete_user_permanently(session, knowledge_user_id)
+    except DeleteRefused as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    session.commit()
+    return {
+        "knowledge_user_id": str(knowledge_user_id),
+        "rows_deleted": result.rows_deleted,
+        "files_removed": result.files_removed,
+        "backup_retention": result.retention_notice,
     }
 
 

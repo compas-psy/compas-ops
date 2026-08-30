@@ -219,12 +219,13 @@ def _confirmation_text(memory: KnowledgeMemory) -> str:
 def try_remember(session: Session, *, channel: str, text: str,
                  origin_message_id: str | None = None,
                  knowledge_user_id: uuid.UUID | None = None,
-                 vault_root: str = DEFAULT_VAULT_ROOT) -> RememberOutcome:
+                 vault_root: str | None = None) -> RememberOutcome:
     """Единая точка входа — вызывается ДО обычного register/probe/chief
     пути, тем же принципом, что `chat_intake.resolve_pending_domain()`
     для вложений: `not_command` значит "это сообщение не про Remember",
     вызывающая сторона продолжает обычный путь как раньше.
     """
+    vault_root = vault_root or DEFAULT_VAULT_ROOT
     payload = detect_remember_command(text)
     if payload is None:
         return RememberOutcome(status="not_command")
