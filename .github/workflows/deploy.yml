@@ -32,6 +32,7 @@ on:
           - backup        # снять точку возврата
           - logs          # логи helm-core и воркера, ничего не менять
           - secrets       # положить секреты из GitHub Secrets на сервер
+          - register-knowledge-webhook  # зарегистрировать вебхук Knowledge-бота в Telegram
           - deploy        # код + панель + пересборка контейнеров
           - migrate       # alembic upgrade head (после deploy)
           - restore-test  # backup.sh + restore_test.sh
@@ -222,7 +223,8 @@ jobs:
           scp -i ~/.ssh/id_deploy -r panel/dist "$VPS_USER@$VPS_HOST:/tmp/panel-dist"
           scp -i ~/.ssh/id_deploy compose/docker-compose.yml "$VPS_USER@$VPS_HOST:/tmp/docker-compose.yml"
           scp -i ~/.ssh/id_deploy config/Caddyfile "$VPS_USER@$VPS_HOST:/tmp/Caddyfile"
-          scp -i ~/.ssh/id_deploy scripts/backup.sh scripts/restore_test.sh "$VPS_USER@$VPS_HOST:/tmp/"
+          scp -i ~/.ssh/id_deploy scripts/backup.sh scripts/restore_test.sh \
+              scripts/knowledge-telegram-register-webhook.sh "$VPS_USER@$VPS_HOST:/tmp/"
           scp -i ~/.ssh/id_deploy hermes/plugins/helm-control/__init__.py "$VPS_USER@$VPS_HOST:/tmp/helm-control-init.py"
 
       # ── secrets: из GitHub Secrets в /etc/helm/secrets ───────────────
@@ -324,11 +326,14 @@ jobs:
             sudo mv /tmp/Caddyfile /opt/helm/config/Caddyfile
             sudo mv /tmp/backup.sh /opt/helm/scripts/backup.sh
             sudo mv /tmp/restore_test.sh /opt/helm/scripts/restore_test.sh
+            sudo mv /tmp/knowledge-telegram-register-webhook.sh /opt/helm/scripts/knowledge-telegram-register-webhook.sh
             sudo chown -R root:root /opt/helm/control-plane/helm_core /opt/helm/control-plane/migrations \
               /opt/helm/compose/docker-compose.yml /opt/helm/config/Caddyfile \
-              /opt/helm/scripts/backup.sh /opt/helm/scripts/restore_test.sh
+              /opt/helm/scripts/backup.sh /opt/helm/scripts/restore_test.sh \
+              /opt/helm/scripts/knowledge-telegram-register-webhook.sh
             sudo chmod -R go-w /opt/helm/control-plane/helm_core /opt/helm/control-plane/migrations
-            sudo chmod 755 /opt/helm/scripts/backup.sh /opt/helm/scripts/restore_test.sh
+            sudo chmod 755 /opt/helm/scripts/backup.sh /opt/helm/scripts/restore_test.sh \
+              /opt/helm/scripts/knowledge-telegram-register-webhook.sh
 
             # Содержимое каталога панели заменяется, сам каталог остаётся:
             # Caddy держит его примонтированным, и пересоздание каталога
@@ -518,6 +523,23 @@ jobs:
             end
             $chk$;
           SQL
+          '
+
+      - name: Зарегистрировать вебхук Knowledge-бота
+        # Одноразовое действие, отдельно от deploy: вебхук привязывается
+        # к секретам, а не к коду, перерегистрировать его нужно только
+        # когда токен или секрет вебхука меняются, не на каждый выкат.
+        # Сам себе доставляет скрипт — не требует, чтобы перед этим
+        # прогонялся полный deploy.
+        if: inputs.action == 'register-knowledge-webhook'
+        run: |
+          scp -i ~/.ssh/id_deploy helm/tree/scripts/knowledge-telegram-register-webhook.sh \
+              "$VPS_USER@$VPS_HOST:/tmp/knowledge-telegram-register-webhook.sh"
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
+            sudo mv /tmp/knowledge-telegram-register-webhook.sh /opt/helm/scripts/knowledge-telegram-register-webhook.sh
+            sudo chown root:root /opt/helm/scripts/knowledge-telegram-register-webhook.sh
+            sudo chmod 755 /opt/helm/scripts/knowledge-telegram-register-webhook.sh
+            sudo /opt/helm/scripts/knowledge-telegram-register-webhook.sh
           '
 
       - name: Логи сервисов
