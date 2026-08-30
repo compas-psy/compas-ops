@@ -148,6 +148,60 @@ def test_resolve_pending_domain_valid_domain_ingests_file(session, tmp_path):
     assert job is not None
 
 
+def test_resolve_pending_domain_same_file_resent_to_same_domain_is_not_reprocessed(session, tmp_path):
+    vault_root = tmp_path / "vault"
+    data = b"identical bytes, sent twice"
+
+    first_pending = stage_attachment(session, channel="telegram", data=data,
+                                     original_filename="report.txt", mime_type="text/plain",
+                                     spool_root=str(tmp_path / "spool"))
+    first = resolve_pending_domain(session, channel="telegram", reply_text="engineering",
+                                   vault_root=str(vault_root))
+    assert first.status == "ingested"
+    assert first.result.created is True
+
+    second_pending = stage_attachment(session, channel="telegram", data=data,
+                                      original_filename="report.txt", mime_type="text/plain",
+                                      spool_root=str(tmp_path / "spool"))
+    second_spool_path = Path(second_pending.spool_path)
+    second = resolve_pending_domain(session, channel="telegram", reply_text="engineering",
+                                    vault_root=str(vault_root))
+
+    assert second.status == "duplicate"
+    assert second.result.source.id == first.result.source.id
+    assert second.result.created is False
+    assert second.result.job is None
+    # Второй пришедший файл не оставляет ни pending, ни файл в spool.
+    assert session.query(KnowledgePendingAttachment).count() == 0
+    assert not second_spool_path.exists()
+    # И не создаёт вторую ingest job на то же содержимое.
+    assert session.query(KnowledgeIngestJob).count() == 1
+
+
+def test_resolve_pending_domain_same_file_resent_to_different_domain_keeps_original(session, tmp_path):
+    """Дедуп по sha256 глобальный, не per-domain (register_file_for_ingest) —
+    повторная отправка того же файла в ДРУГОЙ домен не переклассифицирует
+    существующий source и не оставляет файл-сироту в новом домене."""
+    vault_root = tmp_path / "vault"
+    data = b"same bytes, different domain the second time"
+
+    stage_attachment(session, channel="telegram", data=data,
+                     original_filename="doc.txt", mime_type="text/plain",
+                     spool_root=str(tmp_path / "spool"))
+    first = resolve_pending_domain(session, channel="telegram", reply_text="engineering",
+                                   vault_root=str(vault_root))
+
+    stage_attachment(session, channel="telegram", data=data,
+                     original_filename="doc.txt", mime_type="text/plain",
+                     spool_root=str(tmp_path / "spool"))
+    second = resolve_pending_domain(session, channel="telegram", reply_text="health",
+                                    vault_root=str(vault_root))
+
+    assert second.status == "duplicate"
+    assert second.result.source.domain == "engineering"
+    assert not (vault_root / "raw" / "health").exists()
+
+
 def test_resolve_pending_domain_zapiski_forces_client_restricted_sensitivity(session, tmp_path):
     stage_attachment(session, channel="telegram", data=b"client note contents",
                      original_filename="client.txt", mime_type="text/plain",

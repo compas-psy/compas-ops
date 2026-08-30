@@ -212,6 +212,8 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
         reference, response_status = {
             "ingested": (f"attachment-ingested:{resolved.result.source.id if resolved.result else ''}",
                         "attachment_ingested"),
+            "duplicate": (f"attachment-duplicate:{resolved.result.source.id if resolved.result else ''}:{inbound.message_id}",
+                         "attachment_duplicate"),
             "cancelled": (f"attachment-cancelled:{pending_id}", "attachment_cancelled"),
             "missing": (f"attachment-missing:{pending_id}", "attachment_missing"),
             "failed": (f"attachment-move-failed:{pending_id}:{inbound.message_id}",

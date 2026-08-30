@@ -40,7 +40,7 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import KnowledgeDomain, KnowledgePendingAttachment, KnowledgeSensitivity
+from ..models import KnowledgeDomain, KnowledgePendingAttachment, KnowledgeSensitivity, KnowledgeSource
 from .ingest import DEFAULT_VAULT_ROOT, RegisterFileResult, register_file_for_ingest
 
 #: §14.5.1: "bounded size". Telegram Bot API само не отдаёт файлы крупнее
@@ -149,7 +149,8 @@ def stage_attachment(session: Session, *, channel: str, data: bytes,
 
 @dataclass
 class ResolveOutcome:
-    status: Literal["not_pending", "cancelled", "invalid", "missing", "failed", "ingested"]
+    status: Literal["not_pending", "cancelled", "invalid", "missing", "failed",
+                    "ingested", "duplicate"]
     result: RegisterFileResult | None = None
     pending: KnowledgePendingAttachment | None = None
 
@@ -192,6 +193,32 @@ def resolve_pending_domain(session: Session, *, channel: str, reply_text: str,
         session.delete(pending)
         session.flush()
         return ResolveOutcome(status="missing", pending=pending)
+
+    # НАЙДЕНО 30.08.2026 (вопрос владельца про повторную отправку файла):
+    # SHA256-дедуп в register_file_for_ingest() уже не создаёт вторую
+    # ingest job для того же содержимого — но ТОЛЬКО если до него дойти.
+    # Проверка здесь, ДО перемещения из spool в raw/<domain>/, нужна по
+    # двум причинам сразу: (1) без неё resolve_outcome_text() врал бы
+    # "Разбор запущен" на файл, для которого job вообще не создастся;
+    # (2) если тот же файл отправить повторно в ДРУГОЙ домен, копия всё
+    # равно успевала бы физически лечь в raw/<новый_домен>/ (имя файла на
+    # диске детерминировано sha256, а не домен) — источником в БД
+    # оставался бы первый домен, файл во втором становился сиротой,
+    # которую ничто не чистит. Дедуп по sha256 глобальный (не per-domain,
+    # см. register_file_for_ingest) — если владелец РЕАЛЬНО хочет тот же
+    # файл в другой домен, менять domain существующего source — отдельная
+    # операция, не эта функция; здесь только "не создавай дубликат втихую".
+    existing_source = session.scalar(
+        select(KnowledgeSource).where(KnowledgeSource.sha256 == pending.sha256)
+    )
+    if existing_source is not None:
+        spool_path.unlink(missing_ok=True)
+        session.delete(pending)
+        session.flush()
+        return ResolveOutcome(
+            status="duplicate", pending=pending,
+            result=RegisterFileResult(source=existing_source, job=None, created=False),
+        )
 
     raw_dir = Path(vault_root) / "raw" / domain
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -259,6 +286,9 @@ def resolve_outcome_text(outcome: ResolveOutcome) -> str | None:
     if outcome.status == "ingested":
         return (f"Сохранено в «{outcome.result.source.domain}». "
                "Разбор запущен, появится в базе знаний в фоне.")
+    if outcome.status == "duplicate":
+        return (f"Этот файл уже есть в базе (домен «{outcome.result.source.domain}») — "
+               "повторно не сохраняю и не разбираю.")
     if outcome.status == "cancelled":
         return ATTACHMENT_CANCELLED_NOTICE
     if outcome.status == "missing":
