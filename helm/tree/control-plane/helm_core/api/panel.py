@@ -24,7 +24,9 @@ from sqlalchemy.orm import Session
 
 from pydantic import BaseModel, Field
 
-from ..knowledge.onboarding import create_invite, reactivate_user, suspend_user
+from ..knowledge.onboarding import (
+    create_invite, reactivate_user, reset_panel_passkey, suspend_user,
+)
 from ..knowledge.tenancy import bind_knowledge_user
 from ..models import (
     ActionTrust, Approval, ApprovalStatus, BudgetDaily, KnowledgeChannelIdentity,
@@ -515,6 +517,26 @@ def set_knowledge_user_quota(knowledge_user_id: uuid.UUID, body: PanelQuotaIn,
     return {"knowledge_user_id": str(knowledge_user_id),
             "storage_quota_bytes": user.storage_quota_bytes,
             "daily_ingest_quota_bytes": user.daily_ingest_quota_bytes}
+
+
+@router.post("/users/{knowledge_user_id}/reset-passkey")
+def reset_knowledge_user_passkey(knowledge_user_id: uuid.UUID,
+                                 session: Session = Depends(get_session),
+                                 identity: PanelIdentity = Depends(require_owner_session),
+                                 stepup=Depends(require_stepup)) -> dict[str, Any]:
+    """§14.3 "SYSTEM_OWNER can reset a secondary user's passkey enrollment;
+    old sessions are revoked" — для потерянного устройства.
+
+    Passkey не «перевыпускается»: приватный ключ живёт на устройстве
+    человека и серверу неизвестен, поэтому сброс — это отзыв всех его
+    credential'ов. После него вход возможен только по новому
+    enrollment-токену, то есть только явным действием владельца.
+    """
+    stepup.assert_scope(f"panel:users:reset-passkey:{knowledge_user_id}")
+    _require_manageable_user(session, knowledge_user_id)
+    outcome = reset_panel_passkey(session, knowledge_user_id)
+    session.commit()
+    return {"status": outcome.status, "knowledge_user_id": str(knowledge_user_id)}
 
 
 @router.post("/users/{knowledge_user_id}/panel-invite", status_code=status.HTTP_201_CREATED)

@@ -21,7 +21,7 @@ from webauthn.authentication.verify_authentication_response import VerifiedAuthe
 from webauthn.registration.verify_registration_response import VerifiedRegistration
 
 from helm_core.api.auth import _b64u
-from helm_core.api.deps import knowledge_principal
+from helm_core.knowledge.tenancy import knowledge_principal
 from helm_core.app import create_app
 from helm_core.config import Settings
 from helm_core.knowledge.memory import try_remember
@@ -365,3 +365,75 @@ def test_owner_cannot_issue_a_panel_token_for_himself(app):
                    headers=_stepup(app, owner, f"panel:users:panel-invite:{SYSTEM_OWNER_ID}"))
 
     assert r.status_code == 409
+
+
+# ── §14.3 «panel sessions revoked» при приостановке ──────────────────────
+
+def test_suspend_revokes_live_panel_session(app):
+    """До появления входа в панель отзывать было нечего. Теперь сессия
+    живёт до суток, и не отозвать её — значит оставить приостановленному
+    человеку сутки чтения."""
+    user_id = _make_active_user(app)
+    ku = _knowledge_session(app, user_id)
+    assert ku.get("/api/panel/v1/knowledge").status_code == 200
+
+    owner = _owner_session(app)
+    owner.post(f"/api/panel/v1/users/{user_id}/suspend",
+               headers=_stepup(app, owner, f"panel:users:suspend:{user_id}"))
+
+    assert ku.get("/api/panel/v1/knowledge").status_code == 401
+
+
+def test_suspend_burns_unused_panel_enrollment_token(app):
+    """Токен, выданный до приостановки, не должен превращаться в новый
+    вход после неё."""
+    user_id = _make_active_user(app)
+    owner = _owner_session(app)
+    issued = owner.post(f"/api/panel/v1/users/{user_id}/panel-invite",
+                        headers=_stepup(app, owner, f"panel:users:panel-invite:{user_id}"))
+    token = issued.json()["enrollment_token"]
+
+    owner.post(f"/api/panel/v1/users/{user_id}/suspend",
+               headers=_stepup(app, owner, f"panel:users:suspend:{user_id}"))
+
+    fresh = TestClient(app, base_url="https://testserver")
+    assert fresh.post("/auth/knowledge/enroll/start",
+                      json={"enrollment_token": token}).status_code == 401
+
+
+def test_reset_passkey_revokes_credentials_and_sessions(app, monkeypatch):
+    """Потерянное устройство: passkey не перевыпускается (приватный ключ
+    серверу неизвестен), поэтому сброс — отзыв credential'ов."""
+    user_id = _make_active_user(app)
+    enrolled = TestClient(app, base_url="https://testserver")
+    _enroll(enrolled, app, monkeypatch, _enrollment_token(app, knowledge_principal(user_id)))
+    assert enrolled.get("/api/panel/v1/knowledge").status_code == 200
+
+    owner = _owner_session(app)
+    r = owner.post(f"/api/panel/v1/users/{user_id}/reset-passkey",
+                   headers=_stepup(app, owner, f"panel:users:reset-passkey:{user_id}"))
+
+    assert r.status_code == 200
+    assert enrolled.get("/api/panel/v1/knowledge").status_code == 401
+
+    # Старым passkey войти больше нельзя — только по новому токену владельца.
+    fresh = TestClient(app, base_url="https://testserver")
+    fresh.post("/auth/knowledge/login/start")
+    fresh.post("/auth/passkey/login/options")
+    _mock_assertion(monkeypatch, KU_CRED)
+    denied = fresh.post("/auth/passkey/login/verify", json={
+        "credential_id": _b64u(KU_CRED), "client_data": PLACEHOLDER,
+        "authenticator_data": PLACEHOLDER, "signature": PLACEHOLDER,
+    })
+    assert denied.status_code == 401
+
+
+def test_reset_passkey_scope_is_bound_to_the_target_user(app):
+    victim = _make_active_user(app)
+    other = _make_active_user(app)
+    owner = _owner_session(app)
+
+    r = owner.post(f"/api/panel/v1/users/{victim}/reset-passkey",
+                   headers=_stepup(app, owner, f"panel:users:reset-passkey:{other}"))
+
+    assert r.status_code == 403

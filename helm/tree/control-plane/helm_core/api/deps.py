@@ -10,6 +10,7 @@ from fastapi import Cookie, Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..knowledge.tenancy import knowledge_principal, parse_knowledge_principal  # noqa: F401
 from ..models import Approval, PanelSession, PanelStepUpChallenge, utcnow
 
 SESSION_COOKIE = "helm_panel_session"
@@ -27,37 +28,6 @@ class PanelIdentity:
     #: v3.8 P8.6.5: заполнено, только если сессия принадлежит
     #: KNOWLEDGE_USER. `None` = сессия владельца.
     knowledge_user_id: uuid.UUID | None = None
-
-
-#: Префикс принципала KNOWLEDGE_USER в `panel_sessions`,
-#: `webauthn_credentials` и `panel_enrollment_tokens`.
-#:
-#: Отдельная колонка не заводится намеренно: `owner_id` — уже строка-
-#: принципал, а не внешний ключ, и префикс делает коллизию с владельцем
-#: невозможной по построению (его принципал — Telegram id, то есть цифры,
-#: либо "tg:"-форма). Ноль изменений схемы, ноль миграций, ноль риска для
-#: существующего входа владельца — что прямо требует директива: owner-вход
-#: не трогать ради secondary-пользователей.
-KNOWLEDGE_PRINCIPAL_PREFIX = "ku:"
-
-
-def knowledge_principal(knowledge_user_id: uuid.UUID) -> str:
-    return f"{KNOWLEDGE_PRINCIPAL_PREFIX}{knowledge_user_id}"
-
-
-def parse_knowledge_principal(owner_id: str) -> uuid.UUID | None:
-    """UUID тенанта — или None, если это принципал владельца.
-
-    Возвращает None и на «похожем, но битом» значении (`ku:` + не-UUID):
-    неразобранный принципал обязан читаться как «не KNOWLEDGE_USER», а не
-    как исключение посреди проверки доступа.
-    """
-    if not owner_id.startswith(KNOWLEDGE_PRINCIPAL_PREFIX):
-        return None
-    try:
-        return uuid.UUID(owner_id[len(KNOWLEDGE_PRINCIPAL_PREFIX):])
-    except ValueError:
-        return None
 
 
 def require_panel_session(

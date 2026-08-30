@@ -74,3 +74,35 @@ def bind_knowledge_user(session: Session, knowledge_user_id: uuid.UUID | None) -
         knowledge_user_id = resolve_system_owner_id(session)
     set_current_knowledge_user(session, knowledge_user_id)
     return knowledge_user_id
+
+
+#: Префикс принципала KNOWLEDGE_USER в `panel_sessions`,
+#: `webauthn_credentials` и `panel_enrollment_tokens` (v3.8 P8.6.5).
+#:
+#: Отдельная колонка не заводится намеренно: `owner_id` там — уже строка-
+#: принципал, а не внешний ключ, и префикс делает коллизию с владельцем
+#: невозможной по построению (его принципал — Telegram id). Живёт здесь,
+#: а не в `api/deps.py`, потому что это отображение «тенант → принципал»,
+#: и им пользуется в том числе `onboarding.suspend_user()` — модулю
+#: `knowledge/` нельзя зависеть от `api/`.
+KNOWLEDGE_PRINCIPAL_PREFIX = "ku:"
+
+
+def knowledge_principal(knowledge_user_id: uuid.UUID) -> str:
+    return f"{KNOWLEDGE_PRINCIPAL_PREFIX}{knowledge_user_id}"
+
+
+def parse_knowledge_principal(owner_id: str) -> uuid.UUID | None:
+    """UUID тенанта — или None, если это принципал владельца.
+
+    Возвращает None и на «похожем, но битом» значении (`ku:` + не-UUID):
+    неразобранный принципал обязан читаться как «не KNOWLEDGE_USER», а не
+    как исключение посреди проверки доступа.
+    """
+    if not owner_id.startswith(KNOWLEDGE_PRINCIPAL_PREFIX):
+        return None
+    try:
+        return uuid.UUID(owner_id[len(KNOWLEDGE_PRINCIPAL_PREFIX):])
+    except ValueError:
+        return None
+

@@ -27,8 +27,10 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .tenancy import knowledge_principal
 from ..models import (
     KnowledgeChannelIdentity, KnowledgeInvite, KnowledgeUser, KnowledgeUserRole, KnowledgeUserStatus,
+    PanelEnrollmentToken, PanelSession, WebauthnCredential,
 )
 from ..models.base import utcnow
 
@@ -162,6 +164,66 @@ class UserActionOutcome:
     user: KnowledgeUser | None = None
 
 
+def revoke_panel_access(session: Session, knowledge_user_id: uuid.UUID) -> int:
+    """Отозвать действующие сессии панели тенанта и неиспользованные
+    enrollment-токены. Возвращает число отозванных сессий.
+
+    §14.3 "SUSPENDED: bot rejects Knowledge operations, **panel sessions
+    revoked**". До появления входа KNOWLEDGE_USER в панель (P8.6.5)
+    отзывать было нечего, и `suspend_user()` этого не делал; теперь
+    сессия живёт до суток, и не отозвать её значит оставить
+    приостановленному человеку сутки чтения.
+
+    Неиспользованные enrollment-токены гасятся тем же движением: токен,
+    выданный до приостановки, не должен превращаться в новый вход после
+    неё.
+    """
+    principal = knowledge_principal(knowledge_user_id)
+    now = utcnow()
+    revoked = 0
+    for panel_session in session.scalars(
+        select(PanelSession).where(PanelSession.owner_id == principal,
+                                   PanelSession.revoked_at.is_(None))
+    ):
+        panel_session.revoked_at = now
+        revoked += 1
+    for token in session.scalars(
+        select(PanelEnrollmentToken).where(PanelEnrollmentToken.owner_id == principal,
+                                           PanelEnrollmentToken.used_at.is_(None))
+    ):
+        token.used_at = now
+    session.flush()
+    return revoked
+
+
+def reset_panel_passkey(session: Session, knowledge_user_id: uuid.UUID) -> UserActionOutcome:
+    """§14.3 "SYSTEM_OWNER can reset a secondary user's passkey
+    enrollment; old sessions are revoked".
+
+    Сам сброс — отзыв всех credential'ов: passkey нельзя «перевыпустить»,
+    приватный ключ живёт на устройстве человека и серверу неизвестен.
+    После сброса вход возможен только через новый enrollment-токен, то
+    есть через явное действие владельца — что и есть смысл сброса при
+    потерянном устройстве.
+    """
+    user = session.get(KnowledgeUser, knowledge_user_id)
+    if user is None:
+        return UserActionOutcome(status="not_found")
+
+    principal = knowledge_principal(knowledge_user_id)
+    now = utcnow()
+    reset_any = False
+    for credential in session.scalars(
+        select(WebauthnCredential).where(WebauthnCredential.owner_id == principal,
+                                         WebauthnCredential.revoked_at.is_(None))
+    ):
+        credential.revoked_at = now
+        reset_any = True
+    revoke_panel_access(session, knowledge_user_id)
+    session.flush()
+    return UserActionOutcome(status="success" if reset_any else "noop", user=user)
+
+
 def suspend_user(session: Session, knowledge_user_id: uuid.UUID) -> UserActionOutcome:
     """§14.3 "Suspend/offboard": bot/panel access blocked, data retained.
     Идемпотентно — повторный suspend уже suspended-пользователя не
@@ -170,9 +232,13 @@ def suspend_user(session: Session, knowledge_user_id: uuid.UUID) -> UserActionOu
     if user is None:
         return UserActionOutcome(status="not_found")
     if user.status == KnowledgeUserStatus.SUSPENDED:
+        # Идемпотентность не отменяет отзыва: сессия могла появиться
+        # между двумя вызовами.
+        revoke_panel_access(session, knowledge_user_id)
         return UserActionOutcome(status="noop", user=user)
     user.status = KnowledgeUserStatus.SUSPENDED
     user.suspended_at = utcnow()
+    revoke_panel_access(session, knowledge_user_id)
     session.flush()
     return UserActionOutcome(status="success", user=user)
 
