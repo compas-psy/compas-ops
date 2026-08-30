@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from ..channels.max import verify_webhook_secret
 from ..channels.telegram_knowledge import InboundKnowledgeTelegram, WEBHOOK_SECRET_HEADER, parse_update
+from ..knowledge.admin import try_admin_command
 from ..knowledge.memory import try_remember
 from ..knowledge.onboarding import consume_invite, find_user_by_identity, resolve_active_user_by_identity
 from ..knowledge.probe import probe
@@ -144,6 +145,18 @@ async def knowledge_telegram_webhook(request: Request,
         _reply(session, inbound, remember_outcome.text)
         session.commit()
         return {"status": f"remember_{remember_outcome.status}"}
+
+    # §14.16: «Забудь …», «Верни в память …», «Удали навсегда …»,
+    # «Исправь … : …». После «Запомни», потому что префиксы не
+    # пересекаются («Не забудь» — это запомнить), и до обычного вопроса:
+    # иначе «Забудь про код домофона» ушло бы в поиск и было бы понято
+    # как просьба этот код НАЙТИ.
+    admin_outcome = try_admin_command(session, text=inbound.text,
+                                      knowledge_user_id=user.id)
+    if admin_outcome.status != "not_command":
+        _reply(session, inbound, admin_outcome.text)
+        session.commit()
+        return {"status": f"admin_{admin_outcome.status}"}
 
     # §14.11/9.0: тот же free-first Probe, что у SYSTEM_OWNER, с явным
     # knowledge_user_id этого secondary-пользователя — НЕ дефолт на

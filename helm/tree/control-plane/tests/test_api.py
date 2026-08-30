@@ -576,3 +576,35 @@ def test_knowledge_user_webhook_cannot_reach_a_model():
 
     leaked = _imported_modules(hook_module.__file__) & FORBIDDEN_MODEL_CLIENTS
     assert not leaked, f"вебхук KNOWLEDGE_USER импортирует {sorted(leaked)}"
+
+
+# ── §14.16: управление памятью через internal API (Telegram владельца) ───
+
+def test_internal_knowledge_admin_forgets_owner_memory(client):
+    """`helm-control` живёт вне процесса Control Plane и зовёт этот
+    эндпоинт вместо прямого вызова, тем же способом, что и «Запомни»."""
+    remembered = post_internal(client, "/internal/knowledge/remember", {
+        "channel": "telegram", "text": "Запомни: код домофона 4512",
+    })
+    assert remembered.json()["status"] == "stored"
+
+    forgotten = post_internal(client, "/internal/knowledge/admin",
+                              {"text": "Забудь про код домофона"})
+
+    assert forgotten.status_code == 200, forgotten.text
+    assert forgotten.json()["status"] == "forgotten"
+    assert "4512" in forgotten.json()["text"]
+
+
+def test_internal_knowledge_admin_passes_through_ordinary_text(client):
+    """`not_command` — сообщение не про управление памятью, плагин
+    продолжает обычный путь, как и с «Запомни»."""
+    response = post_internal(client, "/internal/knowledge/admin",
+                             {"text": "какая погода в Москве"})
+
+    assert response.json() == {"status": "not_command", "text": None}
+
+
+def test_internal_knowledge_admin_requires_service_auth(client):
+    r = client.post("/internal/knowledge/admin", json={"text": "Забудь всё"})
+    assert r.status_code in (401, 422)

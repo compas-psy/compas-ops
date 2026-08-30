@@ -262,3 +262,68 @@ def test_secondary_user_probe_does_not_see_system_owner_document_corpus(app, cli
                                                    user_id=111, message_id=2))
 
     assert response.json()["status"] == "needs_reasoning_no_paid_ai"
+
+
+# ── §14.16: управление памятью через Dedicated Knowledge Bot ─────────────
+
+def _onboard(app, client, user_id: int):
+    with app.state.session_factory() as session:
+        invite = _invite(session)
+        raw_token, knowledge_user_id = invite.raw_token, invite.user.id
+    post_hook(client, _private_message(f"/start kb_{raw_token}", user_id=user_id))
+    return knowledge_user_id
+
+
+def test_secondary_user_can_forget_and_restore_own_memory(app, client):
+    """Замыкает жизненный цикл: до §14.16 состояние «забыто» было
+    достижимо только правкой базы руками."""
+    user_id = _onboard(app, client, 777)
+    post_hook(client, _private_message("Запомни: код домофона 4512",
+                                       user_id=777, message_id=2))
+
+    forgotten = post_hook(client, _private_message("Забудь про код домофона",
+                                                   user_id=777, message_id=3))
+
+    assert forgotten.json()["status"] == "admin_forgotten"
+    with app.state.session_factory() as session:
+        bind_knowledge_user(session, user_id)
+        assert session.scalars(select(KnowledgeMemory)).one().status == "DISABLED"
+
+    restored = post_hook(client, _private_message("Верни в память код домофона",
+                                                  user_id=777, message_id=4))
+
+    assert restored.json()["status"] == "admin_restored"
+    with app.state.session_factory() as session:
+        bind_knowledge_user(session, user_id)
+        assert session.scalars(select(KnowledgeMemory)).one().status == "ACTIVE"
+
+
+def test_forget_is_not_understood_as_a_search_request(app, client):
+    """«Забудь про код домофона» иначе ушло бы в обычный поиск и было бы
+    понято как просьба этот код НАЙТИ — ровно наоборот сказанному."""
+    _onboard(app, client, 778)
+    post_hook(client, _private_message("Запомни: код домофона 4512",
+                                       user_id=778, message_id=2))
+
+    result = post_hook(client, _private_message("Забудь про код домофона",
+                                                user_id=778, message_id=3))
+
+    assert result.json()["status"].startswith("admin_")
+
+
+def test_secondary_user_cannot_purge_owner_memory_by_command(app, client):
+    _onboard(app, client, 779)
+    with app.state.session_factory() as session:
+        from helm_core.knowledge.memory import try_remember
+        owner_id = bind_knowledge_user(session, None)
+        try_remember(session, channel="max", text="Запомни: код сейфа владельца 1234",
+                     knowledge_user_id=owner_id)
+        session.commit()
+
+    result = post_hook(client, _private_message("Удали навсегда код сейфа",
+                                                user_id=779, message_id=2))
+
+    assert result.json()["status"] == "admin_not_found"
+    with app.state.session_factory() as session:
+        bind_knowledge_user(session, None)
+        assert len(session.scalars(select(KnowledgeMemory)).all()) == 1

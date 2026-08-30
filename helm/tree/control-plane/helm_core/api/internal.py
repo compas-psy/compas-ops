@@ -28,6 +28,7 @@ from ..knowledge.chat_intake import (
     ATTACHMENT_TOO_LARGE_NOTICE, AttachmentTooLarge, format_domain_menu,
     resolve_outcome_text, resolve_pending_domain, stage_attachment,
 )
+from ..knowledge.admin import try_admin_command
 from ..knowledge.memory import try_remember
 from ..knowledge.onboarding import create_invite, reactivate_user, suspend_user
 from ..knowledge.probe import probe
@@ -108,6 +109,26 @@ def knowledge_remember(body: RememberIn,
     """
     outcome = try_remember(session, channel=body.channel, text=body.text,
                            origin_message_id=body.origin_message_id)
+    session.commit()
+    return {"status": outcome.status, "text": outcome.text}
+
+
+class KnowledgeAdminIn(BaseModel):
+    text: str = Field(min_length=1, max_length=8000)
+
+
+@router.post("/knowledge/admin")
+def knowledge_admin(body: KnowledgeAdminIn,
+                    session: Session = Depends(get_session)) -> dict[str, Any]:
+    """§14.16 «Забудь …»/«Верни в память …»/«Удали навсегда …»/«Исправь …»
+    — Telegram-сторона владельца, тем же способом, что и «Запомни»:
+    `helm-control` живёт вне процесса Control Plane и звать
+    `try_admin_command()` напрямую не может.
+
+    `status: "not_command"` — сообщение не про управление памятью,
+    вызывающая сторона продолжает обычный путь.
+    """
+    outcome = try_admin_command(session, text=body.text)
     session.commit()
     return {"status": outcome.status, "text": outcome.text}
 

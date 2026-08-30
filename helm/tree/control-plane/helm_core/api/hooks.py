@@ -46,6 +46,7 @@ from ..knowledge.chat_intake import (
     ATTACHMENT_TOO_LARGE_NOTICE, AttachmentTooLarge, format_domain_menu,
     resolve_outcome_text, resolve_pending_domain, stage_attachment,
 )
+from ..knowledge.admin import detect_admin_command, try_admin_command
 from ..knowledge.memory import detect_remember_command, try_remember
 from ..knowledge.probe import probe, query_hash
 from ..knowledge.tenancy import bind_knowledge_user
@@ -270,6 +271,18 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
                     payload_reference={"text": outcome.text})
             session.commit()
             return {"status": f"remember_{outcome.status}"}
+
+        # §14.16 — там же и по той же причине, что «Запомни»: команда
+        # управления памятью не должна попадать в диалог выбора домена
+        # как неверный ответ, и не должна уходить в поиск («Забудь про
+        # код домофона» иначе было бы понято как просьба его НАЙТИ).
+        if detect_admin_command(inbound.text) is not None:
+            admin_outcome = try_admin_command(session, text=inbound.text)
+            enqueue(session, channel="max", recipient=inbound.chat_id,
+                    reference=f"admin-{admin_outcome.status}:{inbound.message_id}",
+                    payload_reference={"text": admin_outcome.text})
+            session.commit()
+            return {"status": f"admin_{admin_outcome.status}"}
 
         if has_pending_batch:
             batch_outcome = resolve_batch_domain(session, channel="max", reply_text=inbound.text)

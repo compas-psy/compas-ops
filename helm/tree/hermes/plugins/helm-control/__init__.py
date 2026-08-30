@@ -92,6 +92,7 @@ BATCH_RESOLVE_URL = "http://127.0.0.1:8080/internal/knowledge/batches/resolve-do
 #: P8.5.12 Micro-Memory «Запомни» — тот же HMAC-паттерн (см.
 #: helm_core/api/internal.py: POST /internal/knowledge/remember).
 KNOWLEDGE_REMEMBER_URL = "http://127.0.0.1:8080/internal/knowledge/remember"
+KNOWLEDGE_ADMIN_URL = "http://127.0.0.1:8080/internal/knowledge/admin"
 HMAC_SECRET_PATH = "/etc/helm/secrets/hermes_service_hmac"
 REQUEST_TIMEOUT = 5
 #: §14.5.1 "bounded size" — тот же потолок, что уже применяется на
@@ -302,6 +303,39 @@ _REMEMBER_PREFIX_RE = re.compile(
 
 def _looks_like_remember_command(text: str) -> bool:
     return bool(_REMEMBER_PREFIX_RE.match(text))
+
+
+#: §14.16 — тот же критерий, что helm_core.knowledge.admin.
+#: detect_admin_command() на стороне Control Plane; здесь достаточно
+#: решить, стоит ли вообще звать сервер. Якорь на начало обязателен:
+#: «Не забудь купить молоко» — это «запомни», а не «забудь».
+_ADMIN_PREFIX_RE = re.compile(
+    r"^\s*(?:удали\s+(?:это\s+)?навсегда|сотри\s+(?:это\s+)?навсегда"
+    r"|верни(?:те)?\s+в\s+память|восстанови(?:те)?"
+    r"|забудь(?:те)?|не\s+используй|исправь(?:те)?)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_admin_command(text: str) -> bool:
+    return bool(_ADMIN_PREFIX_RE.match(text))
+
+
+def _try_admin_command(text: str) -> dict:
+    """POST /internal/knowledge/admin. Fail-CLOSED по той же причине, что
+    и «Запомни»: половина этих команд необратима, и «модель вежливо
+    подтвердила, а на деле ничего не произошло» здесь хуже, чем явная
+    ошибка."""
+    body = json.dumps({"text": text}).encode("utf-8")
+    ts = str(time.time())
+    sig = _sign(_read_secret(), ts, body)
+    req = urllib.request.Request(
+        KNOWLEDGE_ADMIN_URL, data=body, method="POST",
+        headers={"Content-Type": "application/json", "X-Helm-Timestamp": ts,
+                "X-Helm-Signature": sig},
+    )
+    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        return json.loads(resp.read().decode())
 
 
 #: §14.4.0: "ZIP must no longer be treated as a MarkItDown document
@@ -551,6 +585,21 @@ def _on_pre_gateway_dispatch(event, gateway):
             if remember_result.get("text"):
                 _send_reply(gateway, source, remember_result["text"])
             return {"action": "skip", "reason": "knowledge_remember_" + remember_result["status"]}
+
+    # §14.16: там же и по той же причине. «Забудь про код домофона» иначе
+    # ушло бы в обычный поиск и было бы понято как просьба этот код
+    # НАЙТИ — ровно наоборот тому, о чём просили.
+    if _looks_like_admin_command(event.text):
+        try:
+            admin_result = _try_admin_command(event.text)
+        except Exception as exc:
+            print(f"[helm-control] knowledge_admin failed: {exc!r}", flush=True)
+            _send_reply(gateway, source, "HELM Control Plane недоступен. Ничего не изменил.")
+            return {"action": "skip", "reason": "control_plane_unavailable: " + str(exc)}
+        if admin_result.get("status") != "not_command":
+            if admin_result.get("text"):
+                _send_reply(gateway, source, admin_result["text"])
+            return {"action": "skip", "reason": "knowledge_admin_" + admin_result["status"]}
 
     # P8.5.7 шаг 2: если на этом канале есть неразрешённое вложение, это
     # текстовое сообщение — ответ на диалог выбора домена (номер/имя/
