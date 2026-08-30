@@ -284,7 +284,7 @@ class FakeBridge:
 
 
 @pytest.fixture
-def app(engine):
+def app(engine, tmp_path, monkeypatch):
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     settings = Settings(database_url=DB_URL, policy_path=POLICY_PATH, owner_id=OWNER_ID,
@@ -292,6 +292,23 @@ def app(engine):
     application = create_app(settings, service_secret=SERVICE_SECRET)
     application.state.max_webhook_secret = WEBHOOK_SECRET
     application.state.hermes_bridge = FakeBridge()
+    # НАЙДЕНО 30.08.2026: hooks.py зовёт stage_attachment()/resolve_pending_
+    # domain() без spool_root/vault_root — реальные тесты вложений писали в
+    # /opt/helm-state/knowledge-spool и /opt/helm-knowledge на ЭТОЙ машине
+    # (песочница разработки, не боевой сервер, но всё равно грязно —
+    # десятки файлов-мусора накопились за сессию). Значения по умолчанию
+    # у этих функций связаны на момент def (Python не перечитывает module-level константу
+    # при каждом вызове) — monkeypatch самой DEFAULT_SPOOL_ROOT в
+    # chat_intake ничего бы не дал; подменяем сами имена в hooks.py.
+    import helm_core.api.hooks as hooks_module
+    spool_root = str(tmp_path / "spool")
+    vault_root = str(tmp_path / "vault")
+    real_stage = hooks_module.stage_attachment
+    real_resolve = hooks_module.resolve_pending_domain
+    monkeypatch.setattr(hooks_module, "stage_attachment",
+                        lambda *a, **kw: real_stage(*a, spool_root=spool_root, **kw))
+    monkeypatch.setattr(hooks_module, "resolve_pending_domain",
+                        lambda *a, **kw: real_resolve(*a, vault_root=vault_root, **kw))
     return application
 
 
