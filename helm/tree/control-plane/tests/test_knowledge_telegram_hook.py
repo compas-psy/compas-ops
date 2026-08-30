@@ -94,6 +94,16 @@ def test_webhook_fails_closed_when_no_secret_configured(app, client):
     assert response.status_code == 403
 
 
+def test_webhook_fails_closed_against_guessed_secret_when_none_configured(app, client):
+    """Пустой секрет — не гипотеза, а рабочее состояние сервера: файл
+    секрета создаётся выкатом пустым, пока владелец не завёл бота в
+    BotFather. Атакующий пришлёт не пустой заголовок, а догадку — она
+    тоже обязана получить 403, иначе непровизионированный бот открыт."""
+    app.state.knowledge_telegram_webhook_secret = ""
+    response = post_hook(client, _private_message("hello"), secret="podobrannyj-sekret")
+    assert response.status_code == 403
+
+
 # ── /start onboarding ────────────────────────────────────────────────────────
 
 def test_start_with_valid_invite_binds_identity_and_activates(app, client):

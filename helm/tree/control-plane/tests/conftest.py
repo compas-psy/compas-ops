@@ -20,7 +20,7 @@ from helm_core.models import Base, KnowledgeUser, KnowledgeUserRole
 
 OWNER_ID = "tg:100500"
 POLICY_PATH = os.environ.get("HELM_POLICY", "../config/policies/actions.yaml")
-DB_URL = os.environ.get("HELM_TEST_DB", "postgresql+psycopg://helm@/helm_test?host=/tmp&port=55432")
+DB_URL = os.environ.get("HELM_TEST_DB", "postgresql+psycopg://helm_rls@/helm_test?host=/tmp&port=55432")
 
 #: v3.8: id фиксированный, а не uuid4() на тест, чтобы тесты, которым нужен
 #: SYSTEM_OWNER явно (RLS/tenancy-тесты), могли сослаться на него без
@@ -45,9 +45,41 @@ def seed_system_owner(engine) -> None:
         s.commit()
 
 
+def refuse_rls_bypassing_role(eng) -> None:
+    """Отказаться работать, если тестовая роль обходит RLS.
+
+    Postgres пропускает суперпользователя и роль с BYPASSRLS мимо
+    политик всегда — FORCE ROW LEVEL SECURITY на это не влияет. Под
+    такой ролью tenancy-тесты падают шестью невнятными диффами вида
+    «список содержит на один элемент больше», и на выяснение причины
+    уходит полчаса (потрачено 30.08.2026).
+
+    Раньше требование к роли жило только в прозе V3.8-DELTA.md и в
+    памяти о том, что роль «понижали руками». Пересоздание среды это
+    знание не пережило. Здесь оно проверяется.
+    """
+    with eng.connect() as conn:
+        row = conn.execute(text(
+            "select rolsuper, rolbypassrls from pg_roles where rolname = current_user"
+        )).one()
+    if not (row.rolsuper or row.rolbypassrls):
+        return
+    raise RuntimeError(
+        "тестовая роль обходит RLS (rolsuper или rolbypassrls), политики "
+        "проверены не будут. Завести отдельную роль и указать её в "
+        "HELM_TEST_DB (bootstrap-роль понизить нельзя, Postgres запрещает):\n"
+        "  create role helm_rls login nosuperuser nobypassrls;\n"
+        "  alter database helm_test owner to helm_rls;\n"
+        "  drop schema public cascade;\n"
+        "  create schema public authorization helm_rls;\n"
+        "подробнее — tests/README.md"
+    )
+
+
 @pytest.fixture(scope="session")
 def engine():
     eng = create_engine(DB_URL)
+    refuse_rls_bypassing_role(eng)
     Base.metadata.drop_all(eng)
     Base.metadata.create_all(eng)
     # v3.8: RLS-политики не часть SQLAlchemy metadata — create_all() их не
