@@ -33,6 +33,10 @@ on:
           - migrate       # alembic upgrade head (после deploy)
           - restore-test  # backup.sh + restore_test.sh
           - rollback      # alembic downgrade до указанной ревизии
+      code_ref:
+        description: 'Ветка с кодом для выката'
+        required: false
+        default: main
       revision:
         description: 'Ревизия для rollback (например 03af17f40250)'
         required: false
@@ -56,7 +60,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      # Логика workflow берётся из main (иначе его нечем запустить), а КОД
+      # для выката — из указанной ветки. Без этого разделения выкат
+      # поставил бы на сервер содержимое main, даже когда работа лежит на
+      # рабочей ветке: поймано отменённым запуском 30.08.2026.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.code_ref }}
+
+      - name: Что именно выкатывается
+        run: |
+          echo "ветка: ${{ inputs.code_ref }}"
+          echo "коммит: $(git rev-parse HEAD)"
+          git log -1 --pretty=%s
 
       # keyscan работает БЕЗ секретов: это первый шаг настройки, когда
       # VPS_KNOWN_HOSTS ещё неоткуда взять. Нужен потому, что ssh-keyscan
