@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import base64
 import uuid
 from decimal import Decimal
 from typing import Any
@@ -19,6 +20,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..ingest import IngestService, NotOwner
+from ..knowledge.chat_intake import (
+    ATTACHMENT_TOO_LARGE_NOTICE, AttachmentTooLarge, format_domain_menu,
+    resolve_outcome_text, resolve_pending_domain, stage_attachment,
+)
 from ..knowledge.probe import probe
 from ..models import ModelRun, Task, TaskEvent, TaskStatus, utcnow
 from ..outbox import enqueue
@@ -76,6 +81,65 @@ def knowledge_probe(body: KnowledgeProbeIn,
     result = probe(session, query=body.query, domain=body.domain)
     session.commit()
     return {"outcome": result.outcome, "mode": result.mode, "answer_text": result.answer_text}
+
+
+class AttachmentStageIn(BaseModel):
+    channel: str = Field(min_length=1, max_length=32)
+    #: Байты файла, base64 — HTTP JSON не переносит бинарные данные
+    #: напрямую. Лимит размера всё равно проверяет stage_attachment() на
+    #: РАСКОДИРОВАННЫХ байтах (MAX_ATTACHMENT_BYTES), не на длине base64.
+    data_base64: str = Field(min_length=1)
+    original_filename: str | None = Field(default=None, max_length=255)
+    mime_type: str | None = Field(default=None, max_length=128)
+    caption: str | None = None
+
+
+@router.post("/knowledge/attachment/stage")
+def knowledge_attachment_stage(body: AttachmentStageIn,
+                               session: Session = Depends(get_session)) -> dict[str, Any]:
+    """P8.5.7 Telegram-сторона: `helm-control` работает вне процесса
+    Control Plane (хост Hermes, свой venv) и не может звать
+    `chat_intake.py` напрямую — этот эндпоинт даёт то же самое, что
+    `/hooks/max` делает in-process, по HMAC-подписанному HTTP (тот же
+    паттерн, что `/internal/inbound`/`/internal/knowledge/probe`).
+    """
+    try:
+        data = base64.b64decode(body.data_base64, validate=True)
+    except Exception as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"data_base64 не декодируется: {exc}")
+
+    try:
+        pending = stage_attachment(session, channel=body.channel, data=data,
+                                   original_filename=body.original_filename,
+                                   mime_type=body.mime_type, caption=body.caption)
+    except AttachmentTooLarge:
+        session.rollback()
+        return {"status": "too_large", "text": ATTACHMENT_TOO_LARGE_NOTICE}
+    session.commit()
+    return {"status": "staged", "pending_id": str(pending.id),
+            "text": format_domain_menu(pending.original_filename)}
+
+
+class AttachmentResolveIn(BaseModel):
+    channel: str = Field(min_length=1, max_length=32)
+    reply_text: str = Field(min_length=1)
+    recipient: str | None = Field(default=None, max_length=128)
+
+
+@router.post("/knowledge/attachment/resolve")
+def knowledge_attachment_resolve(body: AttachmentResolveIn,
+                                 session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Продолжение диалога (шаг 2, P8.5.7) для Telegram — тот же
+    `resolve_pending_domain()`, что MAX вызывает in-process. `status:
+    "not_pending"` означает «это сообщение не про вложение» — вызывающая
+    сторона (helm-control) продолжает обычный `_register_task`/
+    `_probe_local_answer` путь как раньше, `text` в ответе для этого
+    случая — `None`.
+    """
+    outcome = resolve_pending_domain(session, channel=body.channel, reply_text=body.reply_text,
+                                     recipient=body.recipient)
+    session.commit()
+    return {"status": outcome.status, "text": resolve_outcome_text(outcome)}
 
 
 class OutboundMessage(BaseModel):

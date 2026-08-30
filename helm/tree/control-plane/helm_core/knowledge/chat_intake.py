@@ -235,3 +235,36 @@ def resolve_pending_domain(session: Session, *, channel: str, reply_text: str,
     session.delete(pending)
     session.flush()
     return ResolveOutcome(status="ingested", result=result, pending=pending)
+
+
+#: Тексты владельцу для каждого исхода resolve_pending_domain()/
+#: stage_attachment() — общие для ОБОИХ каналов (MAX — /hooks/max
+#: in-process, Telegram — /internal/knowledge/attachment/* по HTTP,
+#: P8.5.7). Единственное место, где эти строки записаны — расхождение
+#: формулировок между каналами уже не раз стоило отдельного раунда
+#: отладки в этой сессии (cross-channel дедуп, домены), здесь оно
+#: структурно невозможно.
+ATTACHMENT_TOO_LARGE_NOTICE = "Файл слишком большой — не сохранён."
+ATTACHMENT_MISSING_NOTICE = "Файл потерян на сервере — пришлите, пожалуйста, ещё раз."
+ATTACHMENT_MOVE_FAILED_NOTICE = (
+    "Не получилось сохранить файл — попробуйте выбрать домен ещё раз."
+)
+ATTACHMENT_CANCELLED_NOTICE = "Хорошо, не сохраняю."
+
+
+def resolve_outcome_text(outcome: ResolveOutcome) -> str | None:
+    """Текст владельцу для исхода `resolve_pending_domain()`. None —
+    только для `not_pending`: вызывающая сторона продолжает обычный
+    register()/probe()/chief pipeline, ответа от диалога вложений нет."""
+    if outcome.status == "ingested":
+        return (f"Сохранено в «{outcome.result.source.domain}». "
+               "Разбор запущен, появится в базе знаний в фоне.")
+    if outcome.status == "cancelled":
+        return ATTACHMENT_CANCELLED_NOTICE
+    if outcome.status == "missing":
+        return ATTACHMENT_MISSING_NOTICE
+    if outcome.status == "failed":
+        return ATTACHMENT_MOVE_FAILED_NOTICE
+    if outcome.status == "invalid":
+        return format_domain_menu(outcome.pending.original_filename)
+    return None  # not_pending

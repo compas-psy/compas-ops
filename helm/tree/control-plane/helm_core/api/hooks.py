@@ -39,7 +39,8 @@ from ..channels.max import (
 from ..hermes_bridge import HermesUnavailable
 from ..ingest import IngestService, record_channel_event_once
 from ..knowledge.chat_intake import (
-    AttachmentTooLarge, format_domain_menu, resolve_pending_domain, stage_attachment,
+    ATTACHMENT_TOO_LARGE_NOTICE, AttachmentTooLarge, format_domain_menu,
+    resolve_outcome_text, resolve_pending_domain, stage_attachment,
 )
 from ..knowledge.probe import probe, query_hash
 from ..models import KnowledgeAnswerRun, KnowledgePendingAttachment, TaskEvent
@@ -65,12 +66,9 @@ ATTACHMENT_DOWNLOAD_FAILED_NOTICE = (
     "Не смог скачать вложение — попробуйте прислать ещё раз или сообщите "
     "об ошибке."
 )
-ATTACHMENT_TOO_LARGE_NOTICE = "Файл слишком большой — не сохранён."
-ATTACHMENT_MISSING_NOTICE = "Файл потерян на сервере — пришлите, пожалуйста, ещё раз."
-ATTACHMENT_MOVE_FAILED_NOTICE = (
-    "Не получилось сохранить файл — попробуйте выбрать домен ещё раз."
-)
-ATTACHMENT_CANCELLED_NOTICE = "Хорошо, не сохраняю."
+#: ATTACHMENT_TOO_LARGE_NOTICE и тексты для cancelled/missing/failed/
+#: invalid/ingested — в chat_intake.py (resolve_outcome_text()), общие с
+#: Telegram-стороной P8.5.7 (/internal/knowledge/attachment/*).
 
 
 def _run_chief_and_enqueue_reply(state: State, *, task_id: str, owner_id: str,
@@ -207,45 +205,25 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
 
         resolved = resolve_pending_domain(session, channel="max", reply_text=inbound.text,
                                           recipient=inbound.chat_id)
-        if resolved.status == "ingested":
-            enqueue(session, channel="max", recipient=inbound.chat_id,
-                    reference=f"attachment-ingested:{resolved.result.source.id}",
-                    payload_reference={"text": (
-                        f"Сохранено в «{resolved.result.source.domain}». "
-                        "Разбор запущен, появится в базе знаний в фоне."
-                    )})
-            session.commit()
-            return {"status": "attachment_ingested"}
-        if resolved.status == "cancelled":
-            enqueue(session, channel="max", recipient=inbound.chat_id,
-                    reference=f"attachment-cancelled:{resolved.pending.id}",
-                    payload_reference={"text": ATTACHMENT_CANCELLED_NOTICE})
-            session.commit()
-            return {"status": "attachment_cancelled"}
-        if resolved.status == "missing":
-            enqueue(session, channel="max", recipient=inbound.chat_id,
-                    reference=f"attachment-missing:{resolved.pending.id}",
-                    payload_reference={"text": ATTACHMENT_MISSING_NOTICE})
-            session.commit()
-            return {"status": "attachment_missing"}
-        if resolved.status == "failed":
-            # Файл остаётся в spool, pending НЕ снят — можно повторить
-            # выбор домена без повторной отправки файла (message_id
-            # следующей попытки будет новым, record_channel_event_once её
-            # не заблокирует).
-            enqueue(session, channel="max", recipient=inbound.chat_id,
-                    reference=f"attachment-move-failed:{resolved.pending.id}:{inbound.message_id}",
-                    payload_reference={"text": ATTACHMENT_MOVE_FAILED_NOTICE})
-            session.commit()
-            return {"status": "attachment_move_failed"}
-        # status == "invalid": повторяем меню — reference несёт message_id,
-        # иначе повторный неверный ответ не долетел бы (exactly-once по
+        # "invalid"/"failed" несут message_id в reference — иначе повторный
+        # неверный ответ/повторная попытка не долетели бы (exactly-once по
         # reference в outbox, а pending.id один и тот же на все попытки).
-        enqueue(session, channel="max", recipient=inbound.chat_id,
-                reference=f"attachment-retry:{resolved.pending.id}:{inbound.message_id}",
-                payload_reference={"text": format_domain_menu(resolved.pending.original_filename)})
-        session.commit()
-        return {"status": "attachment_domain_invalid"}
+        pending_id = resolved.pending.id if resolved.pending else None
+        reference, response_status = {
+            "ingested": (f"attachment-ingested:{resolved.result.source.id if resolved.result else ''}",
+                        "attachment_ingested"),
+            "cancelled": (f"attachment-cancelled:{pending_id}", "attachment_cancelled"),
+            "missing": (f"attachment-missing:{pending_id}", "attachment_missing"),
+            "failed": (f"attachment-move-failed:{pending_id}:{inbound.message_id}",
+                      "attachment_move_failed"),
+            "invalid": (f"attachment-retry:{pending_id}:{inbound.message_id}",
+                       "attachment_domain_invalid"),
+        }.get(resolved.status, (None, None))
+        if reference is not None:
+            enqueue(session, channel="max", recipient=inbound.chat_id, reference=reference,
+                    payload_reference={"text": resolve_outcome_text(resolved)})
+            session.commit()
+            return {"status": response_status}
 
     service = IngestService(session, owner_id=request.app.state.owner_id)
     result = service.register(channel="max", external_message_id=inbound.message_id,

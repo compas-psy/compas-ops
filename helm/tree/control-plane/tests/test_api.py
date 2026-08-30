@@ -1,5 +1,6 @@
 """API Control Plane: HMAC, гейт §9.3 и требования §30.7 к заголовкам."""
 
+import base64
 import time
 import uuid
 
@@ -18,10 +19,24 @@ SERVICE_SECRET = "test-service-secret"
 
 
 @pytest.fixture
-def client(engine):
+def client(engine, tmp_path, monkeypatch):
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     settings = Settings(database_url=DB_URL, policy_path=POLICY_PATH, owner_id=OWNER_ID)
+    # /internal/knowledge/attachment/* (P8.5.7, Telegram) зовёт stage_
+    # attachment()/resolve_pending_domain() без spool_root/vault_root —
+    # без monkeypatch тесты писали бы в реальные /opt/helm-state/
+    # knowledge-spool и /opt/helm-knowledge на этой машине (тот же класс
+    # утечки, что уже нашёлся и починен в test_max_channel.py::app).
+    import helm_core.api.internal as internal_module
+    spool_root = str(tmp_path / "spool")
+    vault_root = str(tmp_path / "vault")
+    real_stage = internal_module.stage_attachment
+    real_resolve = internal_module.resolve_pending_domain
+    monkeypatch.setattr(internal_module, "stage_attachment",
+                        lambda *a, **kw: real_stage(*a, spool_root=spool_root, **kw))
+    monkeypatch.setattr(internal_module, "resolve_pending_domain",
+                        lambda *a, **kw: real_resolve(*a, vault_root=vault_root, **kw))
     return TestClient(create_app(settings, service_secret=SERVICE_SECRET))
 
 
@@ -83,6 +98,85 @@ def test_knowledge_probe_endpoint_returns_local_answer(client):
 
 def test_knowledge_probe_endpoint_requires_service_auth(client):
     r = client.post("/internal/knowledge/probe", json={"query": "что угодно"})
+    assert r.status_code == 422 or r.status_code == 401
+
+
+# ── P8.5.7 Telegram-сторона: /internal/knowledge/attachment/* ────────────────
+# helm-control работает вне процесса Control Plane (хост Hermes, свой venv)
+# и не может звать chat_intake.py напрямую — те же функции, что MAX вызывает
+# in-process в /hooks/max, здесь доступны по HMAC-подписанному HTTP.
+
+def test_attachment_stage_endpoint_returns_domain_menu(client):
+    r = post_internal(client, "/internal/knowledge/attachment/stage", {
+        "channel": "telegram",
+        "data_base64": base64.b64encode(b"file bytes").decode(),
+        "original_filename": "report.pdf",
+        "mime_type": "application/pdf",
+    })
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "staged"
+    assert "report.pdf" in body["text"]
+    assert "1. personal" in body["text"]
+
+
+def test_attachment_stage_endpoint_rejects_oversized_file(client):
+    from helm_core.knowledge.chat_intake import MAX_ATTACHMENT_BYTES
+
+    r = post_internal(client, "/internal/knowledge/attachment/stage", {
+        "channel": "telegram",
+        "data_base64": base64.b64encode(b"x" * (MAX_ATTACHMENT_BYTES + 1)).decode(),
+        "original_filename": "huge.bin",
+    })
+
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "too_large"
+
+
+def test_attachment_stage_endpoint_rejects_bad_base64(client):
+    r = post_internal(client, "/internal/knowledge/attachment/stage", {
+        "channel": "telegram", "data_base64": "not-valid-base64!!!",
+    })
+    assert r.status_code == 400
+
+
+def test_attachment_resolve_endpoint_not_pending_when_nothing_staged(client):
+    r = post_internal(client, "/internal/knowledge/attachment/resolve", {
+        "channel": "telegram", "reply_text": "engineering",
+    })
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "not_pending"
+    assert body["text"] is None
+
+
+def test_attachment_resolve_endpoint_ingests_by_domain_alias(client):
+    post_internal(client, "/internal/knowledge/attachment/stage", {
+        "channel": "telegram",
+        "data_base64": base64.b64encode(b"file bytes").decode(),
+        "original_filename": "report.pdf",
+    })
+
+    r = post_internal(client, "/internal/knowledge/attachment/resolve", {
+        "channel": "telegram", "reply_text": "company", "recipient": "12345",
+    })
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "ingested"
+    assert "simpas/company" in body["text"]
+    with client.app.state.session_factory() as session:
+        from sqlalchemy import select
+        from helm_core.models import KnowledgeSource
+        source = session.scalars(select(KnowledgeSource)).one()
+        assert source.domain == "simpas/company"
+
+
+def test_attachment_resolve_endpoint_requires_service_auth(client):
+    r = client.post("/internal/knowledge/attachment/resolve",
+                    json={"channel": "telegram", "reply_text": "engineering"})
     assert r.status_code == 422 or r.status_code == 401
 
 
