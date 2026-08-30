@@ -463,6 +463,10 @@ class KnowledgeIngestJob(Base):
     source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("knowledge_sources.id"), nullable=False)
     #: telegram | max | manual — откуда пришёл файл (§14.5.1).
     channel: Mapped[str | None] = mapped_column(String(32))
+    #: chat_id/адресат для уведомления о завершении разбора (P8.5.7,
+    #: "3 шага": получен -> сохранён, разбор запущен -> разбор завершён).
+    #: None для ingest_text()/тестовых путей — уведомлять там некого.
+    recipient: Mapped[str | None] = mapped_column(String(128))
     status: Mapped[str] = mapped_column(String(16), default=KnowledgeIngestStatus.PENDING,
                                         nullable=False)
     error: Mapped[str | None] = mapped_column(Text)

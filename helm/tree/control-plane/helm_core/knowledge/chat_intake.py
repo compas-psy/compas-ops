@@ -57,6 +57,23 @@ _DOMAINS = list(KnowledgeDomain)
 _CANCEL_SENTINEL = "__cancel__"
 _CANCEL_WORDS = {"отмена", "cancel", "нет", "no"}
 
+#: Короткие псевдонимы для доменов, неудобных для набора на телефоне
+#: (`/` и `-` внутри значения) — найдено живым использованием 29.08.2026,
+#: владелец пытался набрать "simpas/company". Только для доменов, где
+#: полное значение реально длиннее/неудобнее алиаса — `personal`/`health`/
+#: `ventures`/`engineering`/`library` уже короткие однословные, алиас им
+#: не нужен.
+_DOMAIN_ALIASES: dict[str, str] = {
+    "company": KnowledgeDomain.SIMPAS_COMPANY.value,
+    "practice": KnowledgeDomain.SIMPAS_PRACTICE.value,
+    "zapiski": KnowledgeDomain.SIMPAS_ZAPISKI.value,
+    "moments": KnowledgeDomain.SIMPAS_MOMENTS.value,
+    "marketing": KnowledgeDomain.PSY_MARKETING.value,
+    "docs": KnowledgeDomain.SIGNALAI_DOCS.value,
+}
+#: Обратная карта для меню — какой алиас показать рядом с полным именем.
+_ALIAS_BY_DOMAIN: dict[str, str] = {v: k for k, v in _DOMAIN_ALIASES.items()}
+
 
 class AttachmentTooLarge(Exception):
     def __init__(self, size: int, limit: int):
@@ -71,7 +88,10 @@ def format_domain_menu(original_filename: str | None) -> str:
         f"Файл «{original_filename or 'без имени'}» получен и сохранён.",
         "В какой домен положить? Ответьте номером или именем:",
     ]
-    lines.extend(f"{i}. {d.value}" for i, d in enumerate(_DOMAINS, 1))
+    for i, d in enumerate(_DOMAINS, 1):
+        alias = _ALIAS_BY_DOMAIN.get(d.value)
+        label = f"{d.value} ({alias})" if alias else d.value
+        lines.append(f"{i}. {label}")
     lines.append("Или «отмена» — файл не будет сохранён.")
     return "\n".join(lines)
 
@@ -91,6 +111,8 @@ def parse_domain_reply(text: str) -> str | None:
             return _DOMAINS[idx - 1].value
         return None
     lowered = stripped.casefold()
+    if lowered in _DOMAIN_ALIASES:
+        return _DOMAIN_ALIASES[lowered]
     for d in _DOMAINS:
         if d.value.casefold() == lowered:
             return d.value
@@ -133,10 +155,16 @@ class ResolveOutcome:
 
 
 def resolve_pending_domain(session: Session, *, channel: str, reply_text: str,
+                           recipient: str | None = None,
                            vault_root: str = DEFAULT_VAULT_ROOT) -> ResolveOutcome:
     """Вызывается ДО обычного register_task/probe/chief pipeline. Возврат
     `not_pending` означает «это сообщение не про вложение» — вызывающая
-    сторона продолжает обычный путь как раньше."""
+    сторона продолжает обычный путь как раньше.
+
+    `recipient` — chat_id/адресат, куда воркер пришлёт уведомление о
+    завершении разбора (P8.5.7, третий шаг). Не обязателен: без него
+    ingest всё равно проходит, просто уведомления о завершении не будет.
+    """
     pending = session.scalar(
         select(KnowledgePendingAttachment)
         .where(KnowledgePendingAttachment.channel == channel)
@@ -202,7 +230,7 @@ def resolve_pending_domain(session: Session, *, channel: str, reply_text: str,
     result = register_file_for_ingest(
         session, domain=domain, raw_path=raw_path,
         original_filename=pending.original_filename, mime_type=pending.mime_type,
-        sensitivity=sensitivity, channel=channel, vault_root=vault_root,
+        sensitivity=sensitivity, channel=channel, recipient=recipient, vault_root=vault_root,
     )
     session.delete(pending)
     session.flush()

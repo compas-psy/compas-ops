@@ -17,7 +17,10 @@ from sqlalchemy import select
 from helm_core.knowledge.ingest import register_file_for_ingest
 from helm_core.knowledge import worker as worker_module
 from helm_core.knowledge.worker import claim_next_job, process_job
-from helm_core.models import KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus, KnowledgeSource, KnowledgeStatus
+from helm_core.models import (
+    KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus, KnowledgeSource, KnowledgeStatus,
+    OutboxMessage,
+)
 
 
 # ── register_file_for_ingest() ────────────────────────────────────────────
@@ -55,13 +58,15 @@ def test_register_file_for_ingest_dedups_by_sha256(session, tmp_path):
 
 # ── claim_next_job() ────────────────────────────────────────────────────
 
-def _make_pending_job(session, tmp_path, name: str) -> KnowledgeIngestJob:
+def _make_pending_job(session, tmp_path, name: str, *, channel: str | None = None,
+                      recipient: str | None = None) -> KnowledgeIngestJob:
     raw = tmp_path / name
     raw.write_text(f"содержимое {name}", encoding="utf-8")
     # vault_root=tmp_path: process_job() пишет L1 SOURCE .md на диск —
     # /opt/helm-knowledge не должен трогаться при прогоне тестов.
     result = register_file_for_ingest(session, domain="engineering", raw_path=raw,
-                                      original_filename=name, vault_root=str(tmp_path))
+                                      original_filename=name, vault_root=str(tmp_path),
+                                      channel=channel, recipient=recipient)
     session.flush()
     return result.job
 
@@ -172,3 +177,60 @@ def test_process_job_missing_source_marks_failed(session):
 
     assert job.status == KnowledgeIngestStatus.FAILED
     assert "не найден" in job.error
+
+
+# ── P8.5.7, "3 шага": уведомление владельца по завершении разбора ─────────
+
+def test_process_job_done_with_recipient_enqueues_completion_notice(session, tmp_path, monkeypatch):
+    job = _make_pending_job(session, tmp_path, "doc.txt", channel="max", recipient="777")
+    monkeypatch.setattr(worker_module, "parse_file",
+                        lambda path: _FakeParseResult(text="Решение: используем Postgres.",
+                                                      parser="markitdown", quality_ok=True))
+
+    process_job(session, job)
+    session.flush()
+
+    message = session.scalars(select(OutboxMessage)).one()
+    assert message.channel == "max"
+    assert message.recipient == "777"
+    assert "doc.txt" in message.payload_reference["text"]
+    assert "завершён" in message.payload_reference["text"]
+
+
+def test_process_job_needs_review_with_recipient_enqueues_notice(session, tmp_path, monkeypatch):
+    job = _make_pending_job(session, tmp_path, "bad.pdf", channel="max", recipient="777")
+    monkeypatch.setattr(worker_module, "parse_file",
+                        lambda path: _FakeParseResult(text="nnnnnnn", parser="docling",
+                                                      quality_ok=False))
+
+    process_job(session, job)
+    session.flush()
+
+    message = session.scalars(select(OutboxMessage)).one()
+    assert "не удался" in message.payload_reference["text"]
+
+
+def test_process_job_failed_with_recipient_enqueues_notice(session, tmp_path, monkeypatch):
+    job = _make_pending_job(session, tmp_path, "corrupt.docx", channel="max", recipient="777")
+    monkeypatch.setattr(worker_module, "parse_file",
+                        lambda path: (_ for _ in ()).throw(ValueError("повреждённый файл")))
+
+    process_job(session, job)
+    session.flush()
+
+    message = session.scalars(select(OutboxMessage)).one()
+    assert "ошибкой" in message.payload_reference["text"]
+
+
+def test_process_job_without_recipient_does_not_notify(session, tmp_path, monkeypatch):
+    """ingest_text()/тестовые пути не задают channel/recipient — уведомлять
+    некого, тихий no-op, а не KeyError/попытка отправить в никуда."""
+    job = _make_pending_job(session, tmp_path, "doc.txt")  # channel=None, recipient=None
+    monkeypatch.setattr(worker_module, "parse_file",
+                        lambda path: _FakeParseResult(text="текст", parser="markitdown",
+                                                      quality_ok=True))
+
+    process_job(session, job)
+    session.flush()
+
+    assert session.scalars(select(OutboxMessage)).all() == []

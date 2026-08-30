@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from .ingest import split_chunks
 from .parsers import parse_file
 from ..models import KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus, KnowledgeSource, KnowledgeStatus
+from ..outbox import enqueue
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ def process_job(session: Session, job: KnowledgeIngestJob) -> None:
         job.error = "source не найден"
         return
 
+    chunk_count = 0
     try:
         result = parse_file(Path(source.raw_path))
         source.parser = result.parser
@@ -90,11 +92,43 @@ def process_job(session: Session, job: KnowledgeIngestJob) -> None:
                 source_id=source.id, ordinal=ordinal, text=chunk_text,
                 tsv=func.to_tsvector("russian", chunk_text),
             ))
+            chunk_count += 1
         job.status = KnowledgeIngestStatus.DONE
     except Exception as exc:
         job.status = KnowledgeIngestStatus.FAILED
         job.error = f"{type(exc).__name__}: {exc}"
         logger.warning("knowledge ingest job %s failed: %s", job.id, job.error)
+    finally:
+        # P8.5.7, "3 шага": получен -> сохранён/разбор запущен -> разбор
+        # завершён. finally — уведомление уходит независимо от того, каким
+        # путём process_job() вышел (return из quality-gate-провала,
+        # обычный конец при DONE, или except при исключении).
+        _notify_owner_of_result(session, job, source, chunk_count)
+
+
+def _notify_owner_of_result(session: Session, job: KnowledgeIngestJob,
+                            source: KnowledgeSource, chunk_count: int) -> None:
+    """Третий шаг диалога вложений (P8.5.7) — только для job'ов, заведённых
+    из чата (`channel`+`recipient` заполнены `chat_intake.py`). `ingest_
+    text()`/тестовые пути их не задают — уведомлять там некого, тихий
+    no-op. Провал постановки в очередь не должен портить уже посчитанный
+    результат разбора — это уведомление, не часть основной гарантии job'а."""
+    if not job.channel or not job.recipient:
+        return
+    filename = source.original_filename or "без имени"
+    if job.status == KnowledgeIngestStatus.DONE:
+        text = f"Разбор «{filename}» завершён — сохранено фрагментов: {chunk_count}."
+    elif job.status == KnowledgeIngestStatus.NEEDS_REVIEW:
+        text = (f"Разбор «{filename}» не удался — не получилось надёжно "
+               "извлечь текст. Файл сохранён, но не добавлен в базу знаний как факт.")
+    else:
+        text = f"Разбор «{filename}» завершился ошибкой — попробуйте прислать файл ещё раз."
+    try:
+        enqueue(session, channel=job.channel, recipient=job.recipient,
+               reference=f"ingest-result:{job.id}", payload_reference={"text": text})
+    except Exception:
+        logger.exception("knowledge ingest job %s: не удалось поставить уведомление в очередь",
+                         job.id)
 
 
 def run_forever(session_factory) -> None:  # pragma: no cover — процесс-луп

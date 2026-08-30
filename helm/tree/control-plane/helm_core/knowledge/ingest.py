@@ -99,7 +99,7 @@ def register_file_for_ingest(session: Session, *, domain: str, raw_path: Path,
                              original_filename: str | None = None,
                              mime_type: str | None = None,
                              sensitivity: str = "internal", trust: str = "extracted",
-                             channel: str | None = None,
+                             channel: str | None = None, recipient: str | None = None,
                              vault_root: str = DEFAULT_VAULT_ROOT) -> RegisterFileResult:
     """Зарегистрировать файл, уже лежащий на диске, для асинхронного парсинга.
 
@@ -123,7 +123,7 @@ def register_file_for_ingest(session: Session, *, domain: str, raw_path: Path,
     session.add(source)
     session.flush()
 
-    job = KnowledgeIngestJob(source_id=source.id, channel=channel,
+    job = KnowledgeIngestJob(source_id=source.id, channel=channel, recipient=recipient,
                              status=KnowledgeIngestStatus.PENDING)
     session.add(job)
     session.flush()

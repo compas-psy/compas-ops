@@ -118,20 +118,48 @@ MAX/Telegram (лимит `helm-core` — 768MB).
 задаёт UX для этого) — `helm_core/knowledge/chat_intake.py`, подробности
 и обоснование — `docs/adr/ADR-021-knowledge-attachment-transport.md`:
 
+**Три шага, не два** (решение владельца по итогам живого теста
+29.08.2026 — изначально было два, третьего уведомления о завершении
+разбора не было вовсе):
+
 ```text
-файл → spool (stage_attachment) → KnowledgePendingAttachment (FIFO по
-       created_at внутри channel) → меню доменов владельцу
-следующее сообщение того же канала:
-  номер/имя домена → resolve_pending_domain → atomic move в
-                     raw/<domain>/ → register_file_for_ingest()
-  "отмена"/cancel/нет → снять запись, удалить файл из spool
-  что угодно ещё → меню повторяется, pending не трогается
+1. файл → spool (stage_attachment) → KnowledgePendingAttachment (FIFO по
+          created_at внутри channel) → меню доменов владельцу
+2. следующее сообщение того же канала:
+     номер/имя/псевдоним домена → resolve_pending_domain → перенос в
+                        raw/<domain>/ → register_file_for_ingest()
+                        → «Сохранено в «X». Разбор запущен...»
+     "отмена"/cancel/нет → снять запись, удалить файл из spool
+     что угодно ещё → меню повторяется, pending не трогается
+3. worker.py, асинхронно, по завершении job'а →
+     DONE → «Разбор «X» завершён — сохранено фрагментов: N»
+     NEEDS_REVIEW → «Разбор «X» не удался — ...»
+     FAILED → «Разбор «X» завершился ошибкой — ...»
 ```
 
+Шаг 3 работает через тот же `outbox`, что и остальная доставка:
+`worker.py::process_job()` (отдельный контейнер `helm-knowledge-worker`)
+пишет строку в `outbox` напрямую (`KnowledgeIngestJob.recipient` — новая
+колонка, alembic `03af17f40250`, заполняется `chat_intake.py` из
+`inbound.chat_id`), а забирает и доставляет её фоновый цикл `helm-core`
+(`_dispatch_loop`, опрос раз в 5 сек) — тот же процесс, что уже
+доставляет обычные ответы chief и подтверждения P8.5.7. Никакой новой
+инфраструктуры доставки не потребовалось, только общая таблица.
+`ingest_text()`/тестовые пути `channel`/`recipient` не задают — для них
+уведомление тихо не отправляется (уведомлять некого).
+
 Пока есть неразрешённое вложение на канале — следующее текстовое
-сообщение перехватывается этим диалогом и не доходит до `register()`/
+сообщение перехватывается диалогом шага 2 и не доходит до `register()`/
 Probe/chief (осознанно, не баг: «отмена» снимает вложение, если владелец
 на самом деле хотел спросить что-то другое).
+
+**Короткие псевдонимы доменов** (тоже по итогам живого теста — набирать
+`simpas/company` на телефоне неудобно): `company`→`simpas/company`,
+`practice`→`simpas/practice`, `zapiski`→`simpas/zapiski`,
+`moments`→`simpas/moments`, `marketing`→`psy-marketing`,
+`docs`→`signalai-docs`. Показаны в меню рядом с полным именем. Домены,
+и так однословные без `/`/`-` (`personal`, `health`, `ventures`,
+`engineering`, `library`), псевдонима не получили — не нужен.
 
 `simpas/zapiski` через этот диалог принудительно получает
 `sensitivity=client_restricted` (§14.15: "not indexed into general
@@ -202,14 +230,13 @@ line, актуальной на дату установки) живым бенч
 ## Тесты
 
 `tests/test_knowledge_parsers.py` (11), `tests/test_knowledge_worker.py`
-(9, включая регрессию на краш-луп — `Path.write_text` монкипатчится на
-`PermissionError` после успешного парсинга, проверяется `FAILED` вместо
-падения процесса), `tests/test_knowledge_probe.py` (15, включая
+(13, включая регрессию на краш-луп и 4 теста на уведомление о завершении
+разбора — шаг 3), `tests/test_knowledge_probe.py` (15, включая
 `ingest_text()` и исключение `simpas/zapiski` из общего поиска),
-`tests/test_knowledge_chat_intake.py` (20, движок двухшагового диалога
-изолированно, включая регрессию на cross-device rename) — 192/192
-зелёных вместе с остальным control-plane (включая MAX-вложения в
-`tests/test_max_channel.py`). Fixture-матрица
+`tests/test_knowledge_chat_intake.py` (27, движок диалога изолированно,
+включая cross-device rename и псевдонимы доменов) — 203/203 зелёных
+вместе с остальным control-plane (включая MAX-вложения в `tests/
+test_max_channel.py`). Fixture-матрица
 §30.8.5 полностью (сложный/табличный PDF, скан, аудио,
 prompt-injection документ) недостижима без живой проверки GigaAM на
 сервере (Docling-часть уже подтверждена живьём выше) — появится вместе

@@ -40,6 +40,26 @@ def test_parse_domain_reply_out_of_range_number_is_invalid():
     assert parse_domain_reply("999") is None
 
 
+@pytest.mark.parametrize("alias, expected", [
+    ("company", "simpas/company"),
+    ("Practice", "simpas/practice"),
+    ("ZAPISKI", "simpas/zapiski"),
+    ("moments", "simpas/moments"),
+    ("marketing", "psy-marketing"),
+    ("docs", "signalai-docs"),
+])
+def test_parse_domain_reply_short_alias(alias, expected):
+    """Найдено живым использованием 29.08.2026: 'simpas/company' неудобно
+    набирать на телефоне — короткие алиасы для доменов с '/' или '-'."""
+    assert parse_domain_reply(alias) == expected
+
+
+def test_format_domain_menu_shows_alias_next_to_full_name():
+    menu = format_domain_menu("report.pdf")
+    assert "simpas/company (company)" in menu
+    assert "1. personal" in menu, "у коротких доменов без алиаса формат не меняется"
+
+
 def test_parse_domain_reply_gibberish_is_invalid():
     assert parse_domain_reply("какая погода в Москве") is None
 

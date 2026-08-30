@@ -205,7 +205,8 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
             session.commit()
             return {"status": "attachment_staged", "pending_id": str(pending.id)}
 
-        resolved = resolve_pending_domain(session, channel="max", reply_text=inbound.text)
+        resolved = resolve_pending_domain(session, channel="max", reply_text=inbound.text,
+                                          recipient=inbound.chat_id)
         if resolved.status == "ingested":
             enqueue(session, channel="max", recipient=inbound.chat_id,
                     reference=f"attachment-ingested:{resolved.result.source.id}",
