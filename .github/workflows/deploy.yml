@@ -313,6 +313,28 @@ jobs:
               sudo docker rm -f $STALE
             fi
 
+            # Миграции ДО подъёма контейнеров и одноразовым контейнером,
+            # а не exec в работающий. Две причины, обе живые (30.08.2026):
+            #
+            # Порядок. Новый код приехал на старую схему, и воркер лёг с
+            # relation "knowledge_users" does not exist. Код и схема
+            # обязаны ехать вместе, иначе между выкатом и migrate всегда
+            # есть окно, в котором сервис нерабочий.
+            #
+            # run вместо exec. exec требует уже поднятого helm-core — а
+            # если он лежит именно из-за отставшей схемы, накатить
+            # миграцию нечем: замкнутый круг. run --rm поднимает
+            # одноразовый контейнер из нового образа, ему живой сервис не
+            # нужен.
+            #
+            # Точка возврата снята в начале выката, все три миграции
+            # additive и с написанным откатом.
+            echo "=== схема до ==="
+            sudo docker compose run --rm --no-deps helm-core python3 -m alembic current
+            sudo docker compose run --rm --no-deps helm-core python3 -m alembic upgrade head
+            echo "=== схема после ==="
+            sudo docker compose run --rm --no-deps helm-core python3 -m alembic current
+
             sudo docker compose up -d --force-recreate helm-core helm-knowledge-worker
             sudo docker compose restart caddy
             sudo systemctl restart hermes-gateway
@@ -367,10 +389,10 @@ jobs:
             set -e
             cd /opt/helm/compose
             echo "=== было ==="
-            sudo docker compose exec -T helm-core python3 -m alembic current
-            sudo docker compose exec -T helm-core python3 -m alembic upgrade head
+            sudo docker compose run --rm --no-deps helm-core python3 -m alembic current
+            sudo docker compose run --rm --no-deps helm-core python3 -m alembic upgrade head
             echo "=== стало ==="
-            sudo docker compose exec -T helm-core python3 -m alembic current
+            sudo docker compose run --rm --no-deps helm-core python3 -m alembic current
             sudo docker exec -i helm-postgres-1 psql -U helm -d helm <<\SQL
             \echo === под какой ролью приложение ходит в базу ===
             select usename, count(*) as connections
