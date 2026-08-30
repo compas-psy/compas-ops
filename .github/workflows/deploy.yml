@@ -25,6 +25,7 @@ on:
         default: verify
         type: choice
         options:
+          - keyscan       # напечатать ключи сервера для VPS_KNOWN_HOSTS
           - verify        # только посмотреть состояние, ничего не менять
           - backup        # снять точку возврата
           - deploy        # код + панель + пересборка контейнеров
@@ -56,7 +57,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # keyscan работает БЕЗ секретов: это первый шаг настройки, когда
+      # VPS_KNOWN_HOSTS ещё неоткуда взять. Нужен потому, что ssh-keyscan
+      # на Windows у владельца старый и не договаривается с OpenSSH 9.6
+      # на сервере; здесь свежий.
+      - name: Ключи сервера для VPS_KNOWN_HOSTS
+        if: inputs.action == 'keyscan'
+        run: |
+          echo "Скопируйте строки ниже целиком в секрет VPS_KNOWN_HOSTS:"
+          echo "---"
+          ssh-keyscan "$VPS_HOST"
+          echo "---"
+
       - name: Ключ доступа
+        if: inputs.action != 'keyscan'
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
