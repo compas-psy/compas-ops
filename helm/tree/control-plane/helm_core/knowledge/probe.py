@@ -25,12 +25,16 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 
-from sqlalchemy import Text, func, select
-from sqlalchemy.dialects.postgresql import TSQUERY
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .recall import (
+    MemoryHit, build_or_tsquery, compose_memory_answer, is_future_reminder,
+    is_historical_query, search_memories,
+)
 from .tenancy import bind_knowledge_user
 from ..models import KnowledgeAnswerRun, KnowledgeChunk, KnowledgeDomain, KnowledgeSource, KnowledgeStatus
+from ..models.base import utcnow
 
 #: §14.13 требует «calibrated threshold» — реального golden-набора
 #: (§30.8.5) ещё нет, P8.5.2 не сделан, поэтому это первая прикидка, не
@@ -61,6 +65,9 @@ class ProbeResult:
     mode: str | None = None
     answer_text: str | None = None
     evidence: list[Evidence] = field(default_factory=list)
+    #: Заполнено вместо `evidence`, когда ответ пришёл из Micro-Memory —
+    #: память и документные чанки не смешиваются в одном ответе.
+    memory: list[MemoryHit] = field(default_factory=list)
 
 
 def query_hash(query: str) -> str:
@@ -79,8 +86,7 @@ def _lexical_search(session: Session, *, query: str, domain: str | None,
     # sharing just one stem with the question, so OR-ify: any stem present
     # is enough to surface as a candidate; ts_rank still ranks documents
     # matching more of the query's terms higher (confirmed live via psql).
-    raw_tsquery = func.plainto_tsquery("russian", query)
-    tsquery = func.cast(func.replace(func.cast(raw_tsquery, Text), " & ", " | "), TSQUERY)
+    tsquery = build_or_tsquery(query)
     # normalization=2 divides rank by document length — without it a long,
     # mostly-irrelevant document with one coincidental keyword match scores
     # identically to a short, genuinely relevant one (confirmed via psql).
@@ -153,6 +159,38 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     закрывает реальную дыру до того, как появится второй пользователь.
     """
     knowledge_user_id = bind_knowledge_user(session, knowledge_user_id)
+
+    # §14.13: «напомни» + явный будущий триггер + действие — это
+    # постановка напоминания, а не вопрос к памяти. Подсистемы задач/
+    # напоминаний в HELM нет вообще, поэтому единственная честная форма
+    # «маршрутизации в REMINDER_TASK» — не отвечать из памяти и
+    # эскалировать: у SYSTEM_OWNER это дойдёт до chief, у KNOWLEDGE_USER
+    # — до честного отказа Dedicated Bot'а (§14.13 "never route such
+    # request into Hermes by accident" для secondary соблюдается тем,
+    # что этот бот в Hermes не ходит вовсе).
+    if is_future_reminder(query):
+        return ProbeResult(outcome="NEEDS_REASONING")
+
+    # §14.12 unified retrieval: память проверяется ДО документных чанков
+    # и имеет над ними абсолютный приоритет (осознанное упрощение
+    # "strong exact boost", см. recall.py). Фильтр по домену к памяти не
+    # применяется: §14.10 "retrieval remains global so this never hides
+    # memory", и `domain` у memory-записей сегодня всегда NULL.
+    memory_hits = [
+        hit for hit in search_memories(
+            session, query=query, knowledge_user_id=knowledge_user_id, now=utcnow(),
+            include_historical=is_historical_query(query))
+        if hit.rank >= MIN_RANK_SCORE
+    ]
+    if memory_hits:
+        answer_text, mode = compose_memory_answer(memory_hits)
+        session.add(KnowledgeAnswerRun(
+            knowledge_user_id=knowledge_user_id,
+            query_hash=query_hash(query), domain=domain, mode=mode,
+            paid_ai_used=False, evidence_count=len(memory_hits),
+        ))
+        return ProbeResult(outcome="LOCAL_ANSWER", mode=mode, answer_text=answer_text,
+                           memory=memory_hits)
 
     evidence = _lexical_search(session, query=query, domain=domain,
                                knowledge_user_id=knowledge_user_id)
