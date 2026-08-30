@@ -1,7 +1,7 @@
 """Канал MAX (ТЗ §10) целиком: дедуп, /force, вебхук, очередь исходящих.
 
 Проверяется сторона Control Plane. Встроенный API-сервер Hermes
-(`/v1/responses`, §10.2, ADR-020) здесь заменён двойником HermesBridge —
+(`/v1/responses`, §10.2, ADR-014) здесь заменён двойником HermesBridge —
 реальный HTTP-вызов проверяется отдельно, живым смоуком на сервере
 (`scripts/hermes-responses-diagnose.sh`).
 """

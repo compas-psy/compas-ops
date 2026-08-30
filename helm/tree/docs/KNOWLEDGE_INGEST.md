@@ -116,7 +116,7 @@ MAX/Telegram (лимит `helm-core` — 768MB).
 
 Двухшаговый диалог выбора домена (решение владельца 29.08.2026, спека не
 задаёт UX для этого) — `helm_core/knowledge/chat_intake.py`, подробности
-и обоснование — `docs/adr/ADR-021-knowledge-attachment-transport.md`:
+и обоснование — `docs/adr/ADR-102-knowledge-attachment-transport.md`:
 
 **Три шага, не два** (решение владельца по итогам живого теста
 29.08.2026 — изначально было два, третьего уведомления о завершении
@@ -230,7 +230,7 @@ adapter" (§14.5.1, ADR-018 по нумерации спеки) не понад�
 два новых HMAC-подписанных эндпоинта Control Plane
 (`/internal/knowledge/attachment/stage`/`resolve` — `chat_intake.py`
 живёт в процессе Control Plane, плагин вне него, звать напрямую
-нельзя). Полный дизайн — `docs/adr/ADR-021-knowledge-attachment-
+нельзя). Полный дизайн — `docs/adr/ADR-102-knowledge-attachment-
 transport.md`. **Untestable локально** (`helm-control` вне пакета
 `helm_core`, вне pytest) — первая проверка только живым деплоем.
 
@@ -266,7 +266,7 @@ line, актуальной на дату установки) живым бенч
 сторона), `tests/test_telegram_channel.py` (3 новых — `TelegramSender`,
 найден и исправлен живым тестом 30.08.2026: без него уведомление о
 завершении разбора для Telegram молча помечалось `FAILED` в outbox,
-см. `ADR-021`), 2 новых в `tests/test_knowledge_chat_intake.py`
+см. `ADR-102`), 2 новых в `tests/test_knowledge_chat_intake.py`
 (повторная отправка того же файла — в тот же домен и в другой, см. ниже)
 — 215/215 зелёных вместе с остальным control-plane
 (включая MAX-вложения в `tests/test_max_channel.py`). `hermes/plugins/

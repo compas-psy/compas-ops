@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from ..knowledge.documents import DocumentUnavailable, find_sources, read_original
 from ..knowledge.ingest import DEFAULT_VAULT_ROOT
 from ..knowledge.offboarding import (
-    BACKUP_RETENTION_NOTICE, DeleteRefused, delete_user_permanently, export_user_vault,
+    BACKUP_RETENTION_NOTICE, export_user_vault,
 )
 from ..knowledge.onboarding import (
     create_invite, reactivate_user, reset_panel_passkey, suspend_user,
@@ -642,32 +642,38 @@ def delete_knowledge_user(knowledge_user_id: uuid.UUID, body: PanelDeleteIn,
                           request: Request, session: Session = Depends(get_session),
                           identity: PanelIdentity = Depends(require_owner_session),
                           stepup=Depends(require_stepup)) -> dict[str, Any]:
-    """§14.3 «explicit RED delete if requested». Необратимо.
+    """§14.3 «explicit RED delete if requested».
 
-    Три защиты вместо записи одобрения (разбор решения — в
-    `knowledge/offboarding.py` и `V3.8-DELTA.md`): аккаунт обязан быть
-    заранее приостановлен, passkey привязан именно к этому
-    пользователю, и владелец обязан явно указать судьбу выгрузки.
-    Агентского пути сюда нет вовсе.
+    Здесь удаление только ПРЕДЛАГАЕТСЯ. Решение учредителя от
+    30.08.2026: необратимое уничтожение чужих личных данных проходит
+    через RED-реестр, а не тремя проверками внутри обработчика. Разница
+    не в числе препятствий, а в том, что предложение и одобрение — два
+    разных момента, и второе видно в панели, в Telegram и в аудите
+    отдельной записью.
+
+    Ответ возвращает `approval_id`. Само удаление произойдёт только
+    после `POST /panel/actions/{approval_id}/approve` со свежей
+    passkey-подписью, привязанной к этому одобрению. TTL — два часа.
+
+    Step-up здесь остаётся: предложить удаление чужого аккаунта тоже не
+    должно быть возможно по одной украденной сессии.
     """
     stepup.assert_scope(f"panel:users:delete:{knowledge_user_id}")
     _require_manageable_user(session, knowledge_user_id)
-    if not body.export_taken:
-        # Не запрет, а вынужденная остановка: отказ от выгрузки — тоже
-        # решение, но его надо принять, а не проскочить.
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "подтвердите, что выгрузка забрана или сознательно не нужна")
-    try:
-        result = delete_user_permanently(session, knowledge_user_id)
-    except DeleteRefused as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    service = request.app.state.approval_service_factory(session)
+    approval = service.propose(
+        "delete_knowledge_user",
+        {"knowledge_user_id": str(knowledge_user_id), "export_taken": body.export_taken},
+        proposed_by=identity.owner_id,
+    )
     session.commit()
     return {
+        "status": approval.status,
+        "approval_id": str(approval.id),
+        "short_id": approval.short_id,
+        "expires_at": approval.expires_at.isoformat(),
         "knowledge_user_id": str(knowledge_user_id),
-        "rows_deleted": result.rows_deleted,
-        "files_removed": result.files_removed,
-        "backup_retention": result.retention_notice,
+        "backup_retention": BACKUP_RETENTION_NOTICE,
     }
 
 

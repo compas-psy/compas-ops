@@ -86,4 +86,7 @@ def register_fixtures(registry: ActionRegistry) -> ActionRegistry:
 
 
 def build_registry(policy_path: str) -> ActionRegistry:
-    return register_fixtures(ActionRegistry(Policy.load(policy_path)))
+    from .knowledge_actions import register_knowledge_actions
+
+    registry = register_fixtures(ActionRegistry(Policy.load(policy_path)))
+    return register_knowledge_actions(registry)

@@ -28,9 +28,10 @@ from helm_core.config import Settings
 from helm_core.knowledge.memory import try_remember
 from helm_core.knowledge.rls import apply_rls
 from helm_core.knowledge.tenancy import bind_knowledge_user
+from helm_core.actions.registry import PreconditionFailed
 from helm_core.models import (
-    Base, KnowledgeUser, KnowledgeUserRole, KnowledgeUserStatus, PanelEnrollmentToken,
-    PanelSession, PanelStepUpChallenge, WebauthnCredential, utcnow,
+    Approval, Base, KnowledgeUser, KnowledgeUserRole, KnowledgeUserStatus,
+    PanelEnrollmentToken, PanelSession, PanelStepUpChallenge, WebauthnCredential, utcnow,
 )
 
 from conftest import DB_URL, POLICY_PATH, SYSTEM_OWNER_ID, seed_system_owner
@@ -307,6 +308,26 @@ def test_knowledge_shell_requires_a_session(app):
 
 # ── выдача токена панели владельцем ──────────────────────────────────────
 
+def _approve(app, client, approval_id: str) -> "object":
+    """Одобрить RED-действие второй церемонией.
+
+    Отдельной от той, которой действие предлагали: §10.5.8.1 требует,
+    чтобы подпись была привязана и к идентификатору одобрения, и к хэшу
+    действия. Именно это и делает удаление двумя решениями, а не одним.
+    """
+    with app.state.session_factory() as db:
+        approval = db.get(Approval, uuid.UUID(approval_id))
+        session_id = uuid.UUID(client.cookies["helm_panel_session"])
+        challenge = PanelStepUpChallenge(
+            session_id=session_id, action_hashes=[approval.action_hash],
+            approval_ids=[approval_id], challenge=b"challenge",
+            expires_at=utcnow() + timedelta(seconds=60))
+        db.add(challenge)
+        db.commit()
+        headers = {"X-Helm-Stepup": str(challenge.id)}
+    return client.post(f"/api/panel/v1/actions/{approval_id}/approve", headers=headers)
+
+
 def _stepup(app, client, scope: str) -> dict[str, str]:
     with app.state.session_factory() as db:
         session_id = uuid.UUID(client.cookies["helm_panel_session"])
@@ -470,14 +491,26 @@ def test_export_returns_a_path_not_the_contents(app):
 
 
 def test_delete_refuses_while_user_is_still_active(app):
+    """Предложить удаление можно, исполнить — нет.
+
+    Предусловие `user_suspended` проверяется реестром прямо перед
+    действием, а не при предложении: между одобрением и исполнением
+    может пройти до двух часов, и аккаунт могли вернуть в строй.
+    """
     user_id = _make_active_user(app)
     owner = _owner_session(app)
 
-    r = owner.post(f"/api/panel/v1/users/{user_id}/delete", json={"export_taken": True},
-                   headers=_stepup(app, owner, f"panel:users:delete:{user_id}"))
+    proposed = owner.post(f"/api/panel/v1/users/{user_id}/delete", json={"export_taken": True},
+                          headers=_stepup(app, owner, f"panel:users:delete:{user_id}"))
+    assert proposed.status_code == 200
+    assert proposed.json()["status"] == "PENDING"
 
-    assert r.status_code == 409
-    assert "приостанов" in r.text
+    with pytest.raises(PreconditionFailed) as exc:
+        _approve(app, owner, proposed.json()["approval_id"])
+    assert exc.value.name == "user_suspended"
+
+    with app.state.session_factory() as db:
+        assert db.get(KnowledgeUser, user_id).status == KnowledgeUserStatus.ACTIVE
 
 
 def test_delete_refuses_without_an_explicit_answer_about_the_export(app):
@@ -488,10 +521,14 @@ def test_delete_refuses_without_an_explicit_answer_about_the_export(app):
     owner.post(f"/api/panel/v1/users/{user_id}/suspend",
                headers=_stepup(app, owner, f"panel:users:suspend:{user_id}"))
 
-    r = owner.post(f"/api/panel/v1/users/{user_id}/delete", json={"export_taken": False},
-                   headers=_stepup(app, owner, f"panel:users:delete:{user_id}"))
+    proposed = owner.post(f"/api/panel/v1/users/{user_id}/delete", json={"export_taken": False},
+                          headers=_stepup(app, owner, f"panel:users:delete:{user_id}"))
+    assert proposed.status_code == 200
 
-    assert r.status_code == 409
+    with pytest.raises(PreconditionFailed) as exc:
+        _approve(app, owner, proposed.json()["approval_id"])
+    assert exc.value.name == "export_decided"
+
     with app.state.session_factory() as db:
         assert db.get(KnowledgeUser, user_id).status == KnowledgeUserStatus.SUSPENDED
 
@@ -505,13 +542,22 @@ def test_full_offboarding_sequence(app):
                headers=_stepup(app, owner, f"panel:users:suspend:{user_id}"))
     exported = owner.post(f"/api/panel/v1/users/{user_id}/export",
                           headers=_stepup(app, owner, f"panel:users:export:{user_id}"))
-    deleted = owner.post(f"/api/panel/v1/users/{user_id}/delete",
-                         json={"export_taken": True},
-                         headers=_stepup(app, owner, f"panel:users:delete:{user_id}"))
+    proposed = owner.post(f"/api/panel/v1/users/{user_id}/delete",
+                          json={"export_taken": True},
+                          headers=_stepup(app, owner, f"panel:users:delete:{user_id}"))
 
     assert exported.status_code == 201
-    assert deleted.status_code == 200
-    assert deleted.json()["backup_retention"]
+    assert proposed.status_code == 200
+    assert proposed.json()["status"] == "PENDING", "удаление обязано ждать одобрения"
+    assert proposed.json()["backup_retention"]
+
+    with app.state.session_factory() as db:
+        assert db.get(KnowledgeUser, user_id).status == KnowledgeUserStatus.SUSPENDED, \
+            "до одобрения не удалено ничего"
+
+    approved = _approve(app, owner, proposed.json()["approval_id"])
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["result"]["backup_retention"]
     with app.state.session_factory() as db:
         assert db.get(KnowledgeUser, user_id).status == KnowledgeUserStatus.DELETED
 

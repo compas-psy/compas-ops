@@ -57,6 +57,8 @@ class ExecCtx:
     approval_id: str | None
     task_id: str | None
     idempotency_key: str
+    #: Сессия БД одобрения — см. ExecutionContext в actions/registry.py.
+    session: Any | None = None
 
 
 def _short_id() -> str:
@@ -233,7 +235,8 @@ class ApprovalService:
 
         ctx = ExecCtx(approval_id=str(approval.id),
                       task_id=str(approval.task_id) if approval.task_id else None,
-                      idempotency_key=approval.idempotency_key)
+                      idempotency_key=approval.idempotency_key,
+                      session=self.session)
 
         # Перепроверка предусловий непосредственно перед действием (§8.4):
         # между одобрением и этим моментом могло пройти 24 часа.
@@ -297,7 +300,8 @@ class ApprovalService:
         registered = self.registry.get(action_type)
         act_hash = registered.hash_of(payload)
         ctx = ExecCtx(approval_id=None, task_id=str(task_id) if task_id else None,
-                      idempotency_key=_idempotency_key(action_type, act_hash, task_id))
+                      idempotency_key=_idempotency_key(action_type, act_hash, task_id),
+                      session=self.session)
         self.registry.check_preconditions(action_type, payload, ctx)
         result = registered.executor(registered.parse(payload), ctx)
         self._audit(task_id, "system", "action.executed_direct",

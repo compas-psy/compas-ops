@@ -151,7 +151,7 @@ ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "cd /opt/helm/c
 запроса — это и есть «named conversation» из §10.2, только выключенный
 за отсутствием `API_SERVER_KEY`. Подробности и почему остальные три
 рассмотренных пути (регистрация платформы, `_dispatch_plugin_message_
-injection`, bundled-плагин) не годились — `docs/adr/ADR-020-max-responses-api.md`.
+injection`, bundled-плагин) не годились — `docs/adr/ADR-014-max-responses-api.md`.
 
 **Продолжение MAX — отдельный файл: `scripts/hermes-enable-runbook.md`.**
 Он включает этот API (два места с одним ключом: Docker secret Control

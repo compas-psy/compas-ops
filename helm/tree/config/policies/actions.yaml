@@ -134,6 +134,20 @@ actions:
     title_ru: "Удалить бизнес-данные"
     panel_view: generic
 
+  # v3.8 §14.3. Отдельно от delete_business_data: это личные данные
+  # другого человека, а не данные компании. TTL два часа — как у трат:
+  # решение об удалении чужого второго мозга не должно висеть сутки.
+  # backup_fresh намеренно НЕ требуется: отметки о свежести бэкапа,
+  # видимой изнутри контейнера, сейчас нет, и объявлять предусловие,
+  # которое нечем проверить, — обещание вместо защиты.
+  delete_knowledge_user:
+    initial_level: RED
+    minimum_allowed_level: RED
+    approval_ttl: 2h
+    required_preconditions: [user_suspended, export_decided]
+    title_ru: "Удалить аккаунт пользователя знания"
+    panel_view: generic
+
   secret_rotation:
     initial_level: RED
     minimum_allowed_level: RED

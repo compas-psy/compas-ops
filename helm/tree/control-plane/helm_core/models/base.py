@@ -38,7 +38,7 @@ def ts_column(**kw):
 
     Naive timestamp здесь означал бы, что TTL одобрения (§8.4) считается
     в неизвестном часовом поясе — на сервере с Europe/Moscow для
-    owner-facing расписаний (ADR-019) это расхождение в несколько часов.
+    owner-facing расписаний (ADR-101) это расхождение в несколько часов.
     """
     return mapped_column(DateTime(timezone=True), **kw)
 

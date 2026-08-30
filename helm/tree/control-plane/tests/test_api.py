@@ -608,3 +608,39 @@ def test_internal_knowledge_admin_passes_through_ordinary_text(client):
 def test_internal_knowledge_admin_requires_service_auth(client):
     r = client.post("/internal/knowledge/admin", json={"text": "Забудь всё"})
     assert r.status_code in (401, 422)
+
+
+# ── §14.17: решение «нет кэша ответов Knowledge» не смеет расползтись ────────
+
+#: Настройки, которыми можно ВЫКЛЮЧИТЬ кэширование платного контура.
+#: Решение учредителя от 30.08.2026 (ADR-103) касается только кэша готовых
+#: ответов Второго мозга. Платный путь Hermes → LiteLLM → OpenRouter —
+#: отдельный механизм экономии, и выключать его заодно нельзя.
+LITELLM_CACHE_KILL_SWITCHES = (
+    "cache: false", "cache: False", "disable_cache: true", "disable_cache: True",
+    "caching: false", "caching: False",
+)
+
+
+def test_knowledge_cache_decision_did_not_disable_the_paid_path_cache():
+    """Сторож против расползания решения по §14.17.
+
+    Кэш ответов Второго мозга не делается — там нечего экономить, платная
+    модель в этом пути не вызывается вовсе. Но у платного контура кэш
+    существует ради прямой экономии денег, и он к §14.17 отношения не
+    имеет. Тест ловит попытку выключить его заодно.
+
+    Сейчас в конфиге LiteLLM кэш не настроен ни в какую сторону — тест
+    следит именно за появлением явного выключателя, а не за наличием
+    включателя.
+    """
+    from pathlib import Path
+
+    config = Path(__file__).resolve().parents[2] / "config" / "models" / "litellm.yaml"
+    text = config.read_text(encoding="utf-8")
+    found = [s for s in LITELLM_CACHE_KILL_SWITCHES if s in text]
+    assert not found, (
+        f"в конфиге LiteLLM появился выключатель кэша {found} — "
+        "решение ADR-103 касается только кэша ответов Knowledge, "
+        "платный контур им не затрагивается"
+    )

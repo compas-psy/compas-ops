@@ -20,13 +20,13 @@ pack, когда локального ответа объективно недо
 | P8.5.4 остаток — pg_trgm, dense/embeddings, pgvector, rank fusion | ❌ не реализовано |
 | P8.5.5 остаток — Z2 (опциональный локальный генератор) | ❌ не реализовано (спекой разрешено оставить выключенным) |
 | P8.5.6 Graphify challenger | ❌ не реализовано |
-| P8.5.7 Telegram/MAX ingress вложений (spool → RAW → register_file_for_ingest, двухшаговый диалог домена) | ✅ ОБА канала задеплоены и подтверждены живьём (реальные PDF, все 3 шага диалога включая уведомление о завершении разбора, `ADR-021`). По пути найдены и исправлены живые баги: cross-device rename, отсутствие `TelegramSender` в outbox, блокировка исходящего трафика к Telegram на уровне сети/`ufw` — заменяет прежнее agentic-чтение файлов чифом, не сосуществует с ним (решение владельца) |
-| P8.5.2.1 ZIP batch ingest (v3.7) — safe expansion + durable child queue + exactly-once финал | ⚠️ код готов, 250/250 тестов зелёных, **ждёт живого деплоя** (`ADR-024`, `V3.7-DELTA.md`) — не проверено ни на реальном Telegram, ни на MAX |
+| P8.5.7 Telegram/MAX ingress вложений (spool → RAW → register_file_for_ingest, двухшаговый диалог домена) | ✅ ОБА канала задеплоены и подтверждены живьём (реальные PDF, все 3 шага диалога включая уведомление о завершении разбора, `ADR-102`). По пути найдены и исправлены живые баги: cross-device rename, отсутствие `TelegramSender` в outbox, блокировка исходящего трафика к Telegram на уровне сети/`ufw` — заменяет прежнее agentic-чтение файлов чифом, не сосуществует с ним (решение владельца) |
+| P8.5.2.1 ZIP batch ingest (v3.7) — safe expansion + durable child queue + exactly-once финал | ⚠️ код готов, 250/250 тестов зелёных, **ждёт живого деплоя** (`ADR-026`, `V3.7-DELTA.md`) — не проверено ни на реальном Telegram, ни на MAX |
 | P8.5.8 Panel строка Knowledge | ❌ не реализовано (бессмысленно без данных) |
 | v3.8 P8.6.1 схема тенантности + P8.6.3 PostgreSQL RLS | ⚠️ код готов, миграции `ef1ba5467e14`/`4da8c9e90115`, **ждёт живого деплоя** (`V3.8-DELTA.md`) |
 | v3.8 P8.5.12 Micro-Memory «Запомни» (text, без голоса/reply-to) | ⚠️ код готов, подключено в MAX/Telegram (owner) и Dedicated Knowledge Bot (secondary), **ждёт живого деплоя** (`V3.8-DELTA.md`) — голос (GigaAM) и «Запомни это» как ответ на сообщение не реализованы |
 | v3.8 P8.5.12 recall из памяти через `probe()` | ⚠️ код готов, `knowledge/recall.py` — дословный возврат URL/идентификатора, истечение проверяется в момент запроса, исторический вопрос видит EXPIRED, «напомни завтра …» не съедает вопрос к памяти, **ждёт живого деплоя** (`docs/KNOWLEDGE_RETRIEVAL.md`) — rank fusion память/документы не строится (память имеет абсолютный приоритет), уточняющий вопрос при неоднозначности не реализован |
-| v3.8 P8.6.2 Dedicated Telegram Knowledge Bot + onboarding | ⚠️ код готов, `/hooks/knowledge-telegram` + one-use invite, **ждёт живого деплоя** (`ADR-025`) — владелец ещё не завёл `KNOWLEDGE_TELEGRAM_BOT_TOKEN` через BotFather; файлы/ZIP/голос для secondary-пользователей не реализованы |
+| v3.8 P8.6.2 Dedicated Telegram Knowledge Bot + onboarding | ⚠️ код готов, `/hooks/knowledge-telegram` + one-use invite, **ждёт живого деплоя** (`ADR-029`) — владелец ещё не завёл `KNOWLEDGE_TELEGRAM_BOT_TOKEN` через BotFather; файлы/ZIP/голос для secondary-пользователей не реализованы |
 | v3.8 P8.6.4 per-user quotas + fair queue | ⚠️ код готов, `knowledge/quotas.py` (storage/daily-ingest байты, глубина очереди) + round-robin по тенантам в `claim_next_job()`, **ждёт живого деплоя** (`V3.8-DELTA.md`) — квота не декрементируется при archive/disable, редактирование квот через Panel не реализовано |
 | v3.8 P8.6.5 Panel roles | ⚠️ код готов, **ждёт живого деплоя**: owner-раздел «Система → Пользователи» (список/инвайт/suspend/квоты/доступ в панель, scope-привязанный passkey step-up) + вход KNOWLEDGE_USER отдельным одноразовым enrollment-токеном (`ku:<uuid>` как принципал, owner-вход не тронут) + Knowledge-only оболочка, берущая тенанта из сессии (`V3.8-DELTA.md`) — редактирование/удаление памяти из панели (§14.16) и вкладки архивов/таксономии не реализованы |
 | v3.8 P8.6.6 per-user style | ❌ не реализуется сегодня: стилю не к чему прикрепиться (текстового синтеза/локализатора нет, ответы Z0/Z1 чисто экстрактивные, `prompts/` и `skills/` пусты). Важное из P8.6.6 — «styles never cross users» и запрет платного AI для KNOWLEDGE_USER — выполнено по конструкции и закреплено структурными тестами разбора импортов (`V3.8-DELTA.md`) |
@@ -39,12 +39,12 @@ pack, когда локального ответа объективно недо
 Статус выбора моделей (embeddings/GigaAM/Z2) — `docs/KNOWLEDGE_MODELS.md`.
 Управление знаниями словами (§14.16) — `docs/KNOWLEDGE_ADMIN.md`.
 Вложения Telegram/MAX (P8.5.7): двухшаговый диалог выбора домена, MAX-
-транспорт, открытый вопрос по Telegram-транспорту — `docs/adr/ADR-021-
+транспорт, открытый вопрос по Telegram-транспорту — `docs/adr/ADR-102-
 knowledge-attachment-transport.md`.
 Методология перехода на v3.4 и список того, что осталось —
 `implementation-state/V3.4-DELTA.md`. v3.8 (Micro-Memory + multi-user
 tenancy): `implementation-state/V3.8-DELTA.md`. Dedicated Knowledge
-Telegram Bot + onboarding (P8.6.2): `docs/adr/ADR-025-dedicated-
+Telegram Bot + onboarding (P8.6.2): `docs/adr/ADR-029-dedicated-
 knowledge-telegram-bot.md`.
 
 ## Четыре уровня памяти (§14.1)

@@ -1,4 +1,4 @@
-# Ранбук: включить встроенный API Hermes для MAX (ADR-020)
+# Ранбук: включить встроенный API Hermes для MAX (ADR-014)
 
 Заменяет прежний план «написать и задеплоить плагин `max-bridge`» —
 разведка на сервере (`hermes-recon-*.sh`, 6 заходов) нашла, что у Hermes
@@ -72,7 +72,7 @@ scp -i "C:\Users\eliah\.ssh\helm_deploy_key" helm\tree\scripts\hermes-responses-
 ssh -i "C:\Users\eliah\.ssh\helm_deploy_key" helm@185.250.44.137 "sudo mv /tmp/hermes-responses-diagnose.sh /opt/helm/scripts/ && sudo chmod 755 /opt/helm/scripts/hermes-responses-diagnose.sh && sudo /opt/helm/scripts/hermes-responses-diagnose.sh"
 ```
 
-Пришли вывод целиком — это последнее непроверенное место в ADR-020
+Пришли вывод целиком — это последнее непроверенное место в ADR-014
 (форма JSON-ответа). Если `output[].content[].type` там не
 `"output_text"` — правка в одной функции
 `helm_core/hermes_bridge.py::_extract_reply_text`, не в архитектуре.
