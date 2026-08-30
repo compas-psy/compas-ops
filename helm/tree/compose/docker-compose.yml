@@ -127,6 +127,22 @@ services:
       HELM_PANEL_RP_ID: helm.cmpas.ru
       HELM_PANEL_ORIGIN: https://helm.cmpas.ru
       TZ: Europe/Moscow
+      # НАЙДЕНО 30.08.2026: этот сервер не может напрямую достучаться до
+      # IP Telegram ни с хоста, ни из контейнера ("Network is unreachable"
+      # — та же категория проблемы, что уже решалась для openrouter.ai на
+      # P3, см. litellm ниже). TelegramSender (channels/telegram.py) шлёт
+      # уведомление о завершении разбора файла (P8.5.7) через тот же
+      # sing-box+mieru туннель в Финляндию — openrouter-proxy-in открыт
+      # для Docker-моста отдельно (scripts/knowledge-telegram-proxy-
+      # enable.sh), поэтому здесь host.docker.internal, не 127.0.0.1 (тот
+      # означал бы сам контейнер, не хост — та же ошибка, что уже нашлась
+      # для HERMES_BRIDGE_URL, см. extra_hosts ниже). NO_PROXY явно
+      # исключает то, что уже работает напрямую: MAX API (platform-api2.
+      # max.ru — свой сертификат/маршрут, трогать незачем), Hermes bridge
+      # и собственный healthcheck контейнера.
+      HTTPS_PROXY: http://host.docker.internal:18080
+      HTTP_PROXY: http://host.docker.internal:18080
+      NO_PROXY: 127.0.0.1,localhost,host.docker.internal,platform-api2.max.ru
     secrets: [helm_database_url, telegram_owner_id, hermes_service_hmac,
               panel_auth_cookie_secret, telegram_bot_token,
               max_webhook_secret, max_bot_token, max_owner_id,
