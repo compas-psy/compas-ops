@@ -42,6 +42,7 @@ from sqlalchemy.orm import Session
 from . import zip_safety
 from .chat_intake import _CANCEL_SENTINEL, domain_list_lines, parse_domain_reply
 from .ingest import DEFAULT_VAULT_ROOT, register_file_for_ingest
+from .quotas import QuotaExceeded
 from .tenancy import bind_knowledge_user
 from ..models import (
     BATCH_ITEM_TERMINAL_STATUSES, KnowledgeBatchItem, KnowledgeBatchItemStatus,
@@ -325,18 +326,30 @@ def _process_item(session: Session, batch: KnowledgeIngestBatch, item: Knowledge
     else:
         member_dest.rename(final_dest)
 
-    result = register_file_for_ingest(
-        session, domain=batch.domain, raw_path=final_dest,
-        original_filename=Path(decision.path_normalized).name,
-        mime_type=decision.detected_mime, sensitivity=batch.sensitivity,
-        # channel/recipient НАМЕРЕННО None — per-item уведомление не
-        # нужно (§14.5.2 "No per-file push spam"); worker.py::
-        # _notify_owner_of_result() уже тихо no-op, если их нет.
-        channel=None, recipient=None, vault_root=vault_root,
-        # Тенант члена архива — тенант самого батча, не отдельное
-        # разрешение через resolve_system_owner_id() (v3.8 §14.4).
-        knowledge_user_id=batch.knowledge_user_id,
-    )
+    try:
+        result = register_file_for_ingest(
+            session, domain=batch.domain, raw_path=final_dest,
+            original_filename=Path(decision.path_normalized).name,
+            mime_type=decision.detected_mime, sensitivity=batch.sensitivity,
+            # channel/recipient НАМЕРЕННО None — per-item уведомление не
+            # нужно (§14.5.2 "No per-file push spam"); worker.py::
+            # _notify_owner_of_result() уже тихо no-op, если их нет.
+            channel=None, recipient=None, vault_root=vault_root,
+            # Тенант члена архива — тенант самого батча, не отдельное
+            # разрешение через resolve_system_owner_id() (v3.8 §14.4).
+            knowledge_user_id=batch.knowledge_user_id,
+        )
+    except QuotaExceeded as exc:
+        # §14.4: остальные (уже принятые) члены батча не откатываются —
+        # частичный успех, не всё-или-ничего; дальнейшие члены после
+        # исчерпания квоты будут падать тем же путём один за другим.
+        final_dest.unlink(missing_ok=True)
+        item.status = KnowledgeBatchItemStatus.FAILED
+        item.retryable = True
+        item.error_code = exc.kind
+        item.error_detail_redacted = str(exc)
+        item.graph_status = "not_applicable"
+        return
     item.source_id = result.source.id
     item.source_created_by_batch = result.created
     if result.job is None:

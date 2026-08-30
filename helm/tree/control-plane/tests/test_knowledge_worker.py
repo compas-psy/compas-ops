@@ -59,14 +59,16 @@ def test_register_file_for_ingest_dedups_by_sha256(session, tmp_path):
 # ── claim_next_job() ────────────────────────────────────────────────────
 
 def _make_pending_job(session, tmp_path, name: str, *, channel: str | None = None,
-                      recipient: str | None = None) -> KnowledgeIngestJob:
+                      recipient: str | None = None,
+                      knowledge_user_id=None) -> KnowledgeIngestJob:
     raw = tmp_path / name
     raw.write_text(f"содержимое {name}", encoding="utf-8")
     # vault_root=tmp_path: process_job() пишет L1 SOURCE .md на диск —
     # /opt/helm-knowledge не должен трогаться при прогоне тестов.
     result = register_file_for_ingest(session, domain="engineering", raw_path=raw,
                                       original_filename=name, vault_root=str(tmp_path),
-                                      channel=channel, recipient=recipient)
+                                      channel=channel, recipient=recipient,
+                                      knowledge_user_id=knowledge_user_id)
     session.flush()
     return result.job
 
@@ -84,6 +86,37 @@ def test_claim_next_job_returns_oldest_pending_and_marks_running(session, tmp_pa
 
     assert claimed.id == first.id
     assert claimed.status == KnowledgeIngestStatus.RUNNING
+
+
+def test_claim_next_job_is_fair_round_robin_across_tenants(session, tmp_path):
+    """v3.8 §14.4 fair queue: "one user's large ZIP does not starve
+    another user's short upload" — большой бэклог одного тенанта не
+    должен откладывать единственный job другого до полного исчерпания
+    первого."""
+    from helm_core.models import KnowledgeUser, KnowledgeUserRole
+
+    other = KnowledgeUser(role=KnowledgeUserRole.KNOWLEDGE_USER)
+    session.add(other)
+    session.flush()
+
+    owner_j1 = _make_pending_job(session, tmp_path, "owner-1.txt")
+    owner_j2 = _make_pending_job(session, tmp_path, "owner-2.txt")
+    other_j1 = _make_pending_job(session, tmp_path, "other-1.txt", knowledge_user_id=other.id)
+
+    worker_module._last_served_tenant_index = -1  # детерминизм: не зависеть от порядка других тестов
+
+    first = claim_next_job(session)
+    second = claim_next_job(session)
+    third = claim_next_job(session)
+    fourth = claim_next_job(session)
+
+    # SYSTEM_OWNER создан раньше other (seed-фикстура), поэтому первый в
+    # ротации — но other's единственный job обслуживается ВТОРЫМ, не
+    # после того, как у owner закончится вся его очередь.
+    assert first.id == owner_j1.id
+    assert second.id == other_j1.id
+    assert third.id == owner_j2.id
+    assert fourth is None
 
 
 # ── §14.3 markdown contract: YAML frontmatter ─────────────────────────────

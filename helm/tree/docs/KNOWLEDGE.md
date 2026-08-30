@@ -26,6 +26,8 @@ pack, когда локального ответа объективно недо
 | v3.8 P8.6.1 схема тенантности + P8.6.3 PostgreSQL RLS | ⚠️ код готов, миграции `ef1ba5467e14`/`4da8c9e90115`, **ждёт живого деплоя** (`V3.8-DELTA.md`) |
 | v3.8 P8.5.12 Micro-Memory «Запомни» (text, без голоса/reply-to) | ⚠️ код готов, подключено в MAX/Telegram (owner) и Dedicated Knowledge Bot (secondary), **ждёт живого деплоя** (`V3.8-DELTA.md`) — голос (GigaAM) и «Запомни это» как ответ на сообщение не реализованы |
 | v3.8 P8.6.2 Dedicated Telegram Knowledge Bot + onboarding | ⚠️ код готов, `/hooks/knowledge-telegram` + one-use invite, **ждёт живого деплоя** (`ADR-025`) — владелец ещё не завёл `KNOWLEDGE_TELEGRAM_BOT_TOKEN` через BotFather; файлы/ZIP/голос для secondary-пользователей не реализованы |
+| v3.8 P8.6.4 per-user quotas + fair queue | ⚠️ код готов, `knowledge/quotas.py` (storage/daily-ingest байты, глубина очереди) + round-robin по тенантам в `claim_next_job()`, **ждёт живого деплоя** (`V3.8-DELTA.md`) — квота не декрементируется при archive/disable, редактирование квот через Panel не реализовано |
+| v3.8 P8.6.7 offboarding | 🟡 частично: suspend/reactivate (`knowledge/onboarding.py` + internal API) готовы, **ждут живого деплоя**; vault-экспорт и RED физическое удаление аккаунта не реализованы |
 
 Подробности реализации — в `docs/KNOWLEDGE_INGEST.md` (что и как попадает
 в базу) и `docs/KNOWLEDGE_RETRIEVAL.md` (что и как из неё достаётся).

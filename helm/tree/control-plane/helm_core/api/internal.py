@@ -29,7 +29,7 @@ from ..knowledge.chat_intake import (
     resolve_outcome_text, resolve_pending_domain, stage_attachment,
 )
 from ..knowledge.memory import try_remember
-from ..knowledge.onboarding import create_invite
+from ..knowledge.onboarding import create_invite, reactivate_user, suspend_user
 from ..knowledge.probe import probe
 from ..models import ModelRun, Task, TaskEvent, TaskStatus, utcnow
 from ..outbox import enqueue
@@ -287,6 +287,29 @@ def knowledge_users_invite(body: KnowledgeUserInviteIn, request: Request,
         "deep_link": deep_link,
         "expires_at": result.invite.expires_at.isoformat(),
     }
+
+
+@router.post("/knowledge/users/{knowledge_user_id}/suspend")
+def knowledge_users_suspend(knowledge_user_id: uuid.UUID,
+                            session: Session = Depends(get_session)) -> dict[str, Any]:
+    """§14.3 "Suspend/offboard": bot/panel access blocked, data retained.
+    Owner-триггер — тот же internal-API стенд-ин, что и invite (Panel
+    P8.6.5 ещё не существует)."""
+    outcome = suspend_user(session, knowledge_user_id)
+    if outcome.status == "not_found":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "knowledge_user не найден")
+    session.commit()
+    return {"status": outcome.status, "knowledge_user_id": str(knowledge_user_id)}
+
+
+@router.post("/knowledge/users/{knowledge_user_id}/reactivate")
+def knowledge_users_reactivate(knowledge_user_id: uuid.UUID,
+                               session: Session = Depends(get_session)) -> dict[str, Any]:
+    outcome = reactivate_user(session, knowledge_user_id)
+    if outcome.status == "not_found":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "knowledge_user не найден")
+    session.commit()
+    return {"status": outcome.status, "knowledge_user_id": str(knowledge_user_id)}
 
 
 class OutboundMessage(BaseModel):

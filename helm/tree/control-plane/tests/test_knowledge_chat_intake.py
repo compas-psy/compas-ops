@@ -294,3 +294,27 @@ def test_resolve_pending_domain_missing_spool_file_is_handled_not_crashed(sessio
 
     assert outcome.status == "missing"
     assert session.query(KnowledgePendingAttachment).count() == 0
+
+
+def test_resolve_pending_domain_over_storage_quota_is_rejected_without_orphan_file(session, tmp_path):
+    """v3.8 §14.4: файл уже физически перенесён в raw/ до проверки квоты
+    (квота живёт в БД) — байты не должны остаться сиротой на диске, и
+    pending не должен зависнуть в состоянии, которое нельзя разрешить."""
+    from conftest import SYSTEM_OWNER_ID
+    from helm_core.models import KnowledgeUser
+    owner = session.get(KnowledgeUser, SYSTEM_OWNER_ID)
+    owner.storage_quota_bytes = 5
+    session.flush()
+
+    pending = stage_attachment(session, channel="telegram", data=b"content larger than quota",
+                               original_filename="notes.txt", mime_type="text/plain",
+                               spool_root=str(tmp_path / "spool"))
+
+    outcome = resolve_pending_domain(session, channel="telegram", reply_text="engineering",
+                                     vault_root=str(tmp_path / "vault"))
+
+    assert outcome.status == "quota_exceeded"
+    assert session.query(KnowledgePendingAttachment).count() == 0
+    assert session.query(KnowledgeSource).count() == 0
+    raw_dir = tmp_path / "vault" / "raw" / "engineering"
+    assert not any(raw_dir.iterdir()) if raw_dir.exists() else True

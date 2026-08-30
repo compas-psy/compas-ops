@@ -2,12 +2,14 @@
 Dedicated Knowledge Bot invite flow (без HTTP/webhook — та часть в
 test_knowledge_telegram_hook.py)."""
 
+import uuid
 from datetime import timedelta
 
 import pytest
 
 from helm_core.knowledge.onboarding import (
-    consume_invite, create_invite, find_user_by_identity, resolve_active_user_by_identity,
+    consume_invite, create_invite, find_user_by_identity, reactivate_user,
+    resolve_active_user_by_identity, suspend_user,
 )
 from helm_core.models import KnowledgeUserStatus
 from helm_core.models.base import utcnow
@@ -124,3 +126,51 @@ def test_resolve_active_user_by_identity_returns_none_for_suspended_user(session
 
 def test_find_user_by_identity_returns_none_for_truly_unknown_identity(session):
     assert find_user_by_identity(session, channel=CHANNEL, external_user_id="nobody") is None
+
+
+# ── suspend_user()/reactivate_user() ─────────────────────────────────────────
+
+def test_suspend_user_blocks_access_and_is_idempotent(session):
+    result = create_invite(session, created_by="owner")
+    consume_invite(session, raw_token=result.raw_token, channel=CHANNEL,
+                   external_user_id="111", external_chat_id="111")
+
+    first = suspend_user(session, result.user.id)
+    second = suspend_user(session, result.user.id)
+
+    assert first.status == "success"
+    assert second.status == "noop"
+    assert result.user.status == KnowledgeUserStatus.SUSPENDED
+    assert result.user.suspended_at is not None
+    assert resolve_active_user_by_identity(session, channel=CHANNEL, external_user_id="111") is None
+
+
+def test_reactivate_user_restores_access(session):
+    result = create_invite(session, created_by="owner")
+    consume_invite(session, raw_token=result.raw_token, channel=CHANNEL,
+                   external_user_id="111", external_chat_id="111")
+    suspend_user(session, result.user.id)
+
+    outcome = reactivate_user(session, result.user.id)
+
+    assert outcome.status == "success"
+    assert result.user.status == KnowledgeUserStatus.ACTIVE
+    assert result.user.suspended_at is None
+    resolved = resolve_active_user_by_identity(session, channel=CHANNEL, external_user_id="111")
+    assert resolved is not None and resolved.id == result.user.id
+
+
+def test_reactivate_user_does_not_touch_deleted(session):
+    result = create_invite(session, created_by="owner")
+    result.user.status = KnowledgeUserStatus.DELETED
+    session.flush()
+
+    outcome = reactivate_user(session, result.user.id)
+
+    assert outcome.status == "noop"
+    assert result.user.status == KnowledgeUserStatus.DELETED
+
+
+def test_suspend_user_not_found(session):
+    outcome = suspend_user(session, uuid.uuid4())
+    assert outcome.status == "not_found"

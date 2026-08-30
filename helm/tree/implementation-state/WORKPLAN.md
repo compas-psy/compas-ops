@@ -253,17 +253,34 @@ Panel P8.6.5 ещё не существует). Remember/probe для KNOWLEDGE_
 knowledge-telegram-bot.md`, включая точный шаг BotFather, который нужен
 от владельца до живой проверки.
 
-297 → 304 → 334 теста зелёных по ходу коммитов этой фазы. **Честно не
-проверено**: живой деплой не выполнялся, Telegram-сторона owner-путей
-(`helm-control`) untestable локально — но `/hooks/knowledge-telegram`
-(в отличие от неё) тестируется целиком как обычный FastAPI-роутер (16
-тестов на вебхук). Реальный `KNOWLEDGE_TELEGRAM_BOT_TOKEN` у владельца
-ещё не заведён — до этого шага вебхук fail-closed отклоняет всё.
-Осознанно НЕ реализовано этим заходом (см. V3.8-DELTA.md, ADR-025):
-файлы/ZIP/голос для KNOWLEDGE_USER, fair queue/per-user quotas
-enforcement (P8.6.4), Panel roles (P8.6.5), per-user style (P8.6.6),
-export/offboarding (P8.6.7), recall Micro-Memory через `probe()` — полный
-v3.8 acceptance ждёт этих фаз, READY не объявлено.
+**P8.6.4 fair queue + per-user quotas**: `helm_core/knowledge/
+quotas.py` — `check_and_record_ingest()` (storage/daily-ingest байтовые
+квоты, ленивый сброс дневного счётчика по UTC-дате) и
+`check_queue_depth()` — обе внутри уже работающего
+`register_file_for_ingest()`, единая точка для одиночных вложений и
+членов ZIP. Переполнение на члене архива не откатывает принятых
+соседей: элемент помечается FAILED/retryable с `error_code`
+= `storage`/`daily_ingest`/`queue_depth`. `chat_intake.py` подчищает
+уже перенесённый на диск файл при отказе — сирота не остаётся.
+`worker.py::claim_next_job()` переписан с глобального FIFO на
+round-robin по тенантам (§14 "one user's large ZIP does not starve
+another user's short upload"); для единственного сегодняшнего тенанта
+поведение идентично прежнему. Частично P8.6.7: `suspend_user()`/
+`reactivate_user()` + `POST /internal/knowledge/users/{id}/suspend`/
+`.../reactivate` — «приостановлен» перестал быть состоянием, которое
+можно получить только прямой мутацией БД в тесте.
+
+297 → 304 → 334 → 350 тестов зелёных по ходу коммитов этой фазы.
+**Честно не проверено**: живой деплой не выполнялся, Telegram-сторона
+owner-путей (`helm-control`) untestable локально — но
+`/hooks/knowledge-telegram` (в отличие от неё) тестируется целиком как
+обычный FastAPI-роутер (16 тестов на вебхук). Реальный
+`KNOWLEDGE_TELEGRAM_BOT_TOKEN` у владельца ещё не заведён — до этого
+шага вебхук fail-closed отклоняет всё. Осознанно НЕ реализовано этим
+заходом (см. V3.8-DELTA.md, ADR-025): файлы/ZIP/голос для
+KNOWLEDGE_USER, Panel roles (P8.6.5), per-user style (P8.6.6),
+vault-экспорт и RED-delete (остаток P8.6.7), recall Micro-Memory через
+`probe()` — полный v3.8 acceptance ждёт этих фаз, READY не объявлено.
 
 ### P8.5.2.1 — ZIP batch ingest (v3.7): код готов, ждёт живого деплоя (30.08.2026)
 

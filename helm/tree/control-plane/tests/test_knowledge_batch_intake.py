@@ -383,6 +383,29 @@ def test_cancel_remaining_skips_queued_keeps_completed(session, tmp_path, monkey
     assert items[other_name] == KnowledgeBatchItemStatus.SKIPPED_CANCELLED
 
 
+def test_batch_member_exceeding_storage_quota_fails_without_blocking_siblings(session, tmp_path, monkeypatch):
+    """v3.8 §14.4 — квота проверяется per-member (та же register_file_for_
+    ingest(), что у одиночных вложений): член, из-за которого пробита
+    квота, получает FAILED/retryable, уже принятые соседи не откатываются."""
+    from helm_core.models import KnowledgeUser
+    from conftest import SYSTEM_OWNER_ID
+    owner = session.get(KnowledgeUser, SYSTEM_OWNER_ID)
+    owner.storage_quota_bytes = 10
+    session.flush()
+
+    _, outcome, _ = _stage_and_resolve(
+        session, tmp_path, monkeypatch,
+        {"small.txt": b"12345", "big.txt": b"1234567890123456789012345"})
+
+    items = {i.archive_member_path_original: i
+            for i in session.scalars(select(KnowledgeBatchItem)
+                                     .where(KnowledgeBatchItem.batch_id == outcome.batch.id)).all()}
+    assert items["small.txt"].status == KnowledgeBatchItemStatus.QUEUED
+    assert items["big.txt"].status == KnowledgeBatchItemStatus.FAILED
+    assert items["big.txt"].retryable is True
+    assert items["big.txt"].error_code == "storage"
+
+
 def test_disable_created_sources_only_touches_batch_created_not_preexisting(session, tmp_path, monkeypatch):
     from helm_core.knowledge.ingest import register_file_for_ingest
     vault_root = str(tmp_path / "vault")

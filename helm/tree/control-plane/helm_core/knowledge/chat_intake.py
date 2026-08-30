@@ -42,6 +42,7 @@ from sqlalchemy.orm import Session
 
 from ..models import KnowledgeDomain, KnowledgePendingAttachment, KnowledgeSensitivity, KnowledgeSource
 from .ingest import DEFAULT_VAULT_ROOT, RegisterFileResult, register_file_for_ingest
+from .quotas import QuotaExceeded
 from .tenancy import bind_knowledge_user
 
 #: §14.5.1: "bounded size". Telegram Bot API само не отдаёт файлы крупнее
@@ -170,7 +171,7 @@ def stage_attachment(session: Session, *, channel: str, data: bytes,
 @dataclass
 class ResolveOutcome:
     status: Literal["not_pending", "cancelled", "invalid", "missing", "failed",
-                    "ingested", "duplicate"]
+                    "ingested", "duplicate", "quota_exceeded"]
     result: RegisterFileResult | None = None
     pending: KnowledgePendingAttachment | None = None
 
@@ -290,12 +291,25 @@ def resolve_pending_domain(session: Session, *, channel: str, reply_text: str,
                   if domain == KnowledgeDomain.SIMPAS_ZAPISKI.value
                   else "internal")
 
-    result = register_file_for_ingest(
-        session, domain=domain, raw_path=raw_path,
-        original_filename=pending.original_filename, mime_type=pending.mime_type,
-        sensitivity=sensitivity, channel=channel, recipient=recipient, vault_root=vault_root,
-        knowledge_user_id=knowledge_user_id,
-    )
+    try:
+        result = register_file_for_ingest(
+            session, domain=domain, raw_path=raw_path,
+            original_filename=pending.original_filename, mime_type=pending.mime_type,
+            sensitivity=sensitivity, channel=channel, recipient=recipient, vault_root=vault_root,
+            knowledge_user_id=knowledge_user_id,
+        )
+    except QuotaExceeded:
+        # §14.4: файл уже физически перенесён в raw_path (atomic-move
+        # выше, до самой проверки квоты — квота живёт в БД, не на уровне
+        # файловой системы) — байты, на которые квоты не хватило, не
+        # должны остаться сиротой на диске. spool_path уже удалён тем же
+        # move'ом, так что повторный ответ на этот pending нашёл бы
+        # несуществующий spool_path и сам получил бы "missing" — здесь
+        # то же самое, просто сразу, не тратя ещё один раунд диалога.
+        raw_path.unlink(missing_ok=True)
+        session.delete(pending)
+        session.flush()
+        return ResolveOutcome(status="quota_exceeded", pending=pending)
     session.delete(pending)
     session.flush()
     return ResolveOutcome(status="ingested", result=result, pending=pending)
@@ -314,6 +328,9 @@ ATTACHMENT_MOVE_FAILED_NOTICE = (
     "Не получилось сохранить файл — попробуйте выбрать домен ещё раз."
 )
 ATTACHMENT_CANCELLED_NOTICE = "Хорошо, не сохраняю."
+ATTACHMENT_QUOTA_EXCEEDED_NOTICE = (
+    "Квота хранилища/загрузки исчерпана — файл не сохранён. Обратитесь к владельцу."
+)
 
 
 def resolve_outcome_text(outcome: ResolveOutcome) -> str | None:
@@ -332,6 +349,8 @@ def resolve_outcome_text(outcome: ResolveOutcome) -> str | None:
         return ATTACHMENT_MISSING_NOTICE
     if outcome.status == "failed":
         return ATTACHMENT_MOVE_FAILED_NOTICE
+    if outcome.status == "quota_exceeded":
+        return ATTACHMENT_QUOTA_EXCEEDED_NOTICE
     if outcome.status == "invalid":
         return format_domain_menu(outcome.pending.original_filename)
     return None  # not_pending

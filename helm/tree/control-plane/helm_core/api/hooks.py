@@ -299,6 +299,8 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
                       "attachment_move_failed"),
             "invalid": (f"attachment-retry:{pending_id}:{inbound.message_id}",
                        "attachment_domain_invalid"),
+            "quota_exceeded": (f"attachment-quota-exceeded:{pending_id}:{inbound.message_id}",
+                              "attachment_quota_exceeded"),
         }.get(resolved.status, (None, None))
         if reference is not None:
             enqueue(session, channel="max", recipient=inbound.chat_id, reference=reference,

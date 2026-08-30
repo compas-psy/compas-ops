@@ -30,7 +30,7 @@ from .parsers import parse_file
 from .tenancy import bind_knowledge_user
 from ..models import (
     KnowledgeBatchItem, KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus,
-    KnowledgeSource, KnowledgeStatus,
+    KnowledgeSource, KnowledgeStatus, KnowledgeUser, KnowledgeUserStatus,
 )
 from ..outbox import enqueue
 
@@ -38,36 +38,62 @@ logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 5
 
+#: v3.8 §14.4 fair queue: индекс последнего обслуженного тенанта внутри
+#: ЭТОГО процесса. Модульное состояние, не персистентное — справедливость
+#: нужна на время жизни процесса воркера, не через рестарт (после
+#: рестарта распределение снова стартует с начала списка, это не портит
+#: гарантию "ни один тенант не голодает бесконечно").
+_last_served_tenant_index = -1
+
+
+def _active_tenant_ids(session: Session) -> list:
+    """`knowledge_users` — не tenant-scoped, RLS на неё не распространяется
+    (реестр тенантов, не их контент) — этот запрос видит всех, никакой
+    привязки GUC для него не нужно."""
+    return list(session.scalars(
+        select(KnowledgeUser.id).where(KnowledgeUser.status == KnowledgeUserStatus.ACTIVE)
+        .order_by(KnowledgeUser.created_at)
+    ).all())
+
 
 def claim_next_job(session: Session) -> KnowledgeIngestJob | None:
     """Взять один PENDING job, пометить RUNNING. Возвращает None, если
-    очередь пуста — вызывающий код решает, ждать или выйти.
+    очередь пуста у ВСЕХ тенантов — вызывающий код решает, ждать или выйти.
 
-    v3.8 Фаза 1: `knowledge_ingest_jobs` под RLS — привязка к
-    SYSTEM_OWNER здесь ЖЁСТКАЯ упрощение, не итоговый дизайн. Спека прямо
-    допускает "background workers may use a service role" именно для
-    такого межтенантного claim — но вводить вторую роль/секрет БД сейчас
-    ради нулевой практической разницы (сегодня ровно один тенант мог бы
-    вообще что-то поставить в очередь) было бы инфраструктурой без
-    надобности (CLAUDE.md §2). Ту же строку придётся заменить настоящим
-    fair-queue claim'ом по всем тенантам, когда P8.6.4 введёт второго
-    живого пользователя с собственной очередью — эта функция тогда
-    перестанет видеть чужие PENDING job'ы, и это будет замечено первым
-    же живым вторым пользователем, не только на code review.
+    v3.8 §14.4 fair queue: round-robin по тенантам, не глобальный FIFO —
+    "one user's large ZIP does not starve another user's short upload".
+    `knowledge_ingest_jobs` под RLS — единственный способ увидеть работу
+    больше чем одного тенанта БЕЗ отдельной service-роли с BYPASSRLS
+    (спека это разрешает, но заводить вторую БД-роль/секрет ради этого —
+    инфраструктура без надобности, CLAUDE.md §2) — перебрать активных
+    тенантов по одному, привязывая GUC к каждому по очереди, и взять
+    первый, у которого вообще есть PENDING работа. Для сегодняшнего
+    единственного тенанта (SYSTEM_OWNER) поведение не отличается от
+    прежнего чистого FIFO — цикл на первой же итерации находит его job.
     """
-    bind_knowledge_user(session, None)
-    job = session.scalar(
-        select(KnowledgeIngestJob)
-        .where(KnowledgeIngestJob.status == KnowledgeIngestStatus.PENDING)
-        .order_by(KnowledgeIngestJob.created_at)
-        .limit(1)
-        .with_for_update(skip_locked=True)
-    )
-    if job is None:
+    global _last_served_tenant_index
+    tenants = _active_tenant_ids(session)
+    if not tenants:
         return None
-    job.status = KnowledgeIngestStatus.RUNNING
-    session.flush()
-    return job
+    n = len(tenants)
+    for offset in range(n):
+        idx = (_last_served_tenant_index + 1 + offset) % n
+        tenant_id = tenants[idx]
+        bind_knowledge_user(session, tenant_id)
+        job = session.scalar(
+            select(KnowledgeIngestJob)
+            .where(KnowledgeIngestJob.knowledge_user_id == tenant_id,
+                  KnowledgeIngestJob.status == KnowledgeIngestStatus.PENDING)
+            .order_by(KnowledgeIngestJob.created_at)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        if job is not None:
+            _last_served_tenant_index = idx
+            job.status = KnowledgeIngestStatus.RUNNING
+            session.flush()
+            return job
+    return None
 
 
 def _frontmatter(source: KnowledgeSource) -> str:

@@ -192,6 +192,29 @@ def test_knowledge_users_invite_endpoint_requires_service_auth(client):
     assert r.status_code == 422 or r.status_code == 401
 
 
+def test_knowledge_users_suspend_and_reactivate_endpoints(client):
+    invite = post_internal(client, "/internal/knowledge/users/invite", {}).json()
+    user_id = invite["knowledge_user_id"]
+
+    suspend = post_internal(client, f"/internal/knowledge/users/{user_id}/suspend", {})
+    assert suspend.status_code == 200, suspend.text
+    assert suspend.json()["status"] == "success"
+
+    reactivate = post_internal(client, f"/internal/knowledge/users/{user_id}/reactivate", {})
+    assert reactivate.status_code == 200, reactivate.text
+    assert reactivate.json()["status"] == "success"
+
+    with client.app.state.session_factory() as session:
+        from helm_core.models import KnowledgeUser, KnowledgeUserStatus
+        user = session.get(KnowledgeUser, uuid.UUID(user_id))
+        assert user.status == KnowledgeUserStatus.ACTIVE
+
+
+def test_knowledge_users_suspend_endpoint_404_for_unknown_user(client):
+    r = post_internal(client, f"/internal/knowledge/users/{uuid.uuid4()}/suspend", {})
+    assert r.status_code == 404
+
+
 # ── P8.5.7 Telegram-сторона: /internal/knowledge/attachment/* ────────────────
 # helm-control работает вне процесса Control Plane (хост Hermes, свой venv)
 # и не может звать chat_intake.py напрямую — те же функции, что MAX вызывает

@@ -33,6 +33,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models import KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus, KnowledgeSource, KnowledgeStatus
+from .quotas import check_and_record_ingest, check_queue_depth
 from .tenancy import bind_knowledge_user
 
 #: Корень Vault (§14.2). Параметр, а не только константа: тесты обязаны
@@ -141,6 +142,15 @@ def register_file_for_ingest(session: Session, *, domain: str, raw_path: Path,
     )
     if existing is not None:
         return RegisterFileResult(source=existing, job=None, created=False)
+
+    # §14.4 "oversized user upload rejected before resource exhaustion" —
+    # ДО записи source, не постфактум; дубликаты (проверка выше) не
+    # тарифицируются повторно. check_queue_depth() здесь же покрывает и
+    # ZIP-члены (каждый идёт через эту же функцию, batch_intake.py::
+    # _process_item()) — при переполнении очереди дальнейшие члены
+    # батча просто получают FAILED/retryable, не рушат уже принятые.
+    check_and_record_ingest(session, knowledge_user_id=knowledge_user_id, size_bytes=len(data))
+    check_queue_depth(session, knowledge_user_id=knowledge_user_id)
 
     source = KnowledgeSource(
         knowledge_user_id=knowledge_user_id, domain=domain, sha256=sha256, raw_path=str(raw_path),

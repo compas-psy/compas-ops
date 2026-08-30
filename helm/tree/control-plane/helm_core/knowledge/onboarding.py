@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Literal
@@ -153,6 +154,44 @@ def find_user_by_identity(session: Session, *, channel: str,
     if identity is None:
         return None
     return session.get(KnowledgeUser, identity.knowledge_user_id)
+
+
+@dataclass
+class UserActionOutcome:
+    status: Literal["not_found", "success", "noop"]
+    user: KnowledgeUser | None = None
+
+
+def suspend_user(session: Session, knowledge_user_id: uuid.UUID) -> UserActionOutcome:
+    """§14.3 "Suspend/offboard": bot/panel access blocked, data retained.
+    Идемпотентно — повторный suspend уже suspended-пользователя не
+    ошибка (`noop`), не исключение."""
+    user = session.get(KnowledgeUser, knowledge_user_id)
+    if user is None:
+        return UserActionOutcome(status="not_found")
+    if user.status == KnowledgeUserStatus.SUSPENDED:
+        return UserActionOutcome(status="noop", user=user)
+    user.status = KnowledgeUserStatus.SUSPENDED
+    user.suspended_at = utcnow()
+    session.flush()
+    return UserActionOutcome(status="success", user=user)
+
+
+def reactivate_user(session: Session, knowledge_user_id: uuid.UUID) -> UserActionOutcome:
+    """Обратное `suspend_user()` — НЕ трогает `DELETED` (RED-действие,
+    отдельное, необратимое; reactivate из DELETED был бы тихим обходом
+    того, что должно требовать явного отдельного решения)."""
+    user = session.get(KnowledgeUser, knowledge_user_id)
+    if user is None:
+        return UserActionOutcome(status="not_found")
+    if user.status == KnowledgeUserStatus.DELETED:
+        return UserActionOutcome(status="noop", user=user)
+    if user.status == KnowledgeUserStatus.ACTIVE:
+        return UserActionOutcome(status="noop", user=user)
+    user.status = KnowledgeUserStatus.ACTIVE
+    user.suspended_at = None
+    session.flush()
+    return UserActionOutcome(status="success", user=user)
 
 
 def resolve_active_user_by_identity(session: Session, *, channel: str,
