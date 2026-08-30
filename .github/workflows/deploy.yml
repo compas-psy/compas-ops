@@ -27,6 +27,7 @@ on:
         options:
           - keyscan       # напечатать ключи сервера для VPS_KNOWN_HOSTS
           - verify        # только посмотреть состояние, ничего не менять
+          - cleanup       # убрать мусор прошлых выкатов
           - backup        # снять точку возврата
           - deploy        # код + панель + пересборка контейнеров
           - migrate       # alembic upgrade head (после deploy)
@@ -118,6 +119,43 @@ jobs:
         if: inputs.action == 'backup' || inputs.action == 'deploy'
         run: |
           ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" 'sudo /opt/helm/scripts/backup.sh'
+
+      # ── cleanup: мусор прошлых выкатов ───────────────────────────────
+      - name: Убрать мусор прошлых выкатов
+        if: inputs.action == 'cleanup'
+        run: |
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
+            set -e
+            echo "=== было ==="
+            df -h / | tail -1
+            sudo docker system df
+
+            echo "=== образы без тега (остатки прошлых сборок) ==="
+            # Только dangling. НЕ "docker system prune -a": тот снёс бы и
+            # образы остановленных сервисов, а образ воркера с Docling —
+            # около 6 ГБ, повторное скачивание стоит дороже занятого места.
+            sudo docker image prune -f
+
+            echo "=== кэш сборки ==="
+            # Слои промежуточных сборок helm-core и воркера. Пересобираются
+            # при следующем выкате, хранить между выкатами незачем.
+            sudo docker builder prune -f
+
+            echo "=== остановленные контейнеры ==="
+            sudo docker container prune -f
+
+            echo "=== временные файлы прошлых доставок ==="
+            # Сюда scp кладёт код перед раскладкой. При обрыве выката они
+            # остаются и в следующий раз мешают mv.
+            rm -rf /tmp/helm_core /tmp/migrations /tmp/panel-dist \
+                   /tmp/docker-compose.yml /tmp/Caddyfile \
+                   /tmp/backup.sh /tmp/restore_test.sh /tmp/helm-control-init.py
+            ls -la /tmp | head -20
+
+            echo "=== стало ==="
+            df -h / | tail -1
+            sudo docker system df
+          '
 
       # ── deploy: код, панель, конфигурация, пересборка ────────────────
       - uses: actions/setup-node@v4
