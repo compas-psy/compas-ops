@@ -23,8 +23,9 @@ pack, когда локального ответа объективно недо
 | P8.5.7 Telegram/MAX ingress вложений (spool → RAW → register_file_for_ingest, двухшаговый диалог домена) | ✅ ОБА канала задеплоены и подтверждены живьём (реальные PDF, все 3 шага диалога включая уведомление о завершении разбора, `ADR-021`). По пути найдены и исправлены живые баги: cross-device rename, отсутствие `TelegramSender` в outbox, блокировка исходящего трафика к Telegram на уровне сети/`ufw` — заменяет прежнее agentic-чтение файлов чифом, не сосуществует с ним (решение владельца) |
 | P8.5.2.1 ZIP batch ingest (v3.7) — safe expansion + durable child queue + exactly-once финал | ⚠️ код готов, 250/250 тестов зелёных, **ждёт живого деплоя** (`ADR-024`, `V3.7-DELTA.md`) — не проверено ни на реальном Telegram, ни на MAX |
 | P8.5.8 Panel строка Knowledge | ❌ не реализовано (бессмысленно без данных) |
-| v3.8 P8.6.1 схема тенантности + P8.6.3 PostgreSQL RLS | ⚠️ код готов, миграции `ef1ba5467e14`/`4da8c9e90115`, **ждёт живого деплоя** (`V3.8-DELTA.md`) — единственный тенант сегодня (SYSTEM_OWNER), Dedicated Knowledge Bot ещё не существует |
-| v3.8 P8.5.12 Micro-Memory «Запомни» (text, без голоса/reply-to) | ⚠️ код готов, подключено в MAX/Telegram, **ждёт живого деплоя** (`V3.8-DELTA.md`) — голос (GigaAM) и «Запомни это» как ответ на сообщение не реализованы |
+| v3.8 P8.6.1 схема тенантности + P8.6.3 PostgreSQL RLS | ⚠️ код готов, миграции `ef1ba5467e14`/`4da8c9e90115`, **ждёт живого деплоя** (`V3.8-DELTA.md`) |
+| v3.8 P8.5.12 Micro-Memory «Запомни» (text, без голоса/reply-to) | ⚠️ код готов, подключено в MAX/Telegram (owner) и Dedicated Knowledge Bot (secondary), **ждёт живого деплоя** (`V3.8-DELTA.md`) — голос (GigaAM) и «Запомни это» как ответ на сообщение не реализованы |
+| v3.8 P8.6.2 Dedicated Telegram Knowledge Bot + onboarding | ⚠️ код готов, `/hooks/knowledge-telegram` + one-use invite, **ждёт живого деплоя** (`ADR-025`) — владелец ещё не завёл `KNOWLEDGE_TELEGRAM_BOT_TOKEN` через BotFather; файлы/ZIP/голос для secondary-пользователей не реализованы |
 
 Подробности реализации — в `docs/KNOWLEDGE_INGEST.md` (что и как попадает
 в базу) и `docs/KNOWLEDGE_RETRIEVAL.md` (что и как из неё достаётся).
@@ -34,7 +35,9 @@ pack, когда локального ответа объективно недо
 knowledge-attachment-transport.md`.
 Методология перехода на v3.4 и список того, что осталось —
 `implementation-state/V3.4-DELTA.md`. v3.8 (Micro-Memory + multi-user
-tenancy): `implementation-state/V3.8-DELTA.md`.
+tenancy): `implementation-state/V3.8-DELTA.md`. Dedicated Knowledge
+Telegram Bot + onboarding (P8.6.2): `docs/adr/ADR-025-dedicated-
+knowledge-telegram-bot.md`.
 
 ## Четыре уровня памяти (§14.1)
 

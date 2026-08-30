@@ -195,7 +195,7 @@ huggingface.co) — эти четыре бага нашлись ТОЛЬКО н�
 `knowledge-bootstrap.sh`, `group_add: ["10001", "1001"]` в
 docker-compose (GID `helm-secrets` + GID хостовой группы `helm`).
 
-### v3.8 Фаза 1 — тенантность/RLS/Micro-Memory: код готов, ждёт живого деплоя (30.08.2026)
+### v3.8 Фаза 1+2 — тенантность/RLS/Micro-Memory/Dedicated Bot: код готов, ждёт живого деплоя (30.08.2026)
 
 Директива владельца поверх v3.7: закончить v3.7 (не переделывая ZIP/
 single-document pipeline), затем взять из v3.8 (§14, HELM_FINAL_v3.8)
@@ -237,13 +237,33 @@ Control Plane — иначе владелец решил бы, что запис
 задокументированные пробелы (GigaAM нигде не подключён в кодовой базе
 вообще), не эта функция.
 
-297 → 304 теста зелёных по ходу трёх коммитов этой фазы. **Честно не
-проверено**: живой деплой не выполнялся, Telegram-сторона (`helm-
-control`) untestable локально, как и весь остальной Telegram-код HELM
-Knowledge. Осознанно НЕ начато этим заходом (см. V3.8-DELTA.md):
-Dedicated Knowledge Bot (P8.6.2), fair queue/quotas (P8.6.4), Panel
-roles (P8.6.5), per-user style (P8.6.6), export/offboarding (P8.6.7) —
-полный v3.8 acceptance ждёт этих фаз, READY не объявлено.
+**P8.6.2 Dedicated Telegram Knowledge Bot + onboarding**: отдельный
+роутер `api/hooks_knowledge_telegram.py` — `/hooks/knowledge-telegram`
+идёт НАПРЯМУЮ в Control Plane, минуя Hermes целиком (§9.0 "not a new
+reasoning service"): KNOWLEDGE_USER физически не может дойти до Hermes/
+OpenRouter/LiteLLM, модуль их не импортирует вообще. Onboarding —
+`knowledge/onboarding.py::create_invite()`/`consume_invite()`,
+одноразовый токен (`secrets.token_urlsafe(32)`, только хэш в БД, та же
+дисциплина, что `PanelEnrollmentToken`), канонический принцип
+идентичности — Telegram `from.id`, не введённый вручную `chat_id`.
+Owner-триггер инвайта — `POST /internal/knowledge/users/invite` (HMAC,
+Panel P8.6.5 ещё не существует). Remember/probe для KNOWLEDGE_USER —
+тот же `try_remember()`/`probe()`, что у SYSTEM_OWNER, с явным
+`knowledge_user_id`. Полный разбор — `docs/adr/ADR-025-dedicated-
+knowledge-telegram-bot.md`, включая точный шаг BotFather, который нужен
+от владельца до живой проверки.
+
+297 → 304 → 334 теста зелёных по ходу коммитов этой фазы. **Честно не
+проверено**: живой деплой не выполнялся, Telegram-сторона owner-путей
+(`helm-control`) untestable локально — но `/hooks/knowledge-telegram`
+(в отличие от неё) тестируется целиком как обычный FastAPI-роутер (16
+тестов на вебхук). Реальный `KNOWLEDGE_TELEGRAM_BOT_TOKEN` у владельца
+ещё не заведён — до этого шага вебхук fail-closed отклоняет всё.
+Осознанно НЕ реализовано этим заходом (см. V3.8-DELTA.md, ADR-025):
+файлы/ZIP/голос для KNOWLEDGE_USER, fair queue/per-user quotas
+enforcement (P8.6.4), Panel roles (P8.6.5), per-user style (P8.6.6),
+export/offboarding (P8.6.7), recall Micro-Memory через `probe()` — полный
+v3.8 acceptance ждёт этих фаз, READY не объявлено.
 
 ### P8.5.2.1 — ZIP batch ingest (v3.7): код готов, ждёт живого деплоя (30.08.2026)
 

@@ -160,6 +160,38 @@ def test_knowledge_remember_endpoint_requires_service_auth(client):
     assert r.status_code == 422 or r.status_code == 401
 
 
+# ── P8.6.2 Telegram-сторона: /internal/knowledge/users/invite ────────────────
+
+def test_knowledge_users_invite_endpoint_creates_invited_user(client):
+    r = post_internal(client, "/internal/knowledge/users/invite", {
+        "display_name": "Тестовый пользователь",
+    })
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert uuid.UUID(body["knowledge_user_id"])
+    assert len(body["invite_token"]) > 20
+    assert body["expires_at"]
+
+    with client.app.state.session_factory() as session:
+        from helm_core.models import KnowledgeUser, KnowledgeUserStatus
+        user = session.get(KnowledgeUser, uuid.UUID(body["knowledge_user_id"]))
+        assert user.status == KnowledgeUserStatus.INVITED
+        assert user.display_name == "Тестовый пользователь"
+
+
+def test_knowledge_users_invite_endpoint_builds_deep_link_when_bot_username_configured(client):
+    client.app.state.settings.knowledge_telegram_bot_username = "my_knowledge_bot"
+    r = post_internal(client, "/internal/knowledge/users/invite", {})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["deep_link"] == f"https://t.me/my_knowledge_bot?start=kb_{body['invite_token']}"
+
+
+def test_knowledge_users_invite_endpoint_requires_service_auth(client):
+    r = client.post("/internal/knowledge/users/invite", json={})
+    assert r.status_code == 422 or r.status_code == 401
+
+
 # ── P8.5.7 Telegram-сторона: /internal/knowledge/attachment/* ────────────────
 # helm-control работает вне процесса Control Plane (хост Hermes, свой venv)
 # и не может звать chat_intake.py напрямую — те же функции, что MAX вызывает

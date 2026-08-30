@@ -15,7 +15,7 @@ from sqlalchemy.orm import sessionmaker
 
 from .actions.fixtures import build_registry
 from .approvals.service import ApprovalService
-from .api import auth, hooks, internal, panel
+from .api import auth, hooks, hooks_knowledge_telegram, internal, panel
 from .api.security import SecurityHeadersMiddleware
 from .channels.max import MaxSender
 from .channels.telegram import TelegramSender
@@ -41,6 +41,19 @@ def create_app(settings: Settings | None = None, *, service_secret: str | None =
     app.state.telegram_bot_token = telegram_bot_token or read_secret("telegram_bot_token", "")
     app.state.max_webhook_secret = read_secret("max_webhook_secret", "")
     app.state.max_owner_id = settings.max_owner_id
+    #: v3.8 §9.0/P8.6.2 — bot token/webhook-секрет ОТДЕЛЬНЫЕ от owner
+    #: chief bot (`telegram_bot_token`/`max_webhook_secret` выше): этот
+    #: адаптер не должен получить возможность действовать от имени
+    #: владельца, даже случайно (§14.18 "Dedicated Knowledge Bot process
+    #: receives only its Telegram token + Control Plane service
+    #: credential"). Пустая строка по умолчанию — тот же принцип, что у
+    #: `max_bot_token`/`telegram_bot_token`: реализация не блокируется
+    #: отсутствием реального токена, вебхук просто не может быть вызван
+    #: успешно (secret compare с пустой строкой = verify_webhook_secret
+    #: fail-closed) до того, как владелец заведёт бота через BotFather.
+    app.state.knowledge_telegram_bot_token = read_secret("knowledge_telegram_bot_token", "")
+    app.state.knowledge_telegram_webhook_secret = read_secret(
+        "knowledge_telegram_webhook_secret", "")
     app.state.hermes_bridge = HermesBridge(HERMES_BRIDGE_URL, read_secret("hermes_api_server_key", ""))
     #: Отправители по каналам для доставщика outbox. Обычный ответ
     #: владельцу в Telegram по-прежнему уходит синхронно через adapter
@@ -52,6 +65,7 @@ def create_app(settings: Settings | None = None, *, service_secret: str | None =
     app.state.senders = {
         "max": MaxSender(read_secret("max_bot_token", "")),
         "telegram": TelegramSender(app.state.telegram_bot_token),
+        "telegram_knowledge": TelegramSender(app.state.knowledge_telegram_bot_token),
     }
 
     def approval_service_factory(session):
@@ -64,6 +78,7 @@ def create_app(settings: Settings | None = None, *, service_secret: str | None =
     app.include_router(panel.router)
     app.include_router(auth.router)
     app.include_router(hooks.router)
+    app.include_router(hooks_knowledge_telegram.router)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

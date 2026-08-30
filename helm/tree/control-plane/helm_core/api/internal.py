@@ -29,6 +29,7 @@ from ..knowledge.chat_intake import (
     resolve_outcome_text, resolve_pending_domain, stage_attachment,
 )
 from ..knowledge.memory import try_remember
+from ..knowledge.onboarding import create_invite
 from ..knowledge.probe import probe
 from ..models import ModelRun, Task, TaskEvent, TaskStatus, utcnow
 from ..outbox import enqueue
@@ -246,6 +247,46 @@ def knowledge_batches_disable_created_sources(
     count = disable_created_sources(session, batch_id)
     session.commit()
     return {"disabled_count": count}
+
+
+class KnowledgeUserInviteIn(BaseModel):
+    display_name: str | None = Field(default=None, max_length=128)
+    timezone: str = "Europe/Moscow"
+    locale: str = "ru"
+    storage_quota_bytes: int | None = None
+    daily_ingest_quota_bytes: int | None = None
+    #: §14.3: опциональная предварительная сверка — НЕ замена verified
+    #: `from.id` первого приватного контакта с ботом, только доп. слой.
+    expected_external_user_id: str | None = Field(default=None, max_length=64)
+
+
+@router.post("/knowledge/users/invite", status_code=status.HTTP_201_CREATED)
+def knowledge_users_invite(body: KnowledgeUserInviteIn, request: Request,
+                           session: Session = Depends(get_session)) -> dict[str, Any]:
+    """v3.8 §9.0/P8.6.2 — завести нового `KNOWLEDGE_USER` + одноразовый
+    инвайт. Panel-фронтенд для этого (P8.6.5, "Система → Пользователи")
+    ещё не реализован — до него единственный путь владельца вызвать
+    это же самое: HMAC-подписанный вызов этого internal-эндпоинта
+    (тот же service secret, что уже используют внутренние скрипты
+    деплоя), не открытая наружу форма.
+    """
+    result = create_invite(
+        session, created_by=request.app.state.owner_id, display_name=body.display_name,
+        timezone=body.timezone, locale=body.locale,
+        storage_quota_bytes=body.storage_quota_bytes,
+        daily_ingest_quota_bytes=body.daily_ingest_quota_bytes,
+        expected_external_user_id=body.expected_external_user_id,
+    )
+    session.commit()
+    bot_username = request.app.state.settings.knowledge_telegram_bot_username
+    deep_link = (f"https://t.me/{bot_username}?start=kb_{result.raw_token}"
+                if bot_username else None)
+    return {
+        "knowledge_user_id": str(result.user.id),
+        "invite_token": result.raw_token,
+        "deep_link": deep_link,
+        "expires_at": result.invite.expires_at.isoformat(),
+    }
 
 
 class OutboundMessage(BaseModel):

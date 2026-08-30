@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     #: намерения считается вместе с owner_id.
     max_owner_id: str = ""
 
+    #: v3.8 §9.0/P8.6.2 — публичное имя бота (видно в его собственном
+    #: профиле, не секрет), нужно только для сборки deep-link
+    #: `https://t.me/<username>?start=kb_<token>`. Токен/webhook-секрет
+    #: самого бота — файлы `read_secret()` (app.py), не Settings.
+    knowledge_telegram_bot_username: str = ""
+
     #: RP ID для WebAuthn (§10.5.7). Привязан к домену намеренно: credential,
     #: выданный для helm.cmpas.ru, не сработает нигде больше.
     panel_rp_id: str = "helm.cmpas.ru"

@@ -55,5 +55,6 @@ def test_telegram_sender_posts_chat_id_and_text_to_bot_api():
 def test_create_app_registers_senders_for_both_channels():
     settings = Settings(database_url=DB_URL, policy_path=POLICY_PATH, owner_id=OWNER_ID)
     app = create_app(settings, service_secret="test-service-secret", telegram_bot_token="tg-token")
-    assert set(app.state.senders) == {"max", "telegram"}
+    assert set(app.state.senders) == {"max", "telegram", "telegram_knowledge"}
     assert isinstance(app.state.senders["telegram"], TelegramSender)
+    assert isinstance(app.state.senders["telegram_knowledge"], TelegramSender)
