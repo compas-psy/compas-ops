@@ -527,3 +527,52 @@ def test_openapi_is_not_exposed(client):
     """Схема internal API не публикуется: §4.6 запрещает публичный admin API."""
     assert client.get("/openapi.json").status_code == 404
     assert client.get("/docs").status_code == 404
+
+
+#: v3.8 §14.1/§14.14, P8.6.6 — путь ответа KNOWLEDGE_USER не должен уметь
+#: дойти ни до платной модели, ни до owner-стиля. `helm_core.hermes`/
+#: `chief` здесь потому, что стилевая капсула владельца (когда она
+#: появится) будет жить именно там: импорт такого модуля в путь
+#: secondary-пользователя — это и есть протечка стиля между
+#: пользователями, даже если сам стиль ещё не написан.
+FORBIDDEN_MODEL_CLIENTS = {
+    "litellm", "openai", "anthropic", "openrouter", "hermes", "chief",
+}
+
+#: Композиция ответа: здесь запрещён И сетевой клиент — из модуля,
+#: который СОСТАВЛЯЕТ ответ, HTTP нужен ровно для одного, и это «позвать
+#: модель в обход». В транспортном вебхуке (ниже) он, наоборот,
+#: понадобится законно — для скачивания файлов Telegram.
+ANSWER_COMPOSITION_MODULES = (
+    "helm_core.knowledge.probe",
+    "helm_core.knowledge.recall",
+    "helm_core.knowledge.memory",
+)
+
+
+def test_knowledge_answer_composition_cannot_reach_a_model_or_owner_style():
+    """§14.1 "KNOWLEDGE_USER default: paid AI forbidden" и §14.14 "Styles
+    never cross users" — структурно, а не наблюдением за поведением.
+
+    Это же и есть сегодняшний ответ на P8.6.6: пересекаться стилям
+    нечему — текстового синтеза (локализатора) в кодовой базе нет вовсе,
+    ответы Z0/Z1 чисто экстрактивные, а модули, которые их составляют,
+    физически не импортируют ничего, чем можно было бы переписать текст.
+    """
+    import importlib
+
+    forbidden = FORBIDDEN_IN_PANEL | FORBIDDEN_MODEL_CLIENTS
+    for name in ANSWER_COMPOSITION_MODULES:
+        module = importlib.import_module(name)
+        leaked = _imported_modules(module.__file__) & forbidden
+        assert not leaked, f"{name} импортирует {sorted(leaked)}"
+
+
+def test_knowledge_user_webhook_cannot_reach_a_model():
+    """Транспорт secondary-пользователя: сетевой клиент здесь со временем
+    появится законно (скачивание файлов Telegram), а клиент модели —
+    никогда. §9.0: "transport adapter, not a new reasoning service"."""
+    import helm_core.api.hooks_knowledge_telegram as hook_module
+
+    leaked = _imported_modules(hook_module.__file__) & FORBIDDEN_MODEL_CLIENTS
+    assert not leaked, f"вебхук KNOWLEDGE_USER импортирует {sorted(leaked)}"
