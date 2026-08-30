@@ -42,7 +42,7 @@ from sqlalchemy.orm import Session
 
 from ..models import KnowledgeDomain, KnowledgePendingAttachment, KnowledgeSensitivity, KnowledgeSource
 from .ingest import DEFAULT_VAULT_ROOT, RegisterFileResult, register_file_for_ingest
-from .tenancy import resolve_system_owner_id
+from .tenancy import bind_knowledge_user
 
 #: §14.5.1: "bounded size". Telegram Bot API само не отдаёт файлы крупнее
 #: 20MB обычному боту (getFile) — берём тот же потолок для обоих каналов,
@@ -145,8 +145,7 @@ def stage_attachment(session: Session, *, channel: str, data: bytes,
     `knowledge_user_id=None` — существующие call sites (P8.6.2 Dedicated
     Knowledge Bot ещё не существует): разрешается в SYSTEM_OWNER.
     """
-    if knowledge_user_id is None:
-        knowledge_user_id = resolve_system_owner_id(session)
+    knowledge_user_id = bind_knowledge_user(session, knowledge_user_id)
 
     if len(data) > MAX_ATTACHMENT_BYTES:
         raise AttachmentTooLarge(len(data), MAX_ATTACHMENT_BYTES)
@@ -186,7 +185,20 @@ def resolve_pending_domain(session: Session, *, channel: str, reply_text: str,
     `recipient` — chat_id/адресат, куда воркер пришлёт уведомление о
     завершении разбора (P8.5.7, третий шаг). Не обязателен: без него
     ingest всё равно проходит, просто уведомления о завершении не будет.
+
+    Тенант привязывается ДО поиска pending-строки (P8.6.1 default —
+    SYSTEM_OWNER), не после: `knowledge_pending_attachments` — tenant-
+    scoped таблица под RLS (v3.8 §14.4), запрос ниже увидит только
+    строки текущего тенанта. Пока Dedicated Knowledge Bot (P8.6.2) не
+    существует, единственный вызывающий канал — SYSTEM_OWNER, так что
+    порядок не теряет ни одной существующей pending-строки; когда
+    появится Phase 2, определять тенанта (например, по verified
+    `from.id` конкретного канала) придётся ДО этого запроса в любом
+    случае — RLS не единственная причина, просто заставляет решить это
+    раньше.
     """
+    knowledge_user_id = bind_knowledge_user(session, None)
+
     pending = session.scalar(
         select(KnowledgePendingAttachment)
         .where(KnowledgePendingAttachment.channel == channel)
@@ -195,15 +207,6 @@ def resolve_pending_domain(session: Session, *, channel: str, reply_text: str,
     )
     if pending is None:
         return ResolveOutcome(status="not_pending")
-
-    # Тенант — тот, что уже записан на самой pending-строке (её задал
-    # stage_attachment() в момент получения файла), не повторное
-    # разрешение в SYSTEM_OWNER по умолчанию — иначе при появлении
-    # Dedicated Knowledge Bot (P8.6.2) эта проверка молча сверялась бы не
-    # с тем tenant'ом, что реально прислал вложение.
-    knowledge_user_id = pending.knowledge_user_id
-    if knowledge_user_id is None:
-        knowledge_user_id = resolve_system_owner_id(session)
 
     parsed = parse_domain_reply(reply_text)
     if parsed is None:

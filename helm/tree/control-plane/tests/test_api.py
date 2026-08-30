@@ -11,6 +11,7 @@ from sqlalchemy import select
 from helm_core.api.security import sign
 from helm_core.app import create_app
 from helm_core.config import Settings
+from helm_core.knowledge.rls import apply_rls
 from helm_core.models import Base, Task
 
 from conftest import DB_URL, OWNER_ID, POLICY_PATH, seed_system_owner
@@ -22,6 +23,8 @@ SERVICE_SECRET = "test-service-secret"
 def client(engine, tmp_path, monkeypatch):
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        apply_rls(conn)
     seed_system_owner(engine)
     settings = Settings(database_url=DB_URL, policy_path=POLICY_PATH, owner_id=OWNER_ID)
     # /internal/knowledge/attachment/* (P8.5.7, Telegram) зовёт stage_
@@ -179,7 +182,9 @@ def test_attachment_resolve_endpoint_ingests_by_domain_alias(client):
     assert "simpas/company" in body["text"]
     with client.app.state.session_factory() as session:
         from sqlalchemy import select
+        from helm_core.knowledge.tenancy import bind_knowledge_user
         from helm_core.models import KnowledgeSource
+        bind_knowledge_user(session, None)
         source = session.scalars(select(KnowledgeSource)).one()
         assert source.domain == "simpas/company"
 
@@ -252,7 +257,9 @@ def test_batches_resolve_domain_endpoint_queues_and_notifies_on_completion(clien
 
     with client.app.state.session_factory() as session:
         from sqlalchemy import select
+        from helm_core.knowledge.tenancy import bind_knowledge_user
         from helm_core.models import KnowledgeBatchItem, KnowledgeSource
+        bind_knowledge_user(session, None)
         item = session.scalars(select(KnowledgeBatchItem)).one()
         source = session.get(KnowledgeSource, item.source_id)
         assert source.domain == "engineering"

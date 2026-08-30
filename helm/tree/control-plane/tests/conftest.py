@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from helm_core.actions.fixtures import build_registry
 from helm_core.approvals.service import ApprovalService
 from helm_core.ingest import IngestService
+from helm_core.knowledge.rls import apply_rls
 from helm_core.models import Base, KnowledgeUser, KnowledgeUserRole
 
 OWNER_ID = "tg:100500"
@@ -49,6 +50,12 @@ def engine():
     eng = create_engine(DB_URL)
     Base.metadata.drop_all(eng)
     Base.metadata.create_all(eng)
+    # v3.8: RLS-политики не часть SQLAlchemy metadata — create_all() их не
+    # заводит. Без этого вызова pytest тестировал бы только ORM-схему и
+    # explicit-предикаты в коде, никогда сами RLS-политики (второй слой
+    # defense-in-depth, helm_core/knowledge/rls.py).
+    with eng.begin() as conn:
+        apply_rls(conn)
     return eng
 
 

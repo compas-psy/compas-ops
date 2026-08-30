@@ -42,7 +42,7 @@ from sqlalchemy.orm import Session
 from . import zip_safety
 from .chat_intake import _CANCEL_SENTINEL, domain_list_lines, parse_domain_reply
 from .ingest import DEFAULT_VAULT_ROOT, register_file_for_ingest
-from .tenancy import resolve_system_owner_id
+from .tenancy import bind_knowledge_user
 from ..models import (
     BATCH_ITEM_TERMINAL_STATUSES, KnowledgeBatchItem, KnowledgeBatchItemStatus,
     KnowledgeBatchStatus, KnowledgeDomain, KnowledgeIngestBatch, KnowledgeIngestJob,
@@ -123,8 +123,7 @@ def stage_batch(session: Session, *, channel: str, data: bytes,
     `knowledge_user_id=None` — существующие call sites (P8.6.2 Dedicated
     Knowledge Bot ещё не существует): разрешается в SYSTEM_OWNER.
     """
-    if knowledge_user_id is None:
-        knowledge_user_id = resolve_system_owner_id(session)
+    knowledge_user_id = bind_knowledge_user(session, knowledge_user_id)
 
     if len(data) > MAX_ARCHIVE_BYTES:
         raise ArchiveTooLarge(len(data), MAX_ARCHIVE_BYTES)
@@ -194,7 +193,14 @@ def resolve_batch_domain(session: Session, *, channel: str, reply_text: str,
     """Следующее сообщение канала после `stage_batch()` — тот же паттерн
     диалога, что `chat_intake.resolve_pending_domain()`, но для batch:
     ищет `KnowledgeIngestBatch` в `WAITING_DOMAIN` на этом канале (не
-    `KnowledgePendingAttachment` — разные таблицы, разные диалоги)."""
+    `KnowledgePendingAttachment` — разные таблицы, разные диалоги).
+
+    Тенант привязывается ДО поиска (тот же RLS-порядок, что
+    `chat_intake.resolve_pending_domain()`) — `knowledge_ingest_batches`
+    tenant-scoped под RLS, запрос ниже иначе не увидел бы ни одной строки.
+    """
+    bind_knowledge_user(session, None)
+
     batch = session.scalar(
         select(KnowledgeIngestBatch)
         .where(KnowledgeIngestBatch.channel == channel,
@@ -466,7 +472,14 @@ def retry_failed(session: Session, batch_id: uuid.UUID, *,
     Если `source_id` пуст — провал был на этапе извлечения из архива,
     источника ещё не существует, и `_process_item()` с нуля — корректный
     путь.
+
+    Тенант — SYSTEM_OWNER по умолчанию (Panel roles/P8.6.5 ещё не
+    существуют, вызывающая сторона — internal API без понятия «от чьего
+    имени», см. bind_knowledge_user()); нужен ДО первого запроса — тот
+    же RLS-порядок, что и везде в этом модуле.
     """
+    bind_knowledge_user(session, None)
+
     batch = session.get(KnowledgeIngestBatch, batch_id)
     if batch is None:
         return None
@@ -514,6 +527,8 @@ def retry_failed(session: Session, batch_id: uuid.UUID, *,
 def cancel_remaining(session: Session, batch_id: uuid.UUID) -> KnowledgeIngestBatch | None:
     """§final clarifications: очередь/не начатые члены -> SKIPPED_CANCELLED,
     завершённые остаются как есть — не откатываем READY/EXACT_DUPLICATE."""
+    bind_knowledge_user(session, None)
+
     batch = session.get(KnowledgeIngestBatch, batch_id)
     if batch is None:
         return None
@@ -541,6 +556,8 @@ def disable_created_sources(session: Session, batch_id: uuid.UUID) -> int:
     источников (`KnowledgeStatus.ARCHIVED`, уже исключён из `probe()`),
     не физическое удаление файлов."""
     from ..models import KnowledgeSource, KnowledgeStatus
+
+    bind_knowledge_user(session, None)
 
     items = session.scalars(
         select(KnowledgeBatchItem).where(

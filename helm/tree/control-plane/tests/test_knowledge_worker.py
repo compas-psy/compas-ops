@@ -153,6 +153,55 @@ def test_process_job_success_creates_chunks_and_marks_done(session, tmp_path, mo
     assert [c.text for c in chunks] == ["Решение: используем Postgres."]
 
 
+def test_process_job_binds_rls_from_the_jobs_own_tenant_not_another_users(session, tmp_path,
+                                                                          monkeypatch):
+    """v3.8 §14.4: "worker tests must prove it never processes a source for
+    another user" — job.knowledge_user_id (immutable) — единственный
+    источник тенанта для process_job(), не какой-то текущий GUC сессии.
+    Второй пользователь заведён и его GUC выставлен ДО claim/process,
+    чтобы явно проверить, что process_job() сам переключает привязку на
+    тенанта job'а, а не наследует чужую от вызывающего кода."""
+    from helm_core.knowledge.tenancy import bind_knowledge_user
+    from helm_core.models import KnowledgeUser, KnowledgeUserRole
+
+    other_user = KnowledgeUser(role=KnowledgeUserRole.KNOWLEDGE_USER)
+    session.add(other_user)
+    session.flush()
+
+    job = _make_pending_job(session, tmp_path, "owner-doc.txt")
+    assert job.knowledge_user_id != other_user.id  # owner-задача, не other_user
+
+    bind_knowledge_user(session, other_user.id)  # вызывающий код смотрит НЕ на owner
+    monkeypatch.setattr(worker_module, "parse_file",
+                        lambda path: _FakeParseResult(text="Решение: используем Postgres.",
+                                                      parser="markitdown", quality_ok=True))
+
+    process_job(session, job)
+    session.flush()
+
+    assert job.status == KnowledgeIngestStatus.DONE
+    source = session.get(KnowledgeSource, job.source_id)
+    assert source.knowledge_user_id == job.knowledge_user_id
+    chunks = session.scalars(
+        select(KnowledgeChunk).where(KnowledgeChunk.source_id == source.id)
+    ).all()
+    assert chunks and all(c.knowledge_user_id == job.knowledge_user_id for c in chunks)
+
+    # RLS: с GUC other_user'а созданный source/chunk невидимы вообще.
+    # expunge_all() обязателен: иначе session.get() либо вернул бы объект
+    # из identity map в памяти, не сходив в БД (RLS не проверился бы), либо
+    # (после expire_all()) ORM истолковал бы "RLS скрыла строку" как
+    # ObjectDeletedError — с точки зрения identity map это неотличимо от
+    # реального удаления. expunge_all() заставляет трактовать PK как
+    # "не видели вовсе", и тогда пустой результат — просто None.
+    bind_knowledge_user(session, other_user.id)
+    session.expunge_all()
+    assert session.get(KnowledgeSource, source.id) is None
+    assert session.scalars(
+        select(KnowledgeChunk).where(KnowledgeChunk.source_id == source.id)
+    ).all() == []
+
+
 def test_process_job_failure_after_successful_parse_marks_failed_not_crash(session, tmp_path, monkeypatch):
     """НАЙДЕНО на живом смоук-тесте 29.08.2026: раньше try/except в
     process_job() оборачивал только parse_file() — исключение на ЛЮБОМ

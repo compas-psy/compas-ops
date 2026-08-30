@@ -47,6 +47,7 @@ from ..knowledge.chat_intake import (
     resolve_outcome_text, resolve_pending_domain, stage_attachment,
 )
 from ..knowledge.probe import probe, query_hash
+from ..knowledge.tenancy import bind_knowledge_user
 from ..models import (
     KnowledgeAnswerRun, KnowledgeBatchStatus, KnowledgeIngestBatch, KnowledgePendingAttachment,
     TaskEvent,
@@ -114,7 +115,9 @@ def _run_chief_and_enqueue_reply(state: State, *, task_id: str, owner_id: str,
         # Hermes реально вызван и ответил, это платная эскалация (C1),
         # логируется постфактум, потому что латентность/факт успеха
         # известны только сейчас.
+        answer_run_owner_id = bind_knowledge_user(session, None)
         session.add(KnowledgeAnswerRun(
+            knowledge_user_id=answer_run_owner_id,
             query_hash=query_hash(text), domain=None, mode="C1",
             paid_ai_used=True, evidence_count=0,
         ))
@@ -168,6 +171,13 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
     # текста) — иначе конфликтует с `register()`'s собственной записью
     # `ChannelEvent` для того же external_message_id (см. docstring
     # `record_channel_event_once`).
+    #
+    # v3.8 Фаза 1: `knowledge_pending_attachments`/`knowledge_ingest_
+    # batches` под RLS — привязка ДО первого запроса к ним в этом
+    # обработчике, иначе обе проверки ниже увидели бы ноль строк
+    # независимо от реального состояния.
+    bind_knowledge_user(session, None)
+
     has_pending = session.scalar(
         select(KnowledgePendingAttachment.id)
         .where(KnowledgePendingAttachment.channel == "max")

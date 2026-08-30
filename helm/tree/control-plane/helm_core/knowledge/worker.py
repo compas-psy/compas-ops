@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from .batch_intake import finalize_batch_if_terminal, sync_item_from_job
 from .ingest import split_chunks
 from .parsers import parse_file
+from .tenancy import bind_knowledge_user
 from ..models import (
     KnowledgeBatchItem, KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus,
     KnowledgeSource, KnowledgeStatus,
@@ -40,7 +41,21 @@ POLL_INTERVAL_SECONDS = 5
 
 def claim_next_job(session: Session) -> KnowledgeIngestJob | None:
     """Взять один PENDING job, пометить RUNNING. Возвращает None, если
-    очередь пуста — вызывающий код решает, ждать или выйти."""
+    очередь пуста — вызывающий код решает, ждать или выйти.
+
+    v3.8 Фаза 1: `knowledge_ingest_jobs` под RLS — привязка к
+    SYSTEM_OWNER здесь ЖЁСТКАЯ упрощение, не итоговый дизайн. Спека прямо
+    допускает "background workers may use a service role" именно для
+    такого межтенантного claim — но вводить вторую роль/секрет БД сейчас
+    ради нулевой практической разницы (сегодня ровно один тенант мог бы
+    вообще что-то поставить в очередь) было бы инфраструктурой без
+    надобности (CLAUDE.md §2). Ту же строку придётся заменить настоящим
+    fair-queue claim'ом по всем тенантам, когда P8.6.4 введёт второго
+    живого пользователя с собственной очередью — эта функция тогда
+    перестанет видеть чужие PENDING job'ы, и это будет замечено первым
+    же живым вторым пользователем, не только на code review.
+    """
+    bind_knowledge_user(session, None)
     job = session.scalar(
         select(KnowledgeIngestJob)
         .where(KnowledgeIngestJob.status == KnowledgeIngestStatus.PENDING)
@@ -99,7 +114,17 @@ def process_job(session: Session, job: KnowledgeIngestJob) -> None:
     краш-луп вместо того, чтобы просто получить FAILED и уступить место
     следующему. Один try/except на всё тело — единственный правильный
     контракт для функции, которую вызывающий код обязан не крашить.
+
+    v3.8 Фаза 1: привязка RLS-сессии — из immutable `job.knowledge_user_id`
+    самого job'а, не повторное разрешение SYSTEM_OWNER (спека явно
+    разрешает воркеру опираться на уже проставленный тенант durable job'а,
+    §14.4 "Background workers... when a durable job already contains
+    immutable knowledge_user_id") — это гарантирует, что даже когда
+    claim_next_job() перестанет быть SYSTEM_OWNER-only (P8.6.4), разбор
+    job'а физически не сможет тронуть чужой source.
     """
+    tenant_id = bind_knowledge_user(session, job.knowledge_user_id)
+
     source = session.get(KnowledgeSource, job.source_id)
     if source is None:
         job.status = KnowledgeIngestStatus.FAILED
@@ -130,7 +155,8 @@ def process_job(session: Session, job: KnowledgeIngestJob) -> None:
 
         for ordinal, chunk_text in enumerate(split_chunks(result.text)):
             session.add(KnowledgeChunk(
-                source_id=source.id, ordinal=ordinal, text=chunk_text,
+                knowledge_user_id=tenant_id, source_id=source.id, ordinal=ordinal,
+                text=chunk_text,
                 tsv=func.to_tsvector("russian", chunk_text),
             ))
             chunk_count += 1

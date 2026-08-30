@@ -27,6 +27,8 @@ from helm_core.config import Settings
 from helm_core.dispatch import BACKOFF, MAX_ATTEMPTS, deliver_pending
 from helm_core.hermes_bridge import HermesUnavailable
 from helm_core.ingest import CROSS_CHANNEL_WINDOW, strip_force_prefix
+from helm_core.knowledge.rls import apply_rls
+from helm_core.knowledge.tenancy import bind_knowledge_user
 from helm_core.models import (
     Base, ChannelEvent, KnowledgeBatchItem, KnowledgeIngestBatch, KnowledgePendingAttachment,
     KnowledgeSource, OutboxMessage, Task, utcnow,
@@ -288,6 +290,8 @@ class FakeBridge:
 def app(engine, tmp_path, monkeypatch):
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        apply_rls(conn)
     seed_system_owner(engine)
     settings = Settings(database_url=DB_URL, policy_path=POLICY_PATH, owner_id=OWNER_ID,
                         max_owner_id=MAX_OWNER_ID)
@@ -459,6 +463,7 @@ def test_webhook_stages_attachment_and_asks_for_domain(app, client):
     assert response.json()["status"] == "attachment_staged"
     assert app.state.hermes_bridge.calls == []
     with app.state.session_factory() as session:
+        bind_knowledge_user(session, None)
         pending = session.scalars(select(KnowledgePendingAttachment)).one()
         assert pending.channel == "max"
         assert pending.original_filename == "report.pdf"
@@ -478,6 +483,7 @@ def test_webhook_resolves_pending_domain_and_ingests(app, client):
     assert response.json()["status"] == "attachment_ingested"
     assert app.state.hermes_bridge.calls == []
     with app.state.session_factory() as session:
+        bind_knowledge_user(session, None)
         assert session.scalars(select(KnowledgePendingAttachment)).all() == []
         source = session.scalars(select(KnowledgeSource)).one()
         assert source.domain == "engineering"
@@ -492,6 +498,7 @@ def test_webhook_zapiski_domain_reply_forces_client_restricted(app, client):
     post_hook(client, _update(text="simpas/zapiski", mid="mid.domain-reply-2"))
 
     with app.state.session_factory() as session:
+        bind_knowledge_user(session, None)
         source = session.scalars(select(KnowledgeSource)).one()
         assert source.domain == "simpas/zapiski"
         assert source.sensitivity == "client_restricted"
@@ -507,6 +514,7 @@ def test_webhook_invalid_domain_reply_reprompts_without_calling_chief(app, clien
     assert response.json()["status"] == "attachment_domain_invalid"
     assert app.state.hermes_bridge.calls == []
     with app.state.session_factory() as session:
+        bind_knowledge_user(session, None)
         assert session.scalars(select(KnowledgePendingAttachment)).one() is not None
         assert session.scalars(select(Task)).all() == []
 
@@ -520,6 +528,7 @@ def test_webhook_cancel_removes_pending_attachment(app, client):
     assert response.status_code == 200
     assert response.json()["status"] == "attachment_cancelled"
     with app.state.session_factory() as session:
+        bind_knowledge_user(session, None)
         assert session.scalars(select(KnowledgePendingAttachment)).all() == []
         assert session.scalars(select(KnowledgeSource)).all() == []
 
@@ -534,6 +543,7 @@ def test_webhook_duplicate_attachment_delivery_is_deduped(app, client):
     assert second.json()["status"] == "duplicate"
     assert fake_download.call_count == 1
     with app.state.session_factory() as session:
+        bind_knowledge_user(session, None)
         assert len(session.scalars(select(KnowledgePendingAttachment)).all()) == 1
 
 
@@ -544,6 +554,7 @@ def test_webhook_attachment_download_failure_notifies_owner(app, client):
     assert response.status_code == 200
     assert response.json()["status"] == "attachment_failed"
     with app.state.session_factory() as session:
+        bind_knowledge_user(session, None)
         assert session.scalars(select(KnowledgePendingAttachment)).all() == []
         message = session.scalars(select(OutboxMessage)).one()
         assert "скачать" in message.payload_reference["text"]
@@ -557,6 +568,7 @@ def test_webhook_unknown_attachment_shape_notifies_owner_instead_of_crashing(app
     assert response.status_code == 200
     assert response.json()["status"] == "attachment_failed"
     with app.state.session_factory() as session:
+        bind_knowledge_user(session, None)
         assert session.scalars(select(KnowledgePendingAttachment)).all() == []
 
 
@@ -589,6 +601,7 @@ def test_webhook_zip_attachment_routes_to_batch_not_single_attachment(app, clien
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "batch_staged"
     with app.state.session_factory() as session:
+        bind_knowledge_user(session, None)
         # Не одиночный диалог — ZIP не попадает в KnowledgePendingAttachment.
         assert session.scalars(select(KnowledgePendingAttachment)).all() == []
         batch = session.scalars(select(KnowledgeIngestBatch)).one()
@@ -609,6 +622,7 @@ def test_webhook_zip_domain_reply_queues_children_without_calling_chief(app, cli
     assert response.json()["status"] == "batch_queued"
     assert app.state.hermes_bridge.calls == []
     with app.state.session_factory() as session:
+        bind_knowledge_user(session, None)
         item = session.scalars(select(KnowledgeBatchItem)).one()
         source = session.get(KnowledgeSource, item.source_id)
         assert source.domain == "engineering"
@@ -642,6 +656,7 @@ def test_webhook_calls_chief_when_probe_finds_nothing(app, client):
     assert len(app.state.hermes_bridge.calls) == 1
     with app.state.session_factory() as session:
         from helm_core.models import KnowledgeAnswerRun
+        bind_knowledge_user(session, None)
         run = session.scalars(select(KnowledgeAnswerRun)).one()
         assert run.mode == "C1"
         assert run.paid_ai_used is True

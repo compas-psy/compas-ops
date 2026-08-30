@@ -21,6 +21,7 @@ probe находит меньше, чем финальная версия (се�
 from __future__ import annotations
 
 import hashlib
+import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -28,6 +29,7 @@ from sqlalchemy import Text, func, select
 from sqlalchemy.dialects.postgresql import TSQUERY
 from sqlalchemy.orm import Session
 
+from .tenancy import bind_knowledge_user
 from ..models import KnowledgeAnswerRun, KnowledgeChunk, KnowledgeDomain, KnowledgeSource, KnowledgeStatus
 
 #: §14.13 требует «calibrated threshold» — реального golden-набора
@@ -69,7 +71,8 @@ def query_hash(query: str) -> str:
     return hashlib.sha256(query.strip().casefold().encode("utf-8")).hexdigest()
 
 
-def _lexical_search(session: Session, *, query: str, domain: str | None) -> list[Evidence]:
+def _lexical_search(session: Session, *, query: str, domain: str | None,
+                    knowledge_user_id: uuid.UUID) -> list[Evidence]:
     # plainto_tsquery AND-combines all stems ('как' & 'решен' & 'приня') —
     # a natural-language question then matches only a document containing
     # ALL of its stems. Real documents here are single factual statements
@@ -87,6 +90,11 @@ def _lexical_search(session: Session, *, query: str, domain: str | None) -> list
         .join(KnowledgeSource, KnowledgeChunk.source_id == KnowledgeSource.id)
         .where(KnowledgeChunk.tsv.op("@@")(tsquery))
         .where(KnowledgeSource.status != KnowledgeStatus.ARCHIVED)
+        # v3.8 §14.4 query rule: knowledge_user_id — первый предикат, не
+        # последний штрих. Explicit-предикат здесь — первый слой defense
+        # in depth, RLS (FORCE ROW LEVEL SECURITY) — второй; ни один не
+        # заменяет другой.
+        .where(KnowledgeSource.knowledge_user_id == knowledge_user_id)
         .order_by(rank.desc())
         .limit(MAX_EVIDENCE)
     )
@@ -122,7 +130,8 @@ def _compose_answer(evidence: list[Evidence]) -> tuple[str, str]:
     return "\n".join(lines), "Z1"
 
 
-def probe(session: Session, *, query: str, domain: str | None = None) -> ProbeResult:
+def probe(session: Session, *, query: str, domain: str | None = None,
+         knowledge_user_id: uuid.UUID | None = None) -> ProbeResult:
     """Прогнать вопрос через локальную базу знаний до платной модели.
 
     LOCAL_ANSWER пишет строку `knowledge_answer_runs` сразу — paid_ai_used
@@ -135,8 +144,18 @@ def probe(session: Session, *, query: str, domain: str | None = None) -> ProbeRe
     LLM у себя, Control Plane не видит момент завершения хода, чтобы
     залогировать строку постфактум; это открытый пробел, не реализовано,
     ждёт живой разведки хуков gateway на предмет пост-ответного события.
+
+    `knowledge_user_id=None` — существующие call sites (P8.6.2 Dedicated
+    Knowledge Bot ещё не существует): разрешается в SYSTEM_OWNER. v3.8
+    §14.4 "every query starts with knowledge_user_id" — до этого захода
+    `_lexical_search()` не фильтровала по тенанту вообще; сейчас
+    единственный тенант делает это неотличимым от прежнего поведения, но
+    закрывает реальную дыру до того, как появится второй пользователь.
     """
-    evidence = _lexical_search(session, query=query, domain=domain)
+    knowledge_user_id = bind_knowledge_user(session, knowledge_user_id)
+
+    evidence = _lexical_search(session, query=query, domain=domain,
+                               knowledge_user_id=knowledge_user_id)
 
     # §14.13 quality gate: без evidence выше порога — сразу эскалация, а
     # не «уверенный бесплатный ответ ради экономии».
@@ -146,6 +165,7 @@ def probe(session: Session, *, query: str, domain: str | None = None) -> ProbeRe
 
     answer_text, mode = _compose_answer(evidence)
     session.add(KnowledgeAnswerRun(
+        knowledge_user_id=knowledge_user_id,
         query_hash=query_hash(query), domain=domain, mode=mode,
         paid_ai_used=False, evidence_count=len(evidence),
     ))

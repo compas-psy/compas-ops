@@ -33,7 +33,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models import KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus, KnowledgeSource, KnowledgeStatus
-from .tenancy import resolve_system_owner_id
+from .tenancy import bind_knowledge_user
 
 #: Корень Vault (§14.2). Параметр, а не только константа: тесты обязаны
 #: указывать свой временный каталог — писать в /opt/helm-knowledge при
@@ -68,8 +68,7 @@ def ingest_text(session: Session, *, domain: str, text: str,
     `knowledge_user_id=None` — существующие call sites (P8.6.2 Dedicated
     Knowledge Bot ещё не существует): разрешается в SYSTEM_OWNER.
     """
-    if knowledge_user_id is None:
-        knowledge_user_id = resolve_system_owner_id(session)
+    knowledge_user_id = bind_knowledge_user(session, knowledge_user_id)
 
     sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
     existing = session.scalar(
@@ -130,8 +129,7 @@ def register_file_for_ingest(session: Session, *, domain: str, raw_path: Path,
     `knowledge_user_id=None` — существующие call sites (P8.6.2 Dedicated
     Knowledge Bot ещё не существует): разрешается в SYSTEM_OWNER.
     """
-    if knowledge_user_id is None:
-        knowledge_user_id = resolve_system_owner_id(session)
+    knowledge_user_id = bind_knowledge_user(session, knowledge_user_id)
 
     data = raw_path.read_bytes()
     sha256 = hashlib.sha256(data).hexdigest()

@@ -23,9 +23,10 @@ from webauthn.registration.verify_registration_response import VerifiedRegistrat
 from helm_core.api.auth import _b64u
 from helm_core.app import create_app
 from helm_core.config import Settings
+from helm_core.knowledge.rls import apply_rls
 from helm_core.models import Base, PanelEnrollmentToken, PanelSession, WebauthnCredential, utcnow
 
-from conftest import DB_URL, POLICY_PATH
+from conftest import DB_URL, POLICY_PATH, seed_system_owner
 
 BOT_TOKEN = "test-bot-token"
 #: Без префикса "tg:" — Telegram Login Widget присылает голый числовой id
@@ -59,6 +60,13 @@ def app_and_client():
     engine = create_engine(DB_URL)
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
+    # Этот файл не трогает Knowledge-таблицы, но drop_all/create_all на
+    # ТОЙ ЖЕ физической БД, что использует helm_test для всех остальных
+    # тестов, иначе оставлял бы их без RLS/SYSTEM_OWNER до следующего
+    # фикстуры, которая это восстановит — независимо от порядка запуска.
+    with engine.begin() as conn:
+        apply_rls(conn)
+    seed_system_owner(engine)
     settings = Settings(database_url=DB_URL, policy_path=POLICY_PATH, owner_id=OWNER_ID)
     app = create_app(settings, service_secret="test-service-secret", telegram_bot_token=BOT_TOKEN)
     app.state.panel_auth_cookie_secret = "test-cookie-secret"

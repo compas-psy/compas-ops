@@ -10,12 +10,13 @@ duplicate signal" (явный acceptance-критерий CONTINUE_HELM_v3.7_TO_
 import uuid
 
 import pytest
-from sqlalchemy import select
+import sqlalchemy.exc
+from sqlalchemy import select, text
 
 from helm_core.knowledge.batch_intake import stage_batch
 from helm_core.knowledge.chat_intake import stage_attachment
 from helm_core.knowledge.ingest import ingest_text, register_file_for_ingest
-from helm_core.knowledge.tenancy import resolve_system_owner_id
+from helm_core.knowledge.tenancy import bind_knowledge_user, resolve_system_owner_id
 from helm_core.models import KnowledgeIngestBatch, KnowledgePendingAttachment, KnowledgeSource, KnowledgeUser, KnowledgeUserRole
 
 from conftest import SYSTEM_OWNER_ID
@@ -140,3 +141,55 @@ def test_stage_batch_does_not_dedup_archive_across_users(session, second_user, t
     assert owner_result.batch.knowledge_user_id == SYSTEM_OWNER_ID
     assert other_result.batch.knowledge_user_id == second_user.id
     assert other_result.waiting_for_domain is True  # НЕ "уже видели" чужой архив
+
+
+# ── PostgreSQL RLS (v3.8 §14.4 defense in depth) ────────────────────────────
+#
+# Тесты выше проходят даже без единой RLS-политики — они проверяют
+# explicit-предикат в коде (первый слой). Ниже — второй слой отдельно:
+# GUC выставляется/убирается напрямую, обходя bind_knowledge_user(), чтобы
+# доказать, что БД сама не отдаёт и не принимает чужую строку, даже если
+# приложение забудет предикат. См. helm_core/knowledge/rls.py.
+
+def _make_source(session, *, knowledge_user_id: uuid.UUID, sha256_byte: str) -> KnowledgeSource:
+    bind_knowledge_user(session, knowledge_user_id)
+    source = KnowledgeSource(
+        knowledge_user_id=knowledge_user_id, domain="engineering", sha256=sha256_byte * 64,
+        raw_path="/tmp/x", sensitivity="internal", trust="extracted", status="active",
+    )
+    session.add(source)
+    session.flush()
+    return source
+
+
+def test_rls_hides_rows_when_no_tenant_is_bound(session, second_user):
+    _make_source(session, knowledge_user_id=SYSTEM_OWNER_ID, sha256_byte="a")
+    session.flush()
+
+    session.execute(text("RESET app.current_knowledge_user_id"))
+    assert session.scalars(select(KnowledgeSource)).all() == []
+
+
+def test_rls_hides_other_tenants_rows(session, second_user):
+    owner_source = _make_source(session, knowledge_user_id=SYSTEM_OWNER_ID, sha256_byte="b")
+    other_source = _make_source(session, knowledge_user_id=second_user.id, sha256_byte="c")
+
+    bind_knowledge_user(session, second_user.id)
+    visible = session.scalars(select(KnowledgeSource)).all()
+    assert [s.id for s in visible] == [other_source.id]
+
+    bind_knowledge_user(session, SYSTEM_OWNER_ID)
+    visible = session.scalars(select(KnowledgeSource)).all()
+    assert [s.id for s in visible] == [owner_source.id]
+
+
+def test_rls_rejects_insert_for_a_different_tenant_than_the_bound_guc(session, second_user):
+    bind_knowledge_user(session, second_user.id)
+    with pytest.raises(sqlalchemy.exc.DBAPIError, match="row-level security"):
+        with session.begin_nested():
+            session.add(KnowledgeSource(
+                knowledge_user_id=SYSTEM_OWNER_ID,  # НЕ совпадает с забинденным GUC
+                domain="engineering", sha256="d" * 64, raw_path="/tmp/x",
+                sensitivity="internal", trust="extracted", status="active",
+            ))
+            session.flush()
