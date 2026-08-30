@@ -198,20 +198,28 @@ spool только после успешного rename — та же гаран
 без повторной отправки файла) вместо необработанного исключения и
 500-й ошибки на вебхук.
 
-**Telegram — не реализовано.** `hermes/plugins/helm-control/__init__.py`
-работает синхронным колбэком внутри процесса Hermes gateway (не Control
-Plane, не Docker) — неизвестно без чтения реального исходника, несёт ли
-`event` что-то про вложение и доступен ли токен бота для его скачивания
-(спека сама допускает оба исхода — §14.5.1, "smallest transport adapter"
-как легитимный запасной путь, ADR-018 по нумерации спеки). Read-only
-разведка — `scripts/knowledge-telegram-attachment-recon.sh`; код и
-решение появятся в `ADR-021` после неё, не раньше.
+**Telegram — реализовано, ждёт живого деплоя.** Живая разведка
+(`scripts/knowledge-telegram-attachment-recon.sh`/`-2.sh`/`-3.sh`, три
+захода, read-only чтение реального исходника Hermes) нашла:
+`MessageEvent.raw_message` несёт нативный объект `python-telegram-bot`
+— тот же, на котором сам `adapter.py` уже вызывает `get_file()`/
+`download_as_bytearray()` для agentic-чтения чифом. "Smallest transport
+adapter" (§14.5.1, ADR-018 по нумерации спеки) не понадобился —
+`event` уже несёт всё нужное. `helm-control/__init__.py` скачивает
+байты в фоновой задаче (`asyncio.get_running_loop().create_task`, тот
+же fire-and-forget, что у `_send_reply()`) и передаёт их по HTTP на
+два новых HMAC-подписанных эндпоинта Control Plane
+(`/internal/knowledge/attachment/stage`/`resolve` — `chat_intake.py`
+живёт в процессе Control Plane, плагин вне него, звать напрямую
+нельзя). Полный дизайн — `docs/adr/ADR-021-knowledge-attachment-
+transport.md`. **Untestable локально** (`helm-control` вне пакета
+`helm_core`, вне pytest) — первая проверка только живым деплоем.
 
-Каталог spool (`scripts/knowledge-bootstrap.sh`) теперь `770 + setgid`
-(было `700`) — пишут туда ДВЕ разные стороны под разными UID: Hermes
-(хостовый процесс, для будущей Telegram-стороны) и контейнер `helm-core`
-(для MAX, уже реализовано) — тот же паттерн, что уже применён к самому
-Vault в P8.5.2 (`group_add` + setgid, не буквальный "ровно один UID").
+Каталог spool (`scripts/knowledge-bootstrap.sh`) `770 + setgid` (было
+`700`) — понадобился только для `helm-core`/`helm-knowledge-worker`
+(разные UID контейнеров, тот же паттерн, что у Vault в P8.5.2):
+Telegram-байты идут по HTTP в тот же container-side код, что MAX,
+хостовый процесс Hermes спул на диске не трогает вовсе.
 
 ## Чего нет: аудио — GigaAM (§14.7) — P8.5.3
 
@@ -234,9 +242,12 @@ line, актуальной на дату установки) живым бенч
 разбора — шаг 3), `tests/test_knowledge_probe.py` (15, включая
 `ingest_text()` и исключение `simpas/zapiski` из общего поиска),
 `tests/test_knowledge_chat_intake.py` (27, движок диалога изолированно,
-включая cross-device rename и псевдонимы доменов) — 203/203 зелёных
-вместе с остальным control-plane (включая MAX-вложения в `tests/
-test_max_channel.py`). Fixture-матрица
+включая cross-device rename и псевдонимы доменов), `tests/test_api.py`
+(6 новых — `/internal/knowledge/attachment/stage`/`resolve`, Telegram-
+сторона) — 210/210 зелёных вместе с остальным control-plane (включая
+MAX-вложения в `tests/test_max_channel.py`). Telegram-сторона P8.5.7
+целиком (`hermes/plugins/helm-control/__init__.py`) untestable
+локально — вне пакета `helm_core`, вне pytest. Fixture-матрица
 §30.8.5 полностью (сложный/табличный PDF, скан, аудио,
 prompt-injection документ) недостижима без живой проверки GigaAM на
 сервере (Docling-часть уже подтверждена живьём выше) — появится вместе

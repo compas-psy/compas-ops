@@ -1,9 +1,10 @@
 # ADR-021. Вложения Telegram/MAX: spool, двухшаговый диалог, транспорт
 
-**Дата:** 29.08.2026 · **Статус:** MAX-сторона задеплоена и подтверждена
-живьём (203 теста зелёных, реальный PDF в MAX, `docs/KNOWLEDGE_INGEST.md`);
-Telegram-сторона **открыта** — ждёт живой разведки
-(`scripts/knowledge-telegram-attachment-recon.sh`).
+**Дата:** 29.08.2026, обновлено 30.08.2026 · **Статус:** MAX-сторона
+задеплоена и подтверждена живьём (реальный PDF в MAX,
+`docs/KNOWLEDGE_INGEST.md`); Telegram-сторона **реализована, ждёт
+живого деплоя и первой живой проверки** (код готов, untestable
+локально — `helm-control` вне пакета `helm_core`).
 
 **Две доработки по итогам живого использования, задеплоены и
 подтверждены живьём** (тот же день, после первого успешного файла):
@@ -113,31 +114,68 @@ copy во временный файл на целевой файловой си�
 может повторить выбор домена без повторной отправки файла) вместо
 необработанного исключения и 500-й на вебхук.
 
-## Telegram: открыто
+## Telegram: реализовано, ждёт живого деплоя (30.08.2026)
 
-`helm-control/__init__.py` синхронный (см. его собственный docstring —
-`async def` там уже один раз незаметно проглотил реальные сообщения,
-F-260829, до перехода на `PluginManager`). Курутина `bot.get_file()`/
-скачивание — тоже асинхронные в `python-telegram-bot`/`aiogram` —
-здесь их напрямую не вызвать без `asyncio.get_running_loop()` и того же
-паттерна fire-and-forget, что уже есть у `_send_reply()`, либо без
-существенной переработки колбэка. Кроме того, неизвестно (без чтения
-реального `event`-класса), несёт ли `event` вообще что-то про вложение,
-или его нужно доставать из отдельного «сырого» апдейта.
+Живая разведка (`scripts/knowledge-telegram-attachment-recon.sh`,
+`-2.sh`, `-3.sh` — три захода, read-only, реальный исходник Hermes на
+сервере) ответила на оба вопроса из первой версии этого раздела:
 
-Ничего не реализовано и не гадается — `scripts/knowledge-telegram-
-attachment-recon.sh` (read-only) должен ответить на два вопроса ДО
-кода:
+1. **`event` несёт вложение напрямую.** `MessageEvent`
+   (`gateway/platforms/base.py`, `@dataclass`) — "normalized
+   representation that all adapters produce" — поле `raw_message`
+   несёт НАТИВНЫЙ объект `python-telegram-bot` (подтверждено чтением
+   `_build_message_event()` в `plugins/platforms/telegram/adapter.py`:
+   `MessageEvent(..., raw_message=message, ...)`). Тот же объект, на
+   котором сам адаптер УЖЕ вызывает `await obj.get_file()` +
+   `await file_obj.download_as_bytearray()` для собственного
+   agentic-чтения чифом (строки ~9959–10195 файла на 30.08.2026,
+   document/photo/voice/audio/video — идентичный набор типов).
+   `MessageType` (enum: TEXT/PHOTO/VIDEO/AUDIO/VOICE/DOCUMENT/
+   STICKER/COMMAND/LOCATION) тоже нашёлся в том же файле.
+2. **"Smallest transport adapter" не понадобился вовсе** — раз `event`
+   уже несёт полный объект с привязанным токеном бота (PTB связывает
+   `get_file()` с ботом внутри самого объекта), отдельный HTTP-вызов
+   `getFile`+download не нужен, никакого второго consumer'а апдейтов
+   не заводится.
 
-1. Есть ли в `event` (или в объекте, из которого gateway его собирает)
-   что-то про document/photo/file_id — тогда путь такой же прямой, как
-   у MAX, разница только в асинхронности вызова.
-2. Если нет — доступен ли `TelegramAdapter` токен бота изнутри плагина
-   (`gateway.adapters[...]`, как уже используется для `_send_reply()`)
-   — тогда решение по спеке буквально: "smallest transport adapter that
-   uses the same bot token and owner allowlist without starting a
-   competing Telegram update consumer" — HTTP-вызов `getFile`+download
-   напрямую (`urllib`, тот же стиль, что уже у `helm-control`), не
-   отдельный консьюмер апдейтов Telegram.
+Единственная реальная сложность — не транспорт, а то, что `chat_intake.
+py` (SHA256/spool/домен-диалог) живёт в процессе Control Plane, а
+`helm-control` — вне его (свой venv на хосте Hermes) и не может звать
+эти функции напрямую. Решение: два новых HMAC-подписанных HTTP-
+эндпоинта в Control Plane, тот же паттерн, что уже у
+`/internal/inbound`/`/internal/knowledge/probe`:
 
-Решение и код появятся здесь после разведки, не раньше.
+```text
+POST /internal/knowledge/attachment/stage
+  {channel, data_base64, original_filename, mime_type, caption}
+  -> stage_attachment() -> {status, text: меню доменов}
+POST /internal/knowledge/attachment/resolve
+  {channel, reply_text, recipient}
+  -> resolve_pending_domain() -> {status, text}
+  status="not_pending" -> вызывающая сторона продолжает обычный путь
+```
+
+`helm-control/__init__.py`: `_on_pre_gateway_dispatch` проверяет
+вложение (`_message_has_attachment(event.raw_message)`) РАНЬШЕ проверки
+`event.text` — Telegram документы/фото обычно приходят с ПУСТЫМ `text`
+(содержимое в отдельном поле `caption`), старая проверка `if not event.
+text: return None` пропускала бы такое сообщение мимо гейта целиком.
+При найденном вложении — скачивание (`_download_message_attachment`,
+дословно тот же вызов, что уже в adapter.py) уходит в фоновую задачу
+(`asyncio.get_running_loop().create_task(...)`, тот же fire-and-forget
+паттерн, что уже у `_send_reply()`), а `{"action": "skip"}` возвращается
+СИНХРОННО сразу — то же gating-свойство, которым Probe уже коротко
+замыкает LLM на LOCAL_ANSWER, здесь применяется, чтобы чиф вложение не
+увидел вовсе (решение владельца по итогам живого MAX-теста: одно
+поведение для обоих каналов, Telegram-agentic-чтение вытесняется, не
+сосуществует). Для обычных текстовых сообщений — резолв диалога
+(`_resolve_attachment`) вызывается ДО `_register_task`, fail-open (как
+Probe): недоступность Control Plane не блокирует сообщение.
+
+**Честно не проверено** (untestable локально — `helm-control/__init__.
+py` работает вне пакета `helm_core`, вне pytest): реальное поведение
+`{"action": "skip"}` для медиа-сообщений (то же свойство, что уже
+подтверждено для Probe/LOCAL_ANSWER, но не для вложений отдельно),
+и сам факт, что скачивание через `event.raw_message` работает
+идентично тому, что видит adapter.py. `docs/KNOWLEDGE_INGEST.md`
+фиксирует это как первую живую проверку.

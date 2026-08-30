@@ -45,11 +45,33 @@ Plane идёт через ``asyncio.get_running_loop().create_task(...)``
 (fire-and-forget: await внутри синхронного колбэка невозможен, а
 ``pre_gateway_dispatch`` вызывается прямо в потоке event loop'а, так что
 ``get_running_loop()`` не падает).
+
+P8.5.7 (вложения, добавлено 30.08.2026): ``MessageEvent.raw_message``
+(``gateway/platforms/base.py``, подтверждено чтением исходника — ищи
+``_build_message_event`` в ``plugins/platforms/telegram/adapter.py``)
+несёт нативный объект ``python-telegram-bot`` — тот же самый, на
+котором сам адаптер уже вызывает ``await obj.get_file()`` +
+``await file_obj.download_as_bytearray()`` для agentic-чтения чифом.
+Отдельный "smallest transport adapter" (ADR-018 по нумерации спеки,
+``docs/adr/ADR-021...``) не понадобился — тот же токен, тот же объект,
+никакого второго consumer'а апдейтов.
+
+Решение владельца 30.08.2026 (по итогам живого теста, вскрывшего, что
+чиф уже читает вложения "на лету" через свой agentic-цикл): вложение
+теперь ВСЕГДА уходит в базу знаний через ``pre_gateway_dispatch``
+``{"action": "skip"}`` — то же самое gating-свойство, которым Probe
+ниже уже коротко замыкает LLM на LOCAL_ANSWER, — chief вложение
+напрямую больше не видит. `chat_intake.py` (SHA256/spool/домен-диалог)
+живёт в Control Plane, а этот плагин — вне его процесса (свой venv на
+хосте), поэтому вызвать эти функции напрямую нельзя: два новых HMAC-
+подписанных HTTP-эндпоинта, тот же паттерн, что уже у
+``_register_task``/``_probe_local_answer``.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import json
@@ -59,8 +81,15 @@ import urllib.request
 
 CONTROL_PLANE_URL = "http://127.0.0.1:8080/internal/inbound"
 KNOWLEDGE_PROBE_URL = "http://127.0.0.1:8080/internal/knowledge/probe"
+ATTACHMENT_STAGE_URL = "http://127.0.0.1:8080/internal/knowledge/attachment/stage"
+ATTACHMENT_RESOLVE_URL = "http://127.0.0.1:8080/internal/knowledge/attachment/resolve"
 HMAC_SECRET_PATH = "/etc/helm/secrets/hermes_service_hmac"
 REQUEST_TIMEOUT = 5
+#: §14.5.1 "bounded size" — тот же потолок, что уже применяется на
+#: стороне Control Plane (chat_intake.MAX_ATTACHMENT_BYTES); проверка
+#: здесь просто экономит скачивание заведомо слишком большого файла,
+#: финальное решение — всё равно на стороне Control Plane.
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
 #: Живёт только в памяти процесса гейтвея — переживает один запуск, не
 #: рестарт. Смысл этого кэша — донести task_id из pre_gateway_dispatch до
@@ -143,6 +172,141 @@ def _send_reply(gateway, source, content: str) -> None:
         print(f"[helm-control] не удалось создать задачу send(): {exc!r}", flush=True)
 
 
+def _stage_attachment(channel: str, data_base64: str, original_filename: str | None,
+                      mime_type: str | None, caption: str | None) -> dict:
+    """POST /internal/knowledge/attachment/stage — см. модуль internal.py
+    в Control Plane. Fail-closed, как `_register_task`: если Control
+    Plane недоступен, исключение уходит вызывающей стороне — вложение
+    без подтверждённого spool не считается принятым."""
+    body = json.dumps({
+        "channel": channel, "data_base64": data_base64,
+        "original_filename": original_filename, "mime_type": mime_type, "caption": caption,
+    }).encode("utf-8")
+    ts = str(time.time())
+    sig = _sign(_read_secret(), ts, body)
+    req = urllib.request.Request(
+        ATTACHMENT_STAGE_URL, data=body, method="POST",
+        headers={"Content-Type": "application/json", "X-Helm-Timestamp": ts,
+                "X-Helm-Signature": sig},
+    )
+    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        return json.loads(resp.read().decode())
+
+
+def _resolve_attachment(channel: str, reply_text: str, recipient: str | None) -> dict | None:
+    """POST /internal/knowledge/attachment/resolve. Fail-OPEN, как
+    `_probe_local_answer`: диалог вложений — не проверка допуска, при
+    недоступности Control Plane сообщение просто идёт обычным путём
+    (`not_pending`-подобное поведение), не блокируется."""
+    body = json.dumps({
+        "channel": channel, "reply_text": reply_text, "recipient": recipient,
+    }).encode("utf-8")
+    ts = str(time.time())
+    sig = _sign(_read_secret(), ts, body)
+    req = urllib.request.Request(
+        ATTACHMENT_RESOLVE_URL, data=body, method="POST",
+        headers={"Content-Type": "application/json", "X-Helm-Timestamp": ts,
+                "X-Helm-Signature": sig},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+            return json.loads(resp.read().decode())
+    except Exception as exc:
+        print(f"[helm-control] knowledge_attachment_resolve failed: {exc}", flush=True)
+        return None
+
+
+def _message_has_attachment(message) -> bool:
+    """Только document/photo/voice/audio/video поддерживаются P8.5.7 —
+    то же подмножество, что уже умеет adapter.py для agentic-чтения.
+    `getattr(..., None)` — не прямой атрибут: `raw_message` несёт
+    объект, специфичный для платформы адаптера (`MessageEvent` — общая
+    "normalized representation, that all adapters produce", но тип этого
+    поля отличается по платформам), прямой `message.document` уронил бы
+    AttributeError на любой не-Telegram платформе Hermes."""
+    if message is None:
+        return False
+    return bool(getattr(message, "document", None) or getattr(message, "photo", None)
+               or getattr(message, "voice", None) or getattr(message, "audio", None)
+               or getattr(message, "video", None))
+
+
+async def _download_message_attachment(message):
+    """(bytes, filename, mime_type) для одного из поддерживаемых типов
+    вложения, или None. Скачивание — `await obj.get_file()` +
+    `await file_obj.download_as_bytearray()`, дословно тот же вызов, что
+    уже подтверждён живым чтением `adapter.py` (agentic-чтение чифом,
+    строки ~9959-10195 на 30.08.2026) — не гипотеза, воспроизведение
+    существующего, работающего в этом же процессе кода.
+
+    Проверка размера ДО скачивания — там, где Telegram отдаёт
+    `file_size` заранее (document/audio/video; photo/voice его не всегда
+    несут) — экономит трафик на заведомо слишком большом файле; финальное
+    решение всё равно на стороне Control Plane (`AttachmentTooLarge`).
+    """
+    if message.document:
+        obj, filename, mime_type = (
+            message.document,
+            message.document.file_name or f"document_{message.document.file_unique_id}",
+            message.document.mime_type,
+        )
+    elif message.photo:
+        largest = message.photo[-1]
+        obj, filename, mime_type = largest, f"photo_{largest.file_unique_id}.jpg", "image/jpeg"
+    elif message.voice:
+        obj = message.voice
+        filename = f"voice_{obj.file_unique_id}.ogg"
+        mime_type = obj.mime_type or "audio/ogg"
+    elif message.audio:
+        obj = message.audio
+        filename = obj.file_name or f"audio_{obj.file_unique_id}"
+        mime_type = obj.mime_type
+    elif message.video:
+        obj = message.video
+        filename = obj.file_name or f"video_{obj.file_unique_id}.mp4"
+        mime_type = obj.mime_type
+    else:
+        return None
+
+    file_size = getattr(obj, "file_size", None)
+    if file_size is not None and file_size > MAX_ATTACHMENT_BYTES:
+        raise ValueError(f"вложение {file_size} байт превышает лимит {MAX_ATTACHMENT_BYTES}")
+
+    file_obj = await obj.get_file()
+    data = bytes(await file_obj.download_as_bytearray())
+    return data, filename, mime_type
+
+
+async def _handle_attachment_async(event, gateway, source, channel: str) -> None:
+    """Фоновая задача (fire-and-forget, запущена из синхронного
+    `pre_gateway_dispatch`): скачать вложение, отдать в Control Plane,
+    ответить владельцу меню доменов. Ничего здесь не блокирует LLM —
+    `{"action": "skip"}` уже вернулся вызывающей стороне синхронно, до
+    того как эта задача вообще началась."""
+    try:
+        result = await _download_message_attachment(event.raw_message)
+    except Exception as exc:
+        print(f"[helm-control] не удалось скачать вложение: {exc!r}", flush=True)
+        _send_reply(gateway, source,
+                   "Не смог скачать вложение — попробуйте прислать ещё раз.")
+        return
+    if result is None:
+        return  # message_type != TEXT, но не document/photo/voice/audio/video — не наш случай
+    data, filename, mime_type = result
+
+    caption = getattr(event.raw_message, "caption", None) or (event.text or None)
+    try:
+        staged = _stage_attachment(channel, base64.b64encode(data).decode("ascii"),
+                                   filename, mime_type, caption)
+    except Exception as exc:
+        print(f"[helm-control] stage_attachment failed: {exc!r}", flush=True)
+        _send_reply(gateway, source,
+                   "Не получилось сохранить вложение — попробуйте ещё раз.")
+        return
+    if staged.get("text"):
+        _send_reply(gateway, source, staged["text"])
+
+
 def _probe_local_answer(text: str) -> dict | None:
     """Free-first Knowledge Probe (ТЗ §14.11, v3.4), ДО обращения к LLM.
 
@@ -180,11 +344,24 @@ def handle(event=None, gateway=None, session_store=None, **kwargs):
 
 
 def _on_pre_gateway_dispatch(event, gateway):
+    source = event.source
+    channel = source.platform.value if source and source.platform else "system"
+
+    # P8.5.7: вложение — ВСЕГДА в базу знаний, chief его не видит напрямую
+    # (решение владельца 30.08.2026 по итогам живого теста). Проверяется
+    # ДО `if not event.text`, потому что document/photo/voice/audio/video
+    # в Telegram обычно приходят БЕЗ event.text вовсе (текст сообщения
+    # пуст, есть только caption) — старая проверка пропустила бы такое
+    # сообщение мимо гейта целиком.
+    if _message_has_attachment(event.raw_message):
+        asyncio.get_running_loop().create_task(
+            _handle_attachment_async(event, gateway, source, channel)
+        )
+        return {"action": "skip", "reason": "knowledge_attachment_pending"}
+
     if not event.text:
         return None
 
-    source = event.source
-    channel = source.platform.value if source and source.platform else "system"
     # НАЙДЕНО на живом тесте: Control Plane отвечал 422 на каждое реальное
     # Telegram-сообщение. Причина — event.message_id у Telegram это int
     # (родной тип платформы), а InboundMessage.external_message_id в
@@ -206,6 +383,19 @@ def _on_pre_gateway_dispatch(event, gateway):
         str(event.message_id) if event.message_id
         else channel + ":" + owner_id + ":" + str(time.time())
     )
+
+    # P8.5.7 шаг 2: если на этом канале есть неразрешённое вложение, это
+    # текстовое сообщение — ответ на диалог выбора домена (номер/имя/
+    # алиас/"отмена"), не обычный вопрос владельца. fail-open: как и
+    # Probe ниже, недоступность Control Plane не блокирует сообщение —
+    # оно просто идёт обычным путём (`not_pending`-подобное поведение).
+    recipient = str(source.chat_id) if source and source.chat_id is not None else None
+    attachment_result = _resolve_attachment(channel, event.text, recipient)
+    if attachment_result and attachment_result.get("status") != "not_pending":
+        if attachment_result.get("text"):
+            _send_reply(gateway, source, attachment_result["text"])
+        return {"action": "skip",
+               "reason": "knowledge_attachment_" + attachment_result["status"]}
 
     try:
         result = _register_task(channel, external_message_id, owner_id, event.text)
