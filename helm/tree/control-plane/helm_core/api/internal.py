@@ -28,6 +28,7 @@ from ..knowledge.chat_intake import (
     ATTACHMENT_TOO_LARGE_NOTICE, AttachmentTooLarge, format_domain_menu,
     resolve_outcome_text, resolve_pending_domain, stage_attachment,
 )
+from ..knowledge.memory import try_remember
 from ..knowledge.probe import probe
 from ..models import ModelRun, Task, TaskEvent, TaskStatus, utcnow
 from ..outbox import enqueue
@@ -85,6 +86,29 @@ def knowledge_probe(body: KnowledgeProbeIn,
     result = probe(session, query=body.query, domain=body.domain)
     session.commit()
     return {"outcome": result.outcome, "mode": result.mode, "answer_text": result.answer_text}
+
+
+class RememberIn(BaseModel):
+    channel: str = Field(min_length=1, max_length=32)
+    text: str = Field(min_length=1)
+    origin_message_id: str | None = Field(default=None, max_length=128)
+
+
+@router.post("/knowledge/remember")
+def knowledge_remember(body: RememberIn,
+                       session: Session = Depends(get_session)) -> dict[str, Any]:
+    """P8.5.12 Micro-Memory «Запомни» — Telegram-сторона (`helm-control`
+    работает вне процесса Control Plane и не может звать `try_remember()`
+    напрямую), тот же HMAC-паттерн, что `/internal/knowledge/probe`.
+
+    `status: "not_command"` означает «это сообщение не про Remember» —
+    вызывающая сторона продолжает обычный `_probe_local_answer`/chief
+    путь как раньше, `text` в ответе для этого случая — `None`.
+    """
+    outcome = try_remember(session, channel=body.channel, text=body.text,
+                           origin_message_id=body.origin_message_id)
+    session.commit()
+    return {"status": outcome.status, "text": outcome.text}
 
 
 class AttachmentStageIn(BaseModel):

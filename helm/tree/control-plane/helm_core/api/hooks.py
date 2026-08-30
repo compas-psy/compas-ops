@@ -46,6 +46,7 @@ from ..knowledge.chat_intake import (
     ATTACHMENT_TOO_LARGE_NOTICE, AttachmentTooLarge, format_domain_menu,
     resolve_outcome_text, resolve_pending_domain, stage_attachment,
 )
+from ..knowledge.memory import detect_remember_command, try_remember
 from ..knowledge.probe import probe, query_hash
 from ..knowledge.tenancy import bind_knowledge_user
 from ..models import (
@@ -192,8 +193,12 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
               KnowledgeIngestBatch.status == KnowledgeBatchStatus.WAITING_DOMAIN)
         .limit(1)
     ) is not None
+    # P8.5.12: детерминированная детекция ДО входа в ветку — нужна уже
+    # для условия входа ниже (Remember — не про attachment/pending
+    # state), сам try_remember() определит команду заново внутри себя.
+    remember_payload = detect_remember_command(inbound.text) if inbound.text else None
 
-    if inbound.attachments or has_pending or has_pending_batch:
+    if inbound.attachments or has_pending or has_pending_batch or remember_payload is not None:
         if record_channel_event_once(session, channel="max",
                                      external_message_id=inbound.message_id,
                                      owner_id=request.app.state.owner_id):
@@ -251,6 +256,20 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
                     payload_reference={"text": format_domain_menu(pending.original_filename)})
             session.commit()
             return {"status": "attachment_staged", "pending_id": str(pending.id)}
+
+        # P8.5.12: ДО pending-диалогов домена — "Запомни ..." никогда не
+        # является валидным ответом на вопрос о домене, и не должен
+        # попадать в них как "неверный ответ, переспрашиваю" (resolve_
+        # batch_domain()/resolve_pending_domain() иначе восприняли бы
+        # текст именно так).
+        if remember_payload is not None:
+            outcome = try_remember(session, channel="max", text=inbound.text,
+                                   origin_message_id=inbound.message_id)
+            enqueue(session, channel="max", recipient=inbound.chat_id,
+                    reference=f"remember-{outcome.status}:{inbound.message_id}",
+                    payload_reference={"text": outcome.text})
+            session.commit()
+            return {"status": f"remember_{outcome.status}"}
 
         if has_pending_batch:
             batch_outcome = resolve_batch_domain(session, channel="max", reply_text=inbound.text)

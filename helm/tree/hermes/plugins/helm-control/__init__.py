@@ -75,6 +75,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -88,6 +89,9 @@ ATTACHMENT_RESOLVE_URL = "http://127.0.0.1:8080/internal/knowledge/attachment/re
 #: internal.py: POST /internal/knowledge/batches, .../resolve-domain).
 BATCH_STAGE_URL = "http://127.0.0.1:8080/internal/knowledge/batches"
 BATCH_RESOLVE_URL = "http://127.0.0.1:8080/internal/knowledge/batches/resolve-domain"
+#: P8.5.12 Micro-Memory «Запомни» — тот же HMAC-паттерн (см.
+#: helm_core/api/internal.py: POST /internal/knowledge/remember).
+KNOWLEDGE_REMEMBER_URL = "http://127.0.0.1:8080/internal/knowledge/remember"
 HMAC_SECRET_PATH = "/etc/helm/secrets/hermes_service_hmac"
 REQUEST_TIMEOUT = 5
 #: §14.5.1 "bounded size" — тот же потолок, что уже применяется на
@@ -260,6 +264,44 @@ def _resolve_batch(channel: str, reply_text: str) -> dict | None:
     except Exception as exc:
         print(f"[helm-control] knowledge_batches_resolve_domain failed: {exc}", flush=True)
         return None
+
+
+def _try_remember(channel: str, text: str, origin_message_id: str | None) -> dict:
+    """POST /internal/knowledge/remember. Fail-CLOSED, в отличие от
+    `_probe_local_answer()`/`_resolve_attachment()`: если Control Plane
+    недоступен, сообщение НЕ должно тихо провалиться дальше к chief —
+    владелец решил бы, что "Запомни ..." сохранено (LLM вежливо
+    подтвердит), а на самом деле ничего не записано. Поднимает
+    исключение при сбое — вызывающая сторона обязана сообщить об ошибке,
+    не продолжать обычный путь."""
+    body = json.dumps({
+        "channel": channel, "text": text, "origin_message_id": origin_message_id,
+    }).encode("utf-8")
+    ts = str(time.time())
+    sig = _sign(_read_secret(), ts, body)
+    req = urllib.request.Request(
+        KNOWLEDGE_REMEMBER_URL, data=body, method="POST",
+        headers={"Content-Type": "application/json", "X-Helm-Timestamp": ts,
+                "X-Helm-Signature": sig},
+    )
+    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        return json.loads(resp.read().decode())
+
+
+#: P8.5.12 — тот же критерий, что helm_core.knowledge.memory.
+#: detect_remember_command() на стороне Control Plane (тот же принцип
+#: дублирования, что _is_zip_attachment ниже: этот процесс не может
+#: импортировать helm_core напрямую). Точное отсечение payload'а делает
+#: сервер — здесь достаточно решить, стоит ли вообще звать
+#: /internal/knowledge/remember (и, если звать, считать сбой fail-closed).
+_REMEMBER_PREFIX_RE = re.compile(
+    r"^\s*(?:/remember\b|запомни(?:те)?\b|сохрани(?:те)?\s+в\s+память\b|не\s+забудь(?:те)?\b)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_remember_command(text: str) -> bool:
+    return bool(_REMEMBER_PREFIX_RE.match(text))
 
 
 #: §14.4.0: "ZIP must no longer be treated as a MarkItDown document
@@ -492,6 +534,23 @@ def _on_pre_gateway_dispatch(event, gateway):
         str(event.message_id) if event.message_id
         else channel + ":" + owner_id + ":" + str(time.time())
     )
+
+    # P8.5.12: ДО pending-диалогов домена — "Запомни ..." не должен
+    # попасть в них как "неверный ответ, переспрашиваю" (тот же порядок,
+    # что в helm_core/api/hooks.py). Fail-CLOSED (см. _try_remember()
+    # docstring): если это похоже на команду, но Control Plane недоступен,
+    # владелец узнаёт об этом явно, сообщение не проваливается к chief.
+    if _looks_like_remember_command(event.text):
+        try:
+            remember_result = _try_remember(channel, event.text, external_message_id)
+        except Exception as exc:
+            print(f"[helm-control] knowledge_remember failed: {exc!r}", flush=True)
+            _send_reply(gateway, source, "HELM Control Plane недоступен. Не запомнил.")
+            return {"action": "skip", "reason": "control_plane_unavailable: " + str(exc)}
+        if remember_result.get("status") != "not_command":
+            if remember_result.get("text"):
+                _send_reply(gateway, source, remember_result["text"])
+            return {"action": "skip", "reason": "knowledge_remember_" + remember_result["status"]}
 
     # P8.5.7 шаг 2: если на этом канале есть неразрешённое вложение, это
     # текстовое сообщение — ответ на диалог выбора домена (номер/имя/

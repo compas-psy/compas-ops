@@ -324,6 +324,11 @@ def app(engine, tmp_path, monkeypatch):
                         lambda *a, **kw: real_stage_batch(*a, raw_batches_root=raw_batches_root, **kw))
     monkeypatch.setattr(hooks_module, "resolve_batch_domain",
                         lambda *a, **kw: real_resolve_batch(*a, vault_root=vault_root, **kw))
+    # P8.5.12: та же утечка — try_remember() пишет Markdown-зеркало под
+    # DEFAULT_VAULT_ROOT по умолчанию.
+    real_try_remember = hooks_module.try_remember
+    monkeypatch.setattr(hooks_module, "try_remember",
+                        lambda *a, **kw: real_try_remember(*a, vault_root=vault_root, **kw))
     return application
 
 
@@ -627,6 +632,59 @@ def test_webhook_zip_domain_reply_queues_children_without_calling_chief(app, cli
         source = session.get(KnowledgeSource, item.source_id)
         assert source.domain == "engineering"
         assert session.scalars(select(Task)).all() == []
+
+
+# ── P8.5.12: Micro-Memory «Запомни» через /hooks/max ────────────────────
+
+def test_webhook_remembers_fact_and_confirms_without_calling_chief(app, client):
+    response = post_hook(client, _update(text="Запомни номер машины курьера: А123ВС77",
+                                         mid="mid.remember-1"))
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "remember_stored"
+    assert app.state.hermes_bridge.calls == []
+    with app.state.session_factory() as session:
+        from helm_core.models import KnowledgeMemory, Task
+        bind_knowledge_user(session, None)
+        memory = session.scalars(select(KnowledgeMemory)).one()
+        assert "А123ВС77" in memory.canonical_text
+        message = session.scalars(select(OutboxMessage)).one()
+        assert "А123ВС77" in message.payload_reference["text"]
+        assert session.scalars(select(Task)).all() == []
+
+
+def test_webhook_remember_rejects_forbidden_secret(app, client):
+    from helm_core.knowledge.memory import FORBIDDEN_SECRET_NOTICE
+
+    response = post_hook(client, _update(text="Запомни пароль от почты: hunter2",
+                                         mid="mid.remember-secret"))
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "remember_rejected_secret"
+    with app.state.session_factory() as session:
+        from helm_core.models import KnowledgeMemory
+        bind_knowledge_user(session, None)
+        assert session.scalars(select(KnowledgeMemory)).all() == []
+        message = session.scalars(select(OutboxMessage)).one()
+        assert message.payload_reference["text"] == FORBIDDEN_SECRET_NOTICE
+
+
+def test_webhook_remember_takes_priority_over_pending_domain_reply(app, client):
+    """"Запомни ..." не должно попасть в resolve_pending_domain() как
+    "неверный ответ на вопрос о домене" — приоритет отдан Remember."""
+    with patch("helm_core.api.hooks.download_attachment", return_value=b"file bytes"):
+        post_hook(client, _attachment_update(mid="mid.att-remember"))
+
+    response = post_hook(client, _update(text="Запомни купить молоко",
+                                         mid="mid.remember-during-pending"))
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "remember_stored"
+    with app.state.session_factory() as session:
+        from helm_core.models import KnowledgePendingAttachment
+        bind_knowledge_user(session, None)
+        # Вложение остаётся ожидать домен — Remember его не тронул.
+        assert session.scalars(select(KnowledgePendingAttachment)).one() is not None
 
 
 def test_webhook_answers_locally_without_calling_chief_when_probe_finds_answer(app, client):

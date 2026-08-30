@@ -195,6 +195,56 @@ huggingface.co) — эти четыре бага нашлись ТОЛЬКО н�
 `knowledge-bootstrap.sh`, `group_add: ["10001", "1001"]` в
 docker-compose (GID `helm-secrets` + GID хостовой группы `helm`).
 
+### v3.8 Фаза 1 — тенантность/RLS/Micro-Memory: код готов, ждёт живого деплоя (30.08.2026)
+
+Директива владельца поверх v3.7: закончить v3.7 (не переделывая ZIP/
+single-document pipeline), затем взять из v3.8 (§14, HELM_FINAL_v3.8)
+только Micro-Memory + multi-user tenancy, без превращения HELM в
+multi-owner систему и без READY до полного acceptance. Граница того,
+что взято/упрощено/отложено, — `implementation-state/V3.8-DELTA.md`
+(эквивалент V3.7-DELTA.md для этого захода).
+
+**P8.6.1 схема тенантности**: `knowledge_users`/`knowledge_channel_
+identities`/`knowledge_invites`/`knowledge_user_usage` + `knowledge_
+memories` (новая) + `knowledge_user_id` на 9 существующих Knowledge-
+таблицах (миграция `ef1ba5467e14`, backfill ровно одного `SYSTEM_OWNER`
+на весь текущий корпус без reparse/rechunk/re-embedding). Компаунд-
+уникальность `(knowledge_user_id, sha256)` на `KnowledgeSource`
+заменила глобальную — `ingest.py`/`chat_intake.py`/`batch_intake.py`
+переведены на per-tenant дедуп через новый `knowledge/tenancy.py::
+resolve_system_owner_id()`.
+
+**P8.6.3 PostgreSQL RLS**: `FORCE ROW LEVEL SECURITY` на 10 tenant-
+scoped таблицах (миграция `4da8c9e90115`, DDL в `helm_core/knowledge/
+rls.py`) — второй слой defense-in-depth поверх explicit-предиката в
+коде. Session GUC `app.current_knowledge_user_id` через единую точку
+входа `bind_knowledge_user()`. Находка: `current_setting(..., true)`
+на пуле соединений после первого использования GUC возвращает `''`, не
+NULL — предикат защищён `NULLIF(...)`. Тестовая роль `helm` понижена до
+`NOSUPERUSER`, иначе RLS был бы не виден pytest'у вовсе.
+
+**P8.5.12 Micro-Memory «Запомни»**: `helm_core/knowledge/memory.py` —
+детерминированные префиксы (`Запомни`/`/remember`/`Сохрани в память`/
+`Не забудь`), forbidden-secret guard ДО записи, exact dedup per-tenant,
+"сегодня"/"завтра" → конец локальных суток, переполнение
+`MICRO_MEMORY_MAX_CHARS` (8000) → уходит в SOURCE через уже работающий
+`ingest_text()`, Markdown-зеркало `/opt/helm-knowledge/users/<uuid>/
+memory/<uuid>.md`. Подключено в `hooks.py` (MAX, приоритет выше
+диалогов выбора домена) и новый `/internal/knowledge/remember` +
+`helm-control/__init__.py` (Telegram, fail-closed при недоступности
+Control Plane — иначе владелец решил бы, что записано, хотя нет).
+Голос (GigaAM) и reply-to-message как источник payload'а — явные,
+задокументированные пробелы (GigaAM нигде не подключён в кодовой базе
+вообще), не эта функция.
+
+297 → 304 теста зелёных по ходу трёх коммитов этой фазы. **Честно не
+проверено**: живой деплой не выполнялся, Telegram-сторона (`helm-
+control`) untestable локально, как и весь остальной Telegram-код HELM
+Knowledge. Осознанно НЕ начато этим заходом (см. V3.8-DELTA.md):
+Dedicated Knowledge Bot (P8.6.2), fair queue/quotas (P8.6.4), Panel
+roles (P8.6.5), per-user style (P8.6.6), export/offboarding (P8.6.7) —
+полный v3.8 acceptance ждёт этих фаз, READY не объявлено.
+
 ### P8.5.2.1 — ZIP batch ingest (v3.7): код готов, ждёт живого деплоя (30.08.2026)
 
 Прямая директива владельца: принять v3.7 как source of truth ТОЛЬКО для

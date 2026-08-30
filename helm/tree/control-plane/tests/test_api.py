@@ -50,6 +50,11 @@ def client(engine, tmp_path, monkeypatch):
                         lambda *a, **kw: real_stage_batch(*a, raw_batches_root=raw_batches_root, **kw))
     monkeypatch.setattr(internal_module, "resolve_batch_domain",
                         lambda *a, **kw: real_resolve_batch(*a, vault_root=vault_root, **kw))
+    # P8.5.12: та же утечка — try_remember() пишет Markdown-зеркало под
+    # DEFAULT_VAULT_ROOT по умолчанию.
+    real_try_remember = internal_module.try_remember
+    monkeypatch.setattr(internal_module, "try_remember",
+                        lambda *a, **kw: real_try_remember(*a, vault_root=vault_root, **kw))
     return TestClient(create_app(settings, service_secret=SERVICE_SECRET))
 
 
@@ -111,6 +116,47 @@ def test_knowledge_probe_endpoint_returns_local_answer(client):
 
 def test_knowledge_probe_endpoint_requires_service_auth(client):
     r = client.post("/internal/knowledge/probe", json={"query": "что угодно"})
+    assert r.status_code == 422 or r.status_code == 401
+
+
+# ── P8.5.12 Telegram-сторона: /internal/knowledge/remember ───────────────────
+
+def test_knowledge_remember_endpoint_stores_and_confirms(client):
+    r = post_internal(client, "/internal/knowledge/remember", {
+        "channel": "telegram", "text": "Запомни номер машины курьера: А123ВС77",
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "stored"
+    assert "А123ВС77" in body["text"]
+
+    with client.app.state.session_factory() as session:
+        from helm_core.knowledge.tenancy import bind_knowledge_user
+        from helm_core.models import KnowledgeMemory
+        bind_knowledge_user(session, None)
+        memory = session.scalars(select(KnowledgeMemory)).one()
+        assert "А123ВС77" in memory.canonical_text
+
+
+def test_knowledge_remember_endpoint_not_a_command(client):
+    r = post_internal(client, "/internal/knowledge/remember", {
+        "channel": "telegram", "text": "какое решение приняли по проекту",
+    })
+    assert r.status_code == 200, r.text
+    assert r.json() == {"status": "not_command", "text": None}
+
+
+def test_knowledge_remember_endpoint_rejects_forbidden_secret(client):
+    r = post_internal(client, "/internal/knowledge/remember", {
+        "channel": "telegram", "text": "Запомни пароль от почты: hunter2",
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "rejected_secret"
+
+
+def test_knowledge_remember_endpoint_requires_service_auth(client):
+    r = client.post("/internal/knowledge/remember",
+                    json={"channel": "telegram", "text": "Запомни что угодно"})
     assert r.status_code == 422 or r.status_code == 401
 
 
