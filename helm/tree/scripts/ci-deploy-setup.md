@@ -19,10 +19,22 @@ ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\helm_ci_key" -C "github-actions"
 понадобится отозвать доступ CI, вы удаляете одну строку и не теряете
 собственный вход на сервер.
 
+После генерации в консоли появится строка вида
+`SHA256:AbCd… github-actions`. **Это не ключ, а отпечаток** — хэш для
+сверки глазами. В секреты он не идёт; понадобится ровно один раз, в
+конце этого шага.
+
 Положить публичную часть на сервер:
 
 ```powershell
 type "$env:USERPROFILE\.ssh\helm_ci_key.pub" | ssh -i "$env:USERPROFILE\.ssh\helm_deploy_key" helm@185.250.44.137 "cat >> ~/.ssh/authorized_keys"
+```
+
+Убедиться, что на сервер уехал именно этот ключ — отпечаток должен
+совпасть с тем, что напечатала генерация:
+
+```powershell
+ssh-keygen -lf "$env:USERPROFILE\.ssh\helm_ci_key.pub"
 ```
 
 ## 2. Добавить два секрета в GitHub
@@ -47,11 +59,23 @@ ssh-keyscan 185.250.44.137
 
 Как отличить, что куда:
 
-| Файл | Куда идёт | Начинается | Заканчивается |
-|---|---|---|---|
-| `helm_ci_key` | секрет `VPS_SSH_KEY` | `-----BEGIN OPENSSH PRIVATE KEY-----` | `-----END OPENSSH PRIVATE KEY-----` |
-| `helm_ci_key.pub` | `authorized_keys` на сервере (шаг 1) | `ssh-ed25519 AAAAC3…` | `github-actions` |
-| вывод `ssh-keyscan` | секрет `VPS_KNOWN_HOSTS` | `185.250.44.137 ssh-ed25519 AAAA…` | ничем особенным |
+| Что вы видите | Что это | Куда |
+|---|---|---|
+| `SHA256:AbCd… github-actions` | отпечаток из консоли | **никуда**, только для сверки |
+| `-----BEGIN OPENSSH PRIVATE KEY-----` и дальше много строк | приватный ключ (`helm_ci_key`) | секрет `VPS_SSH_KEY` |
+| `ssh-ed25519 AAAAC3… github-actions` — одна длинная строка | публичный ключ (`helm_ci_key.pub`) | `authorized_keys` на сервере, шаг 1 |
+| `185.250.44.137 ssh-ed25519 AAAA…` — несколько строк | ключи самого сервера | секрет `VPS_KNOWN_HOSTS` |
+
+Содержимое файлов надёжнее брать так, а не копированием из окна:
+
+```powershell
+Get-Content "$env:USERPROFILE\.ssh\helm_ci_key" -Raw | Set-Clipboard
+Get-Content "$env:USERPROFILE\.ssh\helm_ci_key.pub" -Raw
+```
+
+`-Raw` обязателен для приватного ключа: без него переносы строк поедут,
+GitHub секрет примет, а SSH его не прочитает — и ошибка вылезет только
+при первом запуске, в непонятном виде.
 
 `ssh-keyscan` выдаёт несколько строк — по одной на каждый тип ключа
 сервера. Вставляйте все. Строки, начинающиеся с `#`, если попадут при
