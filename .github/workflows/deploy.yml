@@ -278,6 +278,26 @@ jobs:
 
             cd /opt/helm/compose
             sudo docker compose build helm-core helm-knowledge-worker
+
+            # Обломки прерванного пересоздания. При --force-recreate
+            # compose сначала переименовывает старый контейнер в
+            # <id>_<имя>, потом создаёт новый, потом удаляет старый. Если
+            # выкат умер между этими шагами (так и случилось 30.08.2026,
+            # когда не встал helm-core), переименованный контейнер
+            # остаётся навсегда и держит имя: следующий выкат падает с
+            # "container name is already in use", уже не доходя даже до
+            # сборки.
+            #
+            # Подстрока _helm-helm- встречается только в таком огрызке:
+            # у обычного контейнера имя helm-helm-core-1, подчёркивания
+            # перед ним нет.
+            STALE=$(sudo docker ps -aq --filter name=_helm-helm-)
+            if [ -n "$STALE" ]; then
+              echo "обломки прошлого прерванного выката, удаляю:"
+              sudo docker ps -a --filter name=_helm-helm-
+              sudo docker rm -f $STALE
+            fi
+
             sudo docker compose up -d --force-recreate helm-core helm-knowledge-worker
             sudo docker compose restart caddy
             sudo systemctl restart hermes-gateway
