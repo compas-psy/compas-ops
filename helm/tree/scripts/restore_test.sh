@@ -62,6 +62,58 @@ docker exec -i "$TEST_CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 < "$DUMP" >
 TASK_COUNT=$(docker exec "$TEST_CONTAINER" psql -U postgres -d helm -tAc "select count(*) from tasks")
 echo "restore test: таблица tasks восстановлена, строк: ${TASK_COUNT}"
 
+# v3.8 §14.3/P8.6 acceptance: «backup/restore preserves owner + one
+# secondary user». До мультитенантности проверки count(*) на tasks было
+# достаточно; теперь потеря именно knowledge_users означала бы, что
+# восстановленная база технически цела, а Вторые мозги в ней
+# обезличены — все Knowledge-строки ссылаются на knowledge_user_id, и
+# без реестра тенантов их некому принадлежать.
+#
+# psql идёт от postgres (суперпользователь) — RLS его не ограничивает,
+# поэтому здесь видны строки ВСЕХ тенантов, что для проверки бэкапа и
+# нужно.
+OWNER_COUNT=$(docker exec "$TEST_CONTAINER" psql -U postgres -d helm -tAc \
+  "select count(*) from knowledge_users where role = 'SYSTEM_OWNER'" 2>/dev/null || echo "нет")
+if [ "$OWNER_COUNT" = "нет" ]; then
+  # До накатки миграций v3.8 таблицы ещё нет — не провал бэкапа.
+  echo "restore test: knowledge_users в снапшоте нет — миграции v3.8 ещё не накатаны"
+else
+  if [ "$OWNER_COUNT" -ne 1 ]; then
+    echo "FAIL: в восстановленной базе ${OWNER_COUNT} строк SYSTEM_OWNER, ожидалась ровно 1" >&2
+    exit 1
+  fi
+  SECONDARY_COUNT=$(docker exec "$TEST_CONTAINER" psql -U postgres -d helm -tAc \
+    "select count(*) from knowledge_users where role = 'KNOWLEDGE_USER'")
+  # Осиротевшие Knowledge-строки: ссылка на несуществующего тенанта —
+  # признак частично восстановленной базы, худший из возможных исходов
+  # (выглядит рабочей, а изоляция уже не та).
+  ORPHANS=$(docker exec "$TEST_CONTAINER" psql -U postgres -d helm -tAc \
+    "select count(*) from knowledge_sources s
+      where not exists (select 1 from knowledge_users u where u.id = s.knowledge_user_id)")
+  if [ "$ORPHANS" -ne 0 ]; then
+    echo "FAIL: ${ORPHANS} knowledge_sources ссылаются на несуществующего тенанта" >&2
+    exit 1
+  fi
+  SOURCE_COUNT=$(docker exec "$TEST_CONTAINER" psql -U postgres -d helm -tAc \
+    "select count(*) from knowledge_sources")
+  MEMORY_COUNT=$(docker exec "$TEST_CONTAINER" psql -U postgres -d helm -tAc \
+    "select count(*) from knowledge_memories")
+  echo "restore test: knowledge_users — владелец 1, вторичных ${SECONDARY_COUNT};" \
+       "источников ${SOURCE_COUNT}, записей памяти ${MEMORY_COUNT}, сирот нет"
+
+  # Markdown-зеркала Micro-Memory (§14.11) лежат по тенантам в
+  # /opt/helm-knowledge/users/<uuid>/memory/ и попадают в снапшот вместе
+  # с каталогом. Проверяем, что для каждой восстановленной строки памяти
+  # зеркало тоже вернулось — иначе Obsidian/Graphify получили бы пустоту
+  # при формально целой базе.
+  MIRROR_COUNT=$(find "$RESTORE_DIR" -path '*/helm-knowledge/users/*/memory/*.md' | wc -l)
+  if [ "$MEMORY_COUNT" -gt 0 ] && [ "$MIRROR_COUNT" -lt "$MEMORY_COUNT" ]; then
+    echo "FAIL: записей памяти ${MEMORY_COUNT}, а Markdown-зеркал восстановлено ${MIRROR_COUNT}" >&2
+    exit 1
+  fi
+  echo "restore test: Markdown-зеркал памяти восстановлено ${MIRROR_COUNT}"
+fi
+
 PROFILE_COUNT=$(find "$RESTORE_DIR" -path '*/profiles/*/config.yaml' | wc -l)
 echo "restore test: профилей Hermes восстановлено: ${PROFILE_COUNT}"
 

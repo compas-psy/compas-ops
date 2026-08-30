@@ -12,7 +12,10 @@ from helm_core.knowledge.memory import (
     try_remember,
 )
 from helm_core.knowledge.tenancy import bind_knowledge_user
-from helm_core.models import KnowledgeMemory, KnowledgeMemoryStatus, KnowledgeSource, KnowledgeUser, KnowledgeUserRole
+from helm_core.models import (
+    KnowledgeChunk, KnowledgeIngestJob, KnowledgeMemory, KnowledgeMemoryStatus, KnowledgeSource,
+    KnowledgeUser, KnowledgeUserRole,
+)
 
 from conftest import SYSTEM_OWNER_ID
 
@@ -160,6 +163,12 @@ def test_try_remember_stores_fact_with_confirmation(session, tmp_path):
     mirror = tmp_path / "users" / str(SYSTEM_OWNER_ID) / "memory" / f"{memory.id}.md"
     assert mirror.exists()
     assert "А123ВС77" in mirror.read_text(encoding="utf-8")
+    # §14.10 "normal Micro-Memory does not run document parser/chunker":
+    # обычная память — прямой FTS-юнит, а не документ. Ни источника, ни
+    # чанков, ни job'а разбора появиться не должно.
+    assert session.scalars(select(KnowledgeSource)).all() == []
+    assert session.scalars(select(KnowledgeChunk)).all() == []
+    assert session.scalars(select(KnowledgeIngestJob)).all() == []
 
 
 def test_try_remember_stores_bookmark(session, tmp_path):
