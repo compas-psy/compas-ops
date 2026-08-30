@@ -264,9 +264,15 @@ jobs:
               own="sudo chown root:root /etc/helm/secrets/$name \
                    && sudo chmod 600 /etc/helm/secrets/$name"
             fi
+            # `sudo wc -c < файл` не годится для проверки: `<` открывает файл
+            # ДО sudo, от имени обычного ssh-пользователя. На секрете
+            # 0600 root:root (режим root) это Permission denied — команда
+            # выглядит успешной, а размер не печатается вовсе. Найдено
+            # 30.08.2026 на n8n_api_key. `sudo wc -c ФАЙЛ` (без `<`) читает
+            # файл самим wc, уже под sudo.
             printf '%s' "$value" | ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
               "sudo tee /etc/helm/secrets/$name > /dev/null && $own \
-               && echo \"$name: положен, байт \$(sudo wc -c < /etc/helm/secrets/$name)\""
+               && echo \"$name: положен, байт \$(sudo wc -c /etc/helm/secrets/$name | cut -d' ' -f1)\""
           }
           place knowledge_telegram_bot_token "$KNOWLEDGE_TG_BOT_TOKEN" container
           place n8n_api_key "$N8N_API_KEY" root
