@@ -1,0 +1,220 @@
+name: Выкат на сервер
+
+# Единственный способ, которым агент может работать на живом сервере, не
+# получая приватного ключа: ключ лежит в GitHub Secrets, агент запускает
+# workflow и читает логи, но самого ключа не видит никогда (устав §6,
+# CLAUDE.md §5.4 — «секреты живут только в GitHub Secrets»).
+#
+# Секреты, которые нужно завести один раз:
+#   VPS_SSH_KEY      приватный ключ ОТДЕЛЬНОЙ пары для CI (не тот, что на
+#                    машине владельца — чтобы отзывался независимо)
+#   VPS_KNOWN_HOSTS  вывод `ssh-keyscan -H 185.250.44.137`; без него
+#                    пришлось бы отключить проверку хоста, а это ровно та
+#                    дыра, ради которой существует known_hosts
+#
+# По умолчанию действие — `verify`, то есть только чтение. Выкатить
+# что-либо можно лишь явно выбрав действие: случайный запуск ничего не
+# меняет.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Что сделать'
+        required: true
+        default: verify
+        type: choice
+        options:
+          - verify        # только посмотреть состояние, ничего не менять
+          - backup        # снять точку возврата
+          - deploy        # код + панель + пересборка контейнеров
+          - migrate       # alembic upgrade head (после deploy)
+          - restore-test  # backup.sh + restore_test.sh
+          - rollback      # alembic downgrade до указанной ревизии
+      revision:
+        description: 'Ревизия для rollback (например 03af17f40250)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  # Отдельная от `rhythm` группа: ночной цикл и выкат не должны стоять в
+  # одной очереди, но два выката одновременно — недопустимы.
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  VPS_HOST: 185.250.44.137
+  VPS_USER: helm
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ключ доступа
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          if [ -z "$VPS_SSH_KEY" ] || [ -z "$VPS_KNOWN_HOSTS" ]; then
+            echo "::error::Не заведены секреты VPS_SSH_KEY и/или VPS_KNOWN_HOSTS"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      # ── verify: только чтение ────────────────────────────────────────
+      - name: Состояние сервера
+        if: inputs.action == 'verify'
+        run: |
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
+            set -e
+            echo "=== контейнеры ==="
+            cd /opt/helm/compose && sudo docker compose ps
+            echo "=== ревизия схемы ==="
+            sudo docker compose exec -T helm-core python3 -m alembic current
+            echo "=== роль базы: суперпользователь? (ожидается f) ==="
+            sudo docker exec helm-postgres-1 psql -U helm -d helm -tAc \
+              "select rolname, rolsuper from pg_roles where rolname in (\047helm\047,\047helm_app\047)"
+            echo "=== объём знаний ==="
+            sudo docker exec helm-postgres-1 psql -U helm -d helm -tAc \
+              "select count(*) as sources from knowledge_sources" || echo "таблиц ещё нет"
+            echo "=== место и память ==="
+            df -h / | tail -1; free -h | head -2
+            echo "=== последний бэкап ==="
+            stat -c %y /var/lib/helm-guardian/last-backup 2>/dev/null || echo "нет отметки"
+          '
+
+      # ── backup: точка возврата перед всем остальным ──────────────────
+      - name: Точка возврата
+        if: inputs.action == 'backup' || inputs.action == 'deploy'
+        run: |
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" 'sudo /opt/helm/scripts/backup.sh'
+
+      # ── deploy: код, панель, конфигурация, пересборка ────────────────
+      - uses: actions/setup-node@v4
+        if: inputs.action == 'deploy'
+        with:
+          node-version: '20'
+
+      - name: Сборка панели
+        if: inputs.action == 'deploy'
+        working-directory: helm/tree/panel
+        run: |
+          npm ci
+          npm run build
+
+      - name: Доставка файлов
+        if: inputs.action == 'deploy'
+        run: |
+          cd helm/tree
+          scp -i ~/.ssh/id_deploy -r control-plane/helm_core "$VPS_USER@$VPS_HOST:/tmp/helm_core"
+          scp -i ~/.ssh/id_deploy -r control-plane/migrations "$VPS_USER@$VPS_HOST:/tmp/migrations"
+          scp -i ~/.ssh/id_deploy -r panel/dist "$VPS_USER@$VPS_HOST:/tmp/panel-dist"
+          scp -i ~/.ssh/id_deploy compose/docker-compose.yml "$VPS_USER@$VPS_HOST:/tmp/docker-compose.yml"
+          scp -i ~/.ssh/id_deploy config/Caddyfile "$VPS_USER@$VPS_HOST:/tmp/Caddyfile"
+          scp -i ~/.ssh/id_deploy scripts/backup.sh scripts/restore_test.sh "$VPS_USER@$VPS_HOST:/tmp/"
+          scp -i ~/.ssh/id_deploy hermes/plugins/helm-control/__init__.py "$VPS_USER@$VPS_HOST:/tmp/helm-control-init.py"
+
+      - name: Разложить и пересобрать
+        if: inputs.action == 'deploy'
+        run: |
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
+            set -e
+            sudo rm -rf /opt/helm/control-plane/helm_core /opt/helm/control-plane/migrations
+            sudo mv /tmp/helm_core /opt/helm/control-plane/helm_core
+            sudo mv /tmp/migrations /opt/helm/control-plane/migrations
+            sudo mv /tmp/docker-compose.yml /opt/helm/compose/docker-compose.yml
+            sudo mv /tmp/Caddyfile /opt/helm/config/Caddyfile
+            sudo mv /tmp/backup.sh /opt/helm/scripts/backup.sh
+            sudo mv /tmp/restore_test.sh /opt/helm/scripts/restore_test.sh
+            sudo chown -R root:root /opt/helm/control-plane/helm_core /opt/helm/control-plane/migrations \
+              /opt/helm/compose/docker-compose.yml /opt/helm/config/Caddyfile \
+              /opt/helm/scripts/backup.sh /opt/helm/scripts/restore_test.sh
+            sudo chmod -R go-w /opt/helm/control-plane/helm_core /opt/helm/control-plane/migrations
+            sudo chmod 755 /opt/helm/scripts/backup.sh /opt/helm/scripts/restore_test.sh
+
+            # Содержимое каталога панели заменяется, сам каталог остаётся:
+            # Caddy держит его примонтированным, и пересоздание каталога
+            # рвёт монтирование (F-260829-10).
+            sudo rm -rf /opt/helm/panel/dist/*
+            sudo cp -r /tmp/panel-dist/. /opt/helm/panel/dist/
+            sudo rm -rf /tmp/panel-dist
+            sudo chown -R root:root /opt/helm/panel/dist
+
+            cp /tmp/helm-control-init.py ~/.hermes/plugins/helm-control/__init__.py
+
+            cd /opt/helm/compose
+            sudo docker compose build helm-core helm-knowledge-worker
+            sudo docker compose up -d --force-recreate helm-core helm-knowledge-worker
+            sudo docker compose restart caddy
+            sudo systemctl restart hermes-gateway
+            sleep 20
+            sudo docker compose ps helm-core helm-knowledge-worker caddy
+          '
+
+      # ── migrate: отдельным шагом, после проверки ревизии ─────────────
+      - name: Миграции
+        if: inputs.action == 'migrate'
+        run: |
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
+            set -e
+            cd /opt/helm/compose
+            echo "=== было ==="
+            sudo docker compose exec -T helm-core python3 -m alembic current
+            sudo docker compose exec -T helm-core python3 -m alembic upgrade head
+            echo "=== стало ==="
+            sudo docker compose exec -T helm-core python3 -m alembic current
+            echo "=== записей без владельца (ожидается 0) ==="
+            sudo docker exec helm-postgres-1 psql -U helm -d helm -tAc \
+              "select count(*) from knowledge_sources where knowledge_user_id is null"
+          '
+
+      - name: Проверка восстановления
+        if: inputs.action == 'restore-test'
+        run: |
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
+            'sudo /opt/helm/scripts/backup.sh && sudo /opt/helm/scripts/restore_test.sh'
+
+      - name: Откат схемы
+        if: inputs.action == 'rollback'
+        run: |
+          if [ -z "${{ inputs.revision }}" ]; then
+            echo "::error::Для отката нужно указать ревизию"
+            exit 1
+          fi
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" "
+            cd /opt/helm/compose
+            sudo docker compose exec -T helm-core python3 -m alembic downgrade ${{ inputs.revision }}
+            sudo docker compose exec -T helm-core python3 -m alembic current
+          "
+
+      - name: Убрать ключ
+        if: always()
+        run: rm -f ~/.ssh/id_deploy
+
+      - name: Сообщить в Telegram
+        # Проверка секрета — внутри шага, а не в `if`: контекст secrets в
+        # условиях шагов недоступен, и такое условие молча ломает workflow.
+        if: always()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
+            echo "Telegram-уведомление пропущено: секреты не заведены"
+            exit 0
+          fi
+          STATUS='${{ job.status }}'
+          curl -sS -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
+            -d "chat_id=$TG_CHAT_ID" \
+            -d "text=Выкат «${{ inputs.action }}»: $STATUS. Логи: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            > /dev/null || true
