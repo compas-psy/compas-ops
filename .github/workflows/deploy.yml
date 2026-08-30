@@ -28,6 +28,7 @@ on:
           - keyscan       # напечатать ключи сервера для VPS_KNOWN_HOSTS
           - verify        # только посмотреть состояние, ничего не менять
           - cleanup       # убрать мусор прошлых выкатов
+          - backup-unlock # снять зависшую блокировку репозитория бэкапов
           - backup        # снять точку возврата
           - deploy        # код + панель + пересборка контейнеров
           - migrate       # alembic upgrade head (после deploy)
@@ -135,6 +136,30 @@ jobs:
         if: inputs.action == 'backup' || inputs.action == 'deploy'
         run: |
           ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" 'sudo /opt/helm/scripts/backup.sh'
+
+      - name: Снять зависшую блокировку бэкапа
+        if: inputs.action == 'backup-unlock'
+        run: |
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
+            set -e
+            # restic блокирует репозиторий на время работы. Если процесс
+            # убили на середине — например, отменили запуск workflow —
+            # блокировка остаётся и мешает ВСЕМ последующим бэкапам,
+            # включая ночной. Поймано 30.08.2026 ровно так.
+            #
+            # Обычный unlock снимает только протухшие блокировки, то есть
+            # оставшиеся от несуществующих процессов. --remove-all тут
+            # намеренно НЕ используется: он снял бы и живую блокировку
+            # идущего прямо сейчас бэкапа, и два процесса начали бы писать
+            # в репозиторий одновременно.
+            sudo env RESTIC_REPOSITORY=rclone:yandex:helm-backup \
+                     RESTIC_PASSWORD_FILE=/etc/helm/secrets/restic_password \
+                     restic unlock
+            echo "=== блокировки после снятия ==="
+            sudo env RESTIC_REPOSITORY=rclone:yandex:helm-backup \
+                     RESTIC_PASSWORD_FILE=/etc/helm/secrets/restic_password \
+                     restic list locks
+          '
 
       # ── cleanup: мусор прошлых выкатов ───────────────────────────────
       - name: Убрать мусор прошлых выкатов
