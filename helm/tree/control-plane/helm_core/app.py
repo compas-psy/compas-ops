@@ -18,6 +18,7 @@ from .approvals.service import ApprovalService
 from .api import auth, hooks, internal, panel
 from .api.security import SecurityHeadersMiddleware
 from .channels.max import MaxSender
+from .channels.telegram import TelegramSender
 from .config import Settings, get_settings, read_secret
 from .dispatch import deliver_pending
 from .hermes_bridge import DEFAULT_URL as HERMES_BRIDGE_URL, HermesBridge
@@ -41,9 +42,17 @@ def create_app(settings: Settings | None = None, *, service_secret: str | None =
     app.state.max_webhook_secret = read_secret("max_webhook_secret", "")
     app.state.max_owner_id = settings.max_owner_id
     app.state.hermes_bridge = HermesBridge(HERMES_BRIDGE_URL, read_secret("hermes_api_server_key", ""))
-    #: Отправители по каналам для доставщика outbox. Пока один: Telegram
-    #: отвечает через собственный адаптер Hermes, а не через эту очередь.
-    app.state.senders = {"max": MaxSender(read_secret("max_bot_token", ""))}
+    #: Отправители по каналам для доставщика outbox. Обычный ответ
+    #: владельцу в Telegram по-прежнему уходит синхронно через adapter
+    #: Hermes, а не через эту очередь — но `helm-knowledge-worker`
+    #: (отдельный контейнер, без связи с Hermes gateway) может доставить
+    #: уведомление о завершении разбора файла только сюда (найдено живьём
+    #: 30.08.2026: без "telegram" в этом словаре доставщик молча помечал
+    #: такие сообщения FAILED, см. `channels/telegram.py`).
+    app.state.senders = {
+        "max": MaxSender(read_secret("max_bot_token", "")),
+        "telegram": TelegramSender(app.state.telegram_bot_token),
+    }
 
     def approval_service_factory(session):
         return ApprovalService(session, app.state.registry, owner_id=settings.owner_id)

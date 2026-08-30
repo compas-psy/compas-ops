@@ -244,10 +244,13 @@ line, актуальной на дату установки) живым бенч
 `tests/test_knowledge_chat_intake.py` (27, движок диалога изолированно,
 включая cross-device rename и псевдонимы доменов), `tests/test_api.py`
 (6 новых — `/internal/knowledge/attachment/stage`/`resolve`, Telegram-
-сторона) — 210/210 зелёных вместе с остальным control-plane (включая
-MAX-вложения в `tests/test_max_channel.py`). Telegram-сторона P8.5.7
-целиком (`hermes/plugins/helm-control/__init__.py`) untestable
-локально — вне пакета `helm_core`, вне pytest. Fixture-матрица
+сторона), `tests/test_telegram_channel.py` (3 новых — `TelegramSender`,
+найден и исправлен живым тестом 30.08.2026: без него уведомление о
+завершении разбора для Telegram молча помечалось `FAILED` в outbox,
+см. `ADR-021`) — 213/213 зелёных вместе с остальным control-plane
+(включая MAX-вложения в `tests/test_max_channel.py`). `hermes/plugins/
+helm-control/__init__.py` целиком untestable локально — вне пакета
+`helm_core`, вне pytest, первая проверка только живым деплоем. Fixture-матрица
 §30.8.5 полностью (сложный/табличный PDF, скан, аудио,
 prompt-injection документ) недостижима без живой проверки GigaAM на
 сервере (Docling-часть уже подтверждена живьём выше) — появится вместе
