@@ -31,6 +31,7 @@ on:
           - backup-unlock # снять зависшую блокировку репозитория бэкапов
           - backup        # снять точку возврата
           - logs          # логи helm-core и воркера, ничего не менять
+          - secrets       # положить секреты из GitHub Secrets на сервер
           - deploy        # код + панель + пересборка контейнеров
           - migrate       # alembic upgrade head (после deploy)
           - restore-test  # backup.sh + restore_test.sh
@@ -223,6 +224,87 @@ jobs:
           scp -i ~/.ssh/id_deploy config/Caddyfile "$VPS_USER@$VPS_HOST:/tmp/Caddyfile"
           scp -i ~/.ssh/id_deploy scripts/backup.sh scripts/restore_test.sh "$VPS_USER@$VPS_HOST:/tmp/"
           scp -i ~/.ssh/id_deploy hermes/plugins/helm-control/__init__.py "$VPS_USER@$VPS_HOST:/tmp/helm-control-init.py"
+
+      # ── secrets: из GitHub Secrets в /etc/helm/secrets ───────────────
+      - name: Разложить секреты из GitHub
+        # Явное разрешение владельца от 30.08.2026. До него секреты клал
+        # человек по SSH — и дважды подряд вышло не так: сначала токен
+        # уехал в GitHub Secrets, откуда его никто не читает, потом в
+        # файл записался текст-заполнитель «КЛЮЧ_API» вместо ключа.
+        #
+        # Значение идёт через stdin, а не аргументом команды: аргумент
+        # виден в списке процессов сервера всем, кто там есть. В логи оно
+        # тоже не попадает — GitHub маскирует секреты, а команды ничего
+        # не печатают, кроме имени файла и его размера.
+        #
+        # Не задан в Secrets — шаг молча пропускает его, а не падает:
+        # выкат не должен зависеть от того, завёл ли владелец бота.
+        #
+        # Права разные и намеренно. Секреты, которые читает контейнер,
+        # получают ту же группу, что и остальные (root:helm-secrets 0640,
+        # копируется с работающего): контейнер работает не под root, и на
+        # файле 0600 root:root он падает PermissionError — так уже было
+        # 30.08.2026. n8n_api_key читает не контейнер, а скрипт на хосте
+        # от root, ему 0600 root:root, как заведено n8n-export-runbook.md.
+        if: inputs.action == 'deploy' || inputs.action == 'secrets'
+        env:
+          KNOWLEDGE_TG_BOT_TOKEN: ${{ secrets.KNOWLEDGE_TG_BOT_TOKEN }}
+          N8N_API_KEY: ${{ secrets.N8N_API_KEY }}
+        run: |
+          place() {
+            local name="$1" value="$2" mode="$3"
+            if [ -z "$value" ]; then
+              echo "$name: в GitHub Secrets не задан, пропускаю"
+              return 0
+            fi
+            if [ "$mode" = container ]; then
+              own="sudo chown --reference=/etc/helm/secrets/telegram_bot_token /etc/helm/secrets/$name \
+                   && sudo chmod --reference=/etc/helm/secrets/telegram_bot_token /etc/helm/secrets/$name"
+            else
+              own="sudo chown root:root /etc/helm/secrets/$name \
+                   && sudo chmod 600 /etc/helm/secrets/$name"
+            fi
+            printf '%s' "$value" | ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
+              "sudo tee /etc/helm/secrets/$name > /dev/null && $own \
+               && echo \"$name: положен, байт \$(sudo wc -c < /etc/helm/secrets/$name)\""
+          }
+          place knowledge_telegram_bot_token "$KNOWLEDGE_TG_BOT_TOKEN" container
+          place n8n_api_key "$N8N_API_KEY" root
+
+          # Секрет вебхука Knowledge-бота генерируется на сервере, а не
+          # приходит от человека: по §6.4 ТЗ webhook secret — из тех, что
+          # заводит установщик, как max_webhook_secret. Значение не
+          # печатается и никуда не уезжает. Генерируется один раз: если
+          # файл уже непустой, повторная генерация оторвала бы уже
+          # зарегистрированный в Telegram вебхук.
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
+            if [ -s /etc/helm/secrets/knowledge_telegram_bot_token ] \
+               && [ ! -s /etc/helm/secrets/knowledge_telegram_webhook_secret ]; then
+              openssl rand -hex 32 | sudo tee /etc/helm/secrets/knowledge_telegram_webhook_secret > /dev/null
+              sudo chown --reference=/etc/helm/secrets/telegram_bot_token /etc/helm/secrets/knowledge_telegram_webhook_secret
+              sudo chmod --reference=/etc/helm/secrets/telegram_bot_token /etc/helm/secrets/knowledge_telegram_webhook_secret
+              echo "секрет вебхука Knowledge-бота сгенерирован"
+            fi
+          '
+
+      - name: Перезапустить helm-core после смены секретов
+        # Секреты читаются один раз на старте процесса: без перезапуска
+        # положенный токен просто лежит на диске и ничего не делает. При
+        # обычном выкате перезапуск происходит дальше сам, поэтому шаг
+        # только для отдельного действия secrets.
+        if: inputs.action == 'secrets'
+        run: |
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
+            cd /opt/helm/compose
+            sudo docker compose up -d --force-recreate helm-core
+            sleep 15
+            if ! sudo docker compose ps helm-core | grep -q Up; then
+              echo "::error::helm-core не поднялся после смены секретов"
+              sudo docker compose logs --tail=60 helm-core
+              exit 1
+            fi
+            sudo docker compose ps helm-core
+          '
 
       - name: Разложить и пересобрать
         if: inputs.action == 'deploy'
