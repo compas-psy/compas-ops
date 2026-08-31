@@ -14,11 +14,13 @@ RUN useradd --system --create-home --uid 10002 helm-worker
 
 # opencv-python (транзитивная зависимость Docling/RapidOCR) на Debian
 # slim требует эти системные библиотеки — без них падает на первом же
-# `import cv2`, а не молча. ffmpeg — явное требование спеки (§14.7) под
-# будущий аудио-пайплайн (P8.5.3, ещё не реализован) — ставится сразу,
-# чтобы не пересобирать образ.
+# `import cv2`, а не молча. ffmpeg — явное требование спеки (§14.7),
+# используется пайплайном GigaAM (P8.5.3) для конвертации аудио. git —
+# для `pip install gigaam @ git+...` ниже: base-образ python:slim его не
+# несёт вовсе, pip падает на `git clone` без него (найдено живым запуском
+# 31.08.2026, "Cannot find command 'git'").
 RUN apt-get update && apt-get install --no-install-recommends -y \
-      ffmpeg libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
+      ffmpeg git libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/helm/knowledge-worker
