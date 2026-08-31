@@ -62,7 +62,7 @@
 | 022 | Smart source dedup + versioning | не написан |
 | 023 | Knowledge lifecycle management Panel/bot | не написан |
 | 024 | Scalable dynamic Knowledge taxonomy | ✅ `ADR-024-dynamic-domain-registry.md` — узкий срез, только реестр доменов, topics/aliases ждут Graphify |
-| 025 | Global-within-user hybrid retrieval | ✅ `ADR-025-hybrid-retrieval.md` — модель выбрана по живому замеру (MiniLM-L12-v2, 384-dim), схема/wiring в процессе |
+| 025 | Global-within-user hybrid retrieval | ✅ `ADR-025-hybrid-retrieval.md` — модель выбрана по живому замеру (MiniLM-L12-v2, 384-dim), hybrid retrieval выкачен и подтверждён живьём 31.08.2026 |
 | 026 | Safe ZIP batch ingest + exactly-once completion | ✅ `ADR-026-zip-batch-ingest.md` |
 | 027 | Micro-Memory «Запомни» fast path | не написан |
 | 028 | Knowledge tenant model: SYSTEM_OWNER vs KNOWLEDGE_USER | не написан |
