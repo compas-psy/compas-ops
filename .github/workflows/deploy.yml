@@ -155,7 +155,9 @@ jobs:
           cp config/Caddyfile "$stage/Caddyfile"
           cp scripts/backup.sh scripts/restore_test.sh "$stage/"
           cp hermes/plugins/helm-control/__init__.py "$stage/helm-control-init.py"
-          tar -czf - -C "$stage" . \
+          tar -czf - -C "$stage" \
+              helm_core migrations panel-dist docker-compose.yml Caddyfile \
+              backup.sh restore_test.sh helm-control-init.py \
             | ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" 'tar -xzf - -C /tmp'
           rm -rf "$stage"
 
