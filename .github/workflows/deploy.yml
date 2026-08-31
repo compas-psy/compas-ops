@@ -618,9 +618,14 @@ jobs:
           # живым запуском 31.08.2026 — "ffmpeg: command not found"),
           # espeak-ng сам по себе предустановлен не был тоже — оба явно.
           sudo apt-get update && sudo apt-get install --no-install-recommends -y espeak-ng ffmpeg
-          espeak-ng -v ru -w /tmp/gigaam-test-raw.wav \
+          # -s 130 (слов/мин, дефолт ~175 — НАЙДЕНО живым запуском
+          # 31.08.2026: на дефолтной скорости все 4 модели вернули
+          # пустой/однобуквенный текст — слишком быстрая, невнятная для
+          # формантного синтезатора речь) + loudnorm (espeak-ng пишет
+          # тихий сигнал по умолчанию).
+          espeak-ng -v ru -s 130 -w /tmp/gigaam-test-raw.wav \
             "Встреча перенесена на четверг, не забудьте предупредить клиента о переносе созвона."
-          ffmpeg -y -i /tmp/gigaam-test-raw.wav -acodec pcm_s16le -ar 16000 -ac 1 /tmp/gigaam-test.wav
+          ffmpeg -y -i /tmp/gigaam-test-raw.wav -af loudnorm -acodec pcm_s16le -ar 16000 -ac 1 /tmp/gigaam-test.wav
           cd helm/tree
           scp -i ~/.ssh/id_deploy -r control-plane/helm_core "$VPS_USER@$VPS_HOST:/tmp/helm_core"
           scp -i ~/.ssh/id_deploy control-plane/Dockerfile.worker "$VPS_USER@$VPS_HOST:/tmp/Dockerfile.worker"
