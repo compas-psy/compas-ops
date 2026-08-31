@@ -58,7 +58,7 @@
 | 018 | Multimodel implementation policy | ✅ `ADR-018-single-agent.md` — отклонено фактически |
 | 019 | Knowledge canonical Markdown/Postgres; Graphify derived | не написан |
 | 020 | Strict zero-paid Knowledge lock | не написан |
-| 021 | Local parser/GigaAM/Ollama Knowledge pipeline | не написан |
+| 021 | Local parser/GigaAM/Ollama Knowledge pipeline | 🟡 `ADR-021-gigaam-voice-pipeline.md` — модель GigaAM выбрана живым замером (e2e_rnnt), фаза 2 (схема/wiring/voice-Remember) в процессе. Ollama (1.8) — отдельно, не в этом ADR |
 | 022 | Smart source dedup + versioning | не написан |
 | 023 | Knowledge lifecycle management Panel/bot | не написан |
 | 024 | Scalable dynamic Knowledge taxonomy | ✅ `ADR-024-dynamic-domain-registry.md` — узкий срез, только реестр доменов, topics/aliases ждут Graphify |
