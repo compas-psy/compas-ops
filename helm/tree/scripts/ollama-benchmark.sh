@@ -89,7 +89,11 @@ for model in qwen2.5:3b gemma2:2b llama3.2:3b; do
   run_case "$model" "$STYLE_PROMPT" "со стилем владельца, холодный старт" "0"
 
   echo "=== RSS контейнера сразу после генерации ==="
-  sudo docker stats --no-stream ollama --format "{{.MemUsage}}"
+  # НАЙДЕНО живым прогоном 31.08.2026: `docker stats` (в отличие от
+  # `docker compose exec/up`) не понимает имя СЕРВИСА compose — ему
+  # нужен реальный ID/имя контейнера (`docker compose ps -q` его даёт
+  # независимо от того, как назван сам compose-проект).
+  sudo docker stats --no-stream "$(sudo docker compose ps -q ollama)" --format "{{.MemUsage}}"
 
   echo "=== ollama rm (освобождаем диск перед следующим кандидатом) ==="
   sudo docker compose exec -T ollama ollama rm "$model"
