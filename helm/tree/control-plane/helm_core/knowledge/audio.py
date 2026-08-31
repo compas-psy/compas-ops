@@ -24,6 +24,7 @@ Silero VAD (MIT, не gated) для собственной сегментаци�
 
 from __future__ import annotations
 
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -53,6 +54,24 @@ GIGAAM_DOWNLOAD_ROOT = "/opt/helm/knowledge-worker/gigaam-models"
 
 def is_audio_file(path: Path) -> bool:
     return path.suffix.lower() in AUDIO_EXTENSIONS
+
+
+_TIMESTAMP_PREFIX_RE = re.compile(r"^\[\d+s\]\s*", re.MULTILINE)
+
+
+def strip_timestamps(text: str) -> str:
+    """Убрать построчные префиксы `[Ns] ` (ADR-021 фаза 2b).
+
+    Нужно ТОЛЬКО для проверки `detect_remember_command()` — он матчит
+    триггер-фразу с самого начала строки (`^\\s*...`), а
+    `transcribe_audio()` всегда начинает текст с таймкода (§14.7), из-за
+    чего "Запомни" в первой же строке транскрипта не совпало бы с
+    триггером без этой очистки. Сам `pending.transcript` таймкоды не
+    теряет — эта функция вызывается только на временную копию текста для
+    проверки, не заменяет исходный transcribe_audio() вывод.
+    """
+    stripped = _TIMESTAMP_PREFIX_RE.sub("", text)
+    return " ".join(stripped.split("\n")).strip()
 
 
 def _convert_to_wav(src: Path, dst: Path) -> None:

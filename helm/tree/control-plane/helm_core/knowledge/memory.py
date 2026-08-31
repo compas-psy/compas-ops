@@ -219,7 +219,8 @@ def _confirmation_text(memory: KnowledgeMemory) -> str:
 def try_remember(session: Session, *, channel: str, text: str,
                  origin_message_id: str | None = None,
                  knowledge_user_id: uuid.UUID | None = None,
-                 vault_root: str | None = None) -> RememberOutcome:
+                 vault_root: str | None = None,
+                 origin_kind: Literal["text", "voice"] = "text") -> RememberOutcome:
     """Единая точка входа — вызывается ДО обычного register/probe/chief
     пути, тем же принципом, что `chat_intake.resolve_pending_domain()`
     для вложений: `not_command` значит "это сообщение не про Remember",
@@ -274,7 +275,7 @@ def try_remember(session: Session, *, channel: str, text: str,
         payload_json={"url": extract_url(payload)} if kind == "bookmark" else None,
         dedup_hash=dedup_hash, expires_at=expires_at,
         status=KnowledgeMemoryStatus.ACTIVE, origin_channel=channel,
-        origin_message_id=origin_message_id, origin_kind="text",
+        origin_message_id=origin_message_id, origin_kind=origin_kind,
         # Graphify не реализован (P8.5.6) — тот же "not_applicable", что
         # уже используется у KnowledgeBatchItem.graph_status.
         graph_status="not_applicable",

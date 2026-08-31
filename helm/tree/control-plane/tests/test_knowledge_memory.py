@@ -169,6 +169,18 @@ def test_try_remember_stores_fact_with_confirmation(session, tmp_path):
     assert session.scalars(select(KnowledgeSource)).all() == []
     assert session.scalars(select(KnowledgeChunk)).all() == []
     assert session.scalars(select(KnowledgeIngestJob)).all() == []
+    assert memory.origin_kind == "text"
+
+
+def test_try_remember_origin_kind_voice_for_voice_pipeline(session, tmp_path):
+    """ADR-021 фаза 2b: worker.py::process_voice_pending() передаёт
+    origin_kind="voice" — Remember, распознанный из голосового, должен
+    остаться отличимым от обычного текстового в самой записи."""
+    outcome = try_remember(session, channel="telegram", text="Запомни купить молоко",
+                           vault_root=str(tmp_path), origin_kind="voice")
+
+    assert outcome.status == "stored"
+    assert outcome.memory.origin_kind == "voice"
 
 
 def test_try_remember_stores_bookmark(session, tmp_path):

@@ -552,6 +552,16 @@ class KnowledgePendingAttachment(Base):
     #: Подпись/caption, отправленная вместе с файлом, если была — только
     #: для текста запроса на домен, дальше в KnowledgeSource не переносится.
     caption: Mapped[str | None] = mapped_column(Text)
+    #: document | voice (ADR-021 фаза 2b). document — текущий синхронный
+    #: флоу (домен спрашивается сразу). voice — домен откладывается: сперва
+    #: асинхронная транскрипция, затем проверка на Remember-команду.
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="document")
+    #: NULL = ещё не транскрибировано (voice) или не применимо (document).
+    #: resolve_pending_domain() пропускает voice-pending, пока это NULL.
+    transcript: Mapped[str | None] = mapped_column(Text)
+    #: Куда воркер асинхронно пришлёт результат транскрипции (chat_id канала)
+    #: — тот же паттерн, что уже есть у KnowledgeIngestJob.recipient.
+    recipient: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
 
     __table_args__ = (Index("ix_knowledge_pending_attachments_channel_created",

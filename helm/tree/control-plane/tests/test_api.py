@@ -261,6 +261,33 @@ def test_attachment_stage_endpoint_returns_domain_menu(client):
     assert "1. personal" in body["text"]
 
 
+def test_attachment_stage_endpoint_voice_defers_domain_question(client):
+    """ADR-021 фаза 2b: voice-вложение не должно получить меню доменов
+    сразу — домен спрашивается только после фоновой транскрипции."""
+    from helm_core.knowledge.chat_intake import VOICE_STAGED_NOTICE
+    from helm_core.knowledge.tenancy import bind_knowledge_user
+    from helm_core.models import KnowledgePendingAttachment
+
+    r = post_internal(client, "/internal/knowledge/attachment/stage", {
+        "channel": "telegram",
+        "data_base64": base64.b64encode(b"ogg bytes").decode(),
+        "original_filename": "voice_abc.ogg",
+        "mime_type": "audio/ogg",
+        "recipient": "12345",
+    })
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "staged"
+    assert body["text"] == VOICE_STAGED_NOTICE
+
+    with client.app.state.session_factory() as session:
+        bind_knowledge_user(session, None)
+        row = session.get(KnowledgePendingAttachment, uuid.UUID(body["pending_id"]))
+        assert row.kind == "voice"
+        assert row.recipient == "12345"
+
+
 def test_attachment_stage_endpoint_rejects_oversized_file(client):
     from helm_core.knowledge.chat_intake import MAX_ATTACHMENT_BYTES
 

@@ -14,12 +14,16 @@ from pathlib import Path
 
 from sqlalchemy import select
 
+from helm_core.knowledge.chat_intake import stage_attachment
 from helm_core.knowledge.ingest import register_file_for_ingest
 from helm_core.knowledge import worker as worker_module
-from helm_core.knowledge.worker import _frontmatter, claim_next_job, process_job
+from helm_core.knowledge.worker import (
+    VOICE_TRANSCRIBE_FAILED_NOTICE, _frontmatter, claim_next_job, claim_next_voice_pending,
+    process_job, process_voice_pending,
+)
 from helm_core.models import (
-    KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus, KnowledgeSource, KnowledgeStatus,
-    OutboxMessage,
+    KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus, KnowledgePendingAttachment,
+    KnowledgeSource, KnowledgeStatus, OutboxMessage,
 )
 
 
@@ -352,6 +356,116 @@ def test_process_job_without_recipient_does_not_notify(session, tmp_path, monkey
                                                       quality_ok=True))
 
     process_job(session, job)
+    session.flush()
+
+    assert session.scalars(select(OutboxMessage)).all() == []
+
+
+# ── claim_next_voice_pending()/process_voice_pending() (ADR-021 фаза 2b) ──
+
+def _make_voice_pending(session, tmp_path, *, recipient: str | None = None,
+                        knowledge_user_id=None) -> KnowledgePendingAttachment:
+    return stage_attachment(
+        session, channel="telegram", data=b"fake ogg bytes",
+        original_filename="voice.ogg", mime_type="audio/ogg",
+        spool_root=str(tmp_path / "spool"), recipient=recipient,
+        knowledge_user_id=knowledge_user_id,
+    )
+
+
+def test_claim_next_voice_pending_returns_none_when_empty(session):
+    assert claim_next_voice_pending(session) is None
+
+
+def test_claim_next_voice_pending_ignores_document_kind(session, tmp_path):
+    stage_attachment(session, channel="telegram", data=b"doc bytes",
+                     original_filename="doc.txt", mime_type="text/plain",
+                     spool_root=str(tmp_path / "spool"))
+    assert claim_next_voice_pending(session) is None
+
+
+def test_claim_next_voice_pending_ignores_already_transcribed(session, tmp_path):
+    pending = _make_voice_pending(session, tmp_path)
+    pending.transcript = "[0s] уже расшифровано"
+    session.flush()
+    assert claim_next_voice_pending(session) is None
+
+
+def test_claim_next_voice_pending_returns_oldest(session, tmp_path):
+    first = _make_voice_pending(session, tmp_path)
+    _make_voice_pending(session, tmp_path)
+
+    claimed = claim_next_voice_pending(session)
+
+    assert claimed.id == first.id
+
+
+def test_process_voice_pending_remember_command_deletes_pending_and_notifies(
+    session, tmp_path, monkeypatch
+):
+    pending = _make_voice_pending(session, tmp_path, recipient="777")
+    monkeypatch.setattr(worker_module, "transcribe_audio",
+                        lambda path: "[0s] Запомни купить молоко")
+
+    process_voice_pending(session, pending)
+    session.flush()
+
+    assert session.query(KnowledgePendingAttachment).count() == 0
+    message = session.scalars(select(OutboxMessage)).one()
+    assert message.channel == "telegram"
+    assert message.recipient == "777"
+    assert "Запомнил" in message.payload_reference["text"]
+    from helm_core.models import KnowledgeMemory
+    memory = session.scalars(select(KnowledgeMemory)).one()
+    assert memory.canonical_text == "купить молоко"
+    assert memory.origin_kind == "voice"
+
+
+def test_process_voice_pending_non_remember_saves_transcript_and_sends_menu(
+    session, tmp_path, monkeypatch
+):
+    pending = _make_voice_pending(session, tmp_path, recipient="777")
+    monkeypatch.setattr(worker_module, "transcribe_audio",
+                        lambda path: "[0s] какой-то обычный текст без команды")
+
+    process_voice_pending(session, pending)
+    session.flush()
+
+    row = session.get(KnowledgePendingAttachment, pending.id)
+    assert row is not None, "не Remember — pending остаётся ждать выбора домена"
+    assert row.transcript == "[0s] какой-то обычный текст без команды"
+    message = session.scalars(select(OutboxMessage)).one()
+    assert "какой-то обычный текст без команды" in message.payload_reference["text"]
+    assert "1. personal" in message.payload_reference["text"]
+
+
+def test_process_voice_pending_transcribe_failure_deletes_pending_and_notifies(
+    session, tmp_path, monkeypatch
+):
+    """Один плохой аудио-файл не должен уводить воркер в вечный краш-луп
+    (тот же урок, что уже стоил живого разбора у process_job())."""
+    pending = _make_voice_pending(session, tmp_path, recipient="777")
+    spool_path = Path(pending.spool_path)
+
+    def _raise(path):
+        raise RuntimeError("gigaam упал")
+    monkeypatch.setattr(worker_module, "transcribe_audio", _raise)
+
+    process_voice_pending(session, pending)  # не должно поднять исключение наружу
+    session.flush()
+
+    assert session.query(KnowledgePendingAttachment).count() == 0
+    assert not spool_path.exists()
+    message = session.scalars(select(OutboxMessage)).one()
+    assert message.payload_reference["text"] == VOICE_TRANSCRIBE_FAILED_NOTICE
+
+
+def test_process_voice_pending_without_recipient_does_not_notify(session, tmp_path, monkeypatch):
+    pending = _make_voice_pending(session, tmp_path)  # recipient=None
+    monkeypatch.setattr(worker_module, "transcribe_audio",
+                        lambda path: "[0s] какой-то текст")
+
+    process_voice_pending(session, pending)
     session.flush()
 
     assert session.scalars(select(OutboxMessage)).all() == []

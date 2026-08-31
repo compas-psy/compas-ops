@@ -538,6 +538,28 @@ def test_webhook_cancel_removes_pending_attachment(app, client):
         assert session.scalars(select(KnowledgeSource)).all() == []
 
 
+def test_webhook_voice_attachment_defers_domain_question(app, client):
+    """ADR-021 фаза 2b: voice-вложение (расширение .ogg по filename) не
+    должно получить меню доменов сразу — это решает
+    `worker.py::process_voice_pending()` уже после фоновой транскрипции."""
+    from helm_core.knowledge.chat_intake import VOICE_STAGED_NOTICE
+
+    voice_attachment = {"type": "audio", "filename": "voice_abc.ogg",
+                        "payload": {"url": "https://cdn.max.ru/f/voice"}}
+    with patch("helm_core.api.hooks.download_attachment", return_value=b"ogg bytes"):
+        response = post_hook(client, _attachment_update(attachment=voice_attachment))
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "attachment_staged"
+    with app.state.session_factory() as session:
+        bind_knowledge_user(session, None)
+        pending = session.scalars(select(KnowledgePendingAttachment)).one()
+        assert pending.kind == "voice"
+        assert pending.recipient == "777"
+        message = session.scalars(select(OutboxMessage)).one()
+        assert message.payload_reference["text"] == VOICE_STAGED_NOTICE
+
+
 def test_webhook_duplicate_attachment_delivery_is_deduped(app, client):
     with patch("helm_core.api.hooks.download_attachment",
               return_value=b"file bytes") as fake_download:

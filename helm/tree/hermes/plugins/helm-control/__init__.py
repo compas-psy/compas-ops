@@ -195,14 +195,22 @@ def _send_reply(gateway, source, content: str) -> None:
 
 
 def _stage_attachment(channel: str, data_base64: str, original_filename: str | None,
-                      mime_type: str | None, caption: str | None) -> dict:
+                      mime_type: str | None, caption: str | None,
+                      recipient: str | None = None) -> dict:
     """POST /internal/knowledge/attachment/stage — см. модуль internal.py
     в Control Plane. Fail-closed, как `_register_task`: если Control
     Plane недоступен, исключение уходит вызывающей стороне — вложение
-    без подтверждённого spool не считается принятым."""
+    без подтверждённого spool не считается принятым.
+
+    `recipient` — ADR-021 фаза 2b: для голосовых вложений решение
+    (Remember/документ) известно только после фоновой транскрипции,
+    воркеру нужен адресат для асинхронного уведомления — тот же паттерн,
+    что уже есть у `_stage_batch()` ниже.
+    """
     body = json.dumps({
         "channel": channel, "data_base64": data_base64,
         "original_filename": original_filename, "mime_type": mime_type, "caption": caption,
+        "recipient": recipient,
     }).encode("utf-8")
     ts = str(time.time())
     sig = _sign(_read_secret(), ts, body)
@@ -453,9 +461,10 @@ async def _handle_attachment_async(event, gateway, source, channel: str) -> None
     data, filename, mime_type = result
 
     caption = getattr(event.raw_message, "caption", None) or (event.text or None)
+    recipient = str(source.chat_id) if source and source.chat_id is not None else None
     try:
         staged = _stage_attachment(channel, base64.b64encode(data).decode("ascii"),
-                                   filename, mime_type, caption)
+                                   filename, mime_type, caption, recipient)
     except Exception as exc:
         print(f"[helm-control] stage_attachment failed: {exc!r}", flush=True)
         _send_reply(gateway, source,

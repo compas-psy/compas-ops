@@ -24,6 +24,13 @@ before any parser/LLM sees them", не только "before the parser". Дом�
 chief. FIFO по `created_at` внутри канала — редкий случай двух
 неразрешённых вложений подряд решается по очереди, не последним/первым
 произвольно.
+
+ADR-021 фаза 2b (voice-«Запомни»): для voice-вложений (`kind == "voice"`)
+вопрос о домене откладывается — Remember-или-документ решается только
+ПОСЛЕ фоновой транскрипции (`worker.py::process_voice_pending()`), не
+здесь и не сразу. `stage_attachment()` для voice возвращает не меню
+доменов, а уведомление "расшифровываю"; строка становится видимой
+`resolve_pending_domain()` только когда `transcript` уже заполнен.
 """
 
 from __future__ import annotations
@@ -37,13 +44,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ..models import (
     KnowledgeCustomDomain, KnowledgeDomain, KnowledgePendingAttachment,
     KnowledgeSensitivity, KnowledgeSource,
 )
+from .audio import is_audio_file
 from .ingest import DEFAULT_VAULT_ROOT, RegisterFileResult, register_file_for_ingest
 from .quotas import QuotaExceeded
 from .tenancy import bind_knowledge_user
@@ -204,7 +212,8 @@ def stage_attachment(session: Session, *, channel: str, data: bytes,
                      original_filename: str | None, mime_type: str | None,
                      caption: str | None = None,
                      spool_root: str = DEFAULT_SPOOL_ROOT,
-                     knowledge_user_id: uuid.UUID | None = None) -> KnowledgePendingAttachment:
+                     knowledge_user_id: uuid.UUID | None = None,
+                     recipient: str | None = None) -> KnowledgePendingAttachment:
     """§14.5.1 spool: owner-only каталог, bounded size. Имя файла в spool —
     случайный token, НЕ sha256: два вложения с одинаковым содержимым,
     ожидающие ответа одновременно (FIFO), не должны делить один physical
@@ -213,6 +222,12 @@ def stage_attachment(session: Session, *, channel: str, data: bytes,
 
     `knowledge_user_id=None` — существующие call sites (P8.6.2 Dedicated
     Knowledge Bot ещё не существует): разрешается в SYSTEM_OWNER.
+
+    `recipient` — ADR-021 фаза 2b: адресат для АСИНХРОННОГО уведомления,
+    которое пришлёт `worker.py::process_voice_pending()` после фоновой
+    транскрипции voice-вложений (домен для них не спрашивается сразу —
+    см. `kind` ниже). Для document-вложений не используется: их job уже
+    получает recipient позже, из `resolve_pending_domain()`.
     """
     knowledge_user_id = bind_knowledge_user(session, knowledge_user_id)
 
@@ -226,10 +241,17 @@ def stage_attachment(session: Session, *, channel: str, data: bytes,
     spool_path = spool_dir / f"{uuid.uuid4().hex}{ext}"
     spool_path.write_bytes(data)
 
+    # ADR-021 фаза 2b: то же определение "это аудио", что уже использует
+    # parsers.py::parse_file() на физическом файле — voice-вложение решает
+    # Remember-или-документ только ПОСЛЕ транскрипции (асинхронно), домен
+    # для него сразу не спрашивается (см. stage_outcome_text()).
+    kind = "voice" if original_filename and is_audio_file(Path(original_filename)) else "document"
+
     pending = KnowledgePendingAttachment(
         knowledge_user_id=knowledge_user_id,
         channel=channel, sha256=sha256, spool_path=str(spool_path),
         original_filename=original_filename, mime_type=mime_type, caption=caption,
+        kind=kind, recipient=recipient,
     )
     session.add(pending)
     session.flush()
@@ -268,9 +290,17 @@ def resolve_pending_domain(session: Session, *, channel: str, reply_text: str,
     """
     knowledge_user_id = bind_knowledge_user(session, None)
 
+    # ADR-021 фаза 2b: voice-pending БЕЗ транскрипта (ещё не обработан
+    # фоновым `worker.py::process_voice_pending()`) — не готов к вопросу о
+    # домене вовсе, его нельзя отдавать сюда как "следующий неразрешённый".
+    # Текстовый ответ, пришедший в эту паузу, должен провалиться в обычный
+    # pipeline (`not_pending`), а не быть ошибочно понят как ответ на
+    # домен для файла, который ещё даже не транскрибирован.
     pending = session.scalar(
         select(KnowledgePendingAttachment)
-        .where(KnowledgePendingAttachment.channel == channel)
+        .where(KnowledgePendingAttachment.channel == channel,
+              or_(KnowledgePendingAttachment.kind != "voice",
+                  KnowledgePendingAttachment.transcript.isnot(None)))
         .order_by(KnowledgePendingAttachment.created_at)
         .limit(1)
     )
@@ -399,6 +429,41 @@ ATTACHMENT_CANCELLED_NOTICE = "Хорошо, не сохраняю."
 ATTACHMENT_QUOTA_EXCEEDED_NOTICE = (
     "Квота хранилища/загрузки исчерпана — файл не сохранён. Обратитесь к владельцу."
 )
+
+#: ADR-021 фаза 2b — сразу после stage_attachment() для voice: домен ещё
+#: не спрашивается (в отличие от document), решение Remember/документ
+#: придёт асинхронно после фоновой транскрипции.
+VOICE_STAGED_NOTICE = "Голосовое получено, расшифровываю — отвечу через несколько секунд."
+
+#: Предпросмотр транскрипта перед вопросом о домене (не-Remember voice) —
+#: полный текст ушёл бы за разумную длину сообщения чата на длинной
+#: голосовой заметке, это только ориентир, что было распознано.
+_VOICE_TRANSCRIPT_PREVIEW_CHARS = 300
+
+
+def stage_outcome_text(session: Session, pending: KnowledgePendingAttachment) -> str:
+    """Текст владельцу сразу после `stage_attachment()` — ветвится по
+    `pending.kind` (ADR-021 фаза 2b): voice откладывает домен до фоновой
+    транскрипции (см. `worker.py::process_voice_pending()`), document —
+    прежнее поведение, домен сразу."""
+    if pending.kind == "voice":
+        return VOICE_STAGED_NOTICE
+    return format_domain_menu(session, pending.knowledge_user_id, pending.original_filename)
+
+
+def voice_ready_menu_text(session: Session, pending: KnowledgePendingAttachment) -> str:
+    """После транскрипции voice-вложения, которое НЕ Remember-команда
+    (ADR-021 фаза 2b) — предпросмотр распознанного текста и тот же вопрос
+    о домене, что и для обычного документа. `pending.transcript` должен
+    быть уже проставлен вызывающей стороной."""
+    preview = (pending.transcript or "").strip()
+    if len(preview) > _VOICE_TRANSCRIPT_PREVIEW_CHARS:
+        preview = preview[:_VOICE_TRANSCRIPT_PREVIEW_CHARS].rstrip() + "…"
+    return "\n".join([
+        f"Расшифровка:\n{preview}",
+        "",
+        format_domain_menu(session, pending.knowledge_user_id, pending.original_filename),
+    ])
 
 
 def resolve_outcome_text(session: Session, outcome: ResolveOutcome) -> str | None:

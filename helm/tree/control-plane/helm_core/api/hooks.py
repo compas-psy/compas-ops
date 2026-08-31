@@ -43,8 +43,8 @@ from ..knowledge.batch_intake import (
     stage_batch,
 )
 from ..knowledge.chat_intake import (
-    ATTACHMENT_TOO_LARGE_NOTICE, AttachmentTooLarge, format_domain_menu,
-    resolve_outcome_text, resolve_pending_domain, stage_attachment,
+    ATTACHMENT_TOO_LARGE_NOTICE, AttachmentTooLarge,
+    resolve_outcome_text, resolve_pending_domain, stage_attachment, stage_outcome_text,
 )
 from ..knowledge.admin import detect_admin_command, try_admin_command
 from ..knowledge.memory import detect_remember_command, try_remember
@@ -244,7 +244,8 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
             try:
                 pending = stage_attachment(session, channel="max", data=data,
                                            original_filename=attachment.filename,
-                                           mime_type=None, caption=inbound.text)
+                                           mime_type=None, caption=inbound.text,
+                                           recipient=inbound.chat_id)
             except AttachmentTooLarge:
                 enqueue(session, channel="max", recipient=inbound.chat_id,
                         reference=f"attachment-too-large:{inbound.message_id}",
@@ -254,8 +255,7 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
 
             enqueue(session, channel="max", recipient=inbound.chat_id,
                     reference=f"attachment-staged:{pending.id}",
-                    payload_reference={"text": format_domain_menu(session, pending.knowledge_user_id,
-                                                   pending.original_filename)})
+                    payload_reference={"text": stage_outcome_text(session, pending)})
             session.commit()
             return {"status": "attachment_staged", "pending_id": str(pending.id)}
 

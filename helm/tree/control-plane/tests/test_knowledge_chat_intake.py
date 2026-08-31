@@ -13,8 +13,9 @@ import pytest
 from sqlalchemy import select
 
 from helm_core.knowledge.chat_intake import (
-    MAX_ATTACHMENT_BYTES, AttachmentTooLarge, format_domain_menu,
-    parse_domain_reply, resolve_pending_domain, stage_attachment,
+    MAX_ATTACHMENT_BYTES, VOICE_STAGED_NOTICE, AttachmentTooLarge, format_domain_menu,
+    parse_domain_reply, resolve_pending_domain, stage_attachment, stage_outcome_text,
+    voice_ready_menu_text,
 )
 from helm_core.knowledge.tenancy import bind_knowledge_user
 from helm_core.models import (
@@ -180,6 +181,96 @@ def test_stage_attachment_rejects_oversized_file(session, tmp_path):
             original_filename="huge.bin", mime_type="application/octet-stream",
             spool_root=str(tmp_path / "spool"),
         )
+
+
+# ── stage_attachment() kind detection + stage_outcome_text() (ADR-021 2b) ──
+
+def test_stage_attachment_detects_voice_kind_by_extension(session, tmp_path):
+    pending = stage_attachment(
+        session, channel="telegram", data=b"fake ogg bytes",
+        original_filename="voice_abc123.ogg", mime_type="audio/ogg",
+        spool_root=str(tmp_path / "spool"),
+    )
+    assert pending.kind == "voice"
+
+
+def test_stage_attachment_defaults_to_document_kind(session, tmp_path):
+    pending = stage_attachment(
+        session, channel="telegram", data=b"hello",
+        original_filename="note.txt", mime_type="text/plain",
+        spool_root=str(tmp_path / "spool"),
+    )
+    assert pending.kind == "document"
+
+
+def test_stage_attachment_without_filename_is_document_kind(session, tmp_path):
+    """Нет имени файла — нет расширения, определить audio/video нечем;
+    тот же самый источник истины, что уже использует parsers.py."""
+    pending = stage_attachment(
+        session, channel="telegram", data=b"hello",
+        original_filename=None, mime_type=None,
+        spool_root=str(tmp_path / "spool"),
+    )
+    assert pending.kind == "document"
+
+
+def test_stage_attachment_stores_recipient(session, tmp_path):
+    pending = stage_attachment(
+        session, channel="telegram", data=b"data",
+        original_filename="voice.ogg", mime_type="audio/ogg",
+        spool_root=str(tmp_path / "spool"), recipient="12345",
+    )
+    assert pending.recipient == "12345"
+
+
+def test_stage_outcome_text_voice_returns_staged_notice_not_domain_menu(session, tmp_path):
+    pending = stage_attachment(
+        session, channel="telegram", data=b"data",
+        original_filename="voice.ogg", mime_type="audio/ogg",
+        spool_root=str(tmp_path / "spool"),
+    )
+    assert stage_outcome_text(session, pending) == VOICE_STAGED_NOTICE
+
+
+def test_stage_outcome_text_document_returns_domain_menu(session, tmp_path):
+    pending = stage_attachment(
+        session, channel="telegram", data=b"data",
+        original_filename="report.pdf", mime_type="application/pdf",
+        spool_root=str(tmp_path / "spool"),
+    )
+    text = stage_outcome_text(session, pending)
+    assert "report.pdf" in text
+    assert "1. personal" in text
+
+
+def test_voice_ready_menu_text_includes_preview_and_domain_menu(session, tmp_path):
+    pending = stage_attachment(
+        session, channel="telegram", data=b"data",
+        original_filename="voice.ogg", mime_type="audio/ogg",
+        spool_root=str(tmp_path / "spool"),
+    )
+    pending.transcript = "[0s] Купить билеты на поезд"
+    session.flush()
+
+    text = voice_ready_menu_text(session, pending)
+
+    assert "Купить билеты на поезд" in text
+    assert "1. personal" in text
+
+
+def test_voice_ready_menu_text_truncates_long_transcript(session, tmp_path):
+    pending = stage_attachment(
+        session, channel="telegram", data=b"data",
+        original_filename="voice.ogg", mime_type="audio/ogg",
+        spool_root=str(tmp_path / "spool"),
+    )
+    pending.transcript = "[0s] " + "слово " * 200
+    session.flush()
+
+    text = voice_ready_menu_text(session, pending)
+
+    assert text.count("…") == 1
+    assert len(text) < len(pending.transcript) + 500
 
 
 # ── resolve_pending_domain() ────────────────────────────────────────────────
@@ -380,6 +471,55 @@ def test_resolve_pending_domain_missing_spool_file_is_handled_not_crashed(sessio
 
     assert outcome.status == "missing"
     assert session.query(KnowledgePendingAttachment).count() == 0
+
+
+def test_resolve_pending_domain_skips_voice_pending_without_transcript(session, tmp_path):
+    """ADR-021 фаза 2b: voice-pending без транскрипта ещё не готов к
+    вопросу о домене вовсе — следующее текстовое сообщение должно
+    провалиться в обычный pipeline (`not_pending`), а не быть ошибочно
+    понято как ответ на домен для файла, который ещё не транскрибирован."""
+    stage_attachment(session, channel="telegram", data=b"voice bytes",
+                     original_filename="voice.ogg", mime_type="audio/ogg",
+                     spool_root=str(tmp_path / "spool"))
+
+    outcome = resolve_pending_domain(session, channel="telegram", reply_text="engineering")
+
+    assert outcome.status == "not_pending"
+    assert session.query(KnowledgePendingAttachment).count() == 1
+
+
+def test_resolve_pending_domain_finds_voice_pending_once_transcribed(session, tmp_path):
+    vault_root = tmp_path / "vault"
+    pending = stage_attachment(session, channel="telegram", data=b"voice bytes",
+                               original_filename="voice.ogg", mime_type="audio/ogg",
+                               spool_root=str(tmp_path / "spool"))
+    pending.transcript = "[0s] какой-то распознанный текст"
+    session.flush()
+
+    outcome = resolve_pending_domain(session, channel="telegram", reply_text="engineering",
+                                     vault_root=str(vault_root))
+
+    assert outcome.status == "ingested"
+
+
+def test_resolve_pending_domain_prefers_ready_document_over_untranscribed_voice(session, tmp_path):
+    """FIFO по created_at — но voice без транскрипта пропускается, даже
+    если он пришёл раньше готового к разрешению document-pending."""
+    vault_root = tmp_path / "vault"
+    stage_attachment(session, channel="telegram", data=b"voice bytes",
+                     original_filename="voice.ogg", mime_type="audio/ogg",
+                     spool_root=str(tmp_path / "spool"))
+    stage_attachment(session, channel="telegram", data=b"doc bytes",
+                     original_filename="doc.txt", mime_type="text/plain",
+                     spool_root=str(tmp_path / "spool"))
+
+    outcome = resolve_pending_domain(session, channel="telegram", reply_text="engineering",
+                                     vault_root=str(vault_root))
+
+    assert outcome.status == "ingested"
+    assert outcome.result.source.original_filename == "doc.txt"
+    # Voice-pending без транскрипта остаётся нетронутым.
+    assert session.query(KnowledgePendingAttachment).count() == 1
 
 
 def test_resolve_pending_domain_over_storage_quota_is_rejected_without_orphan_file(session, tmp_path):

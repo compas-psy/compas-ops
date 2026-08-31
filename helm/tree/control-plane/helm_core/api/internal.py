@@ -25,8 +25,8 @@ from ..knowledge.batch_intake import (
     resolve_batch_domain, retry_failed, stage_batch,
 )
 from ..knowledge.chat_intake import (
-    ATTACHMENT_TOO_LARGE_NOTICE, AttachmentTooLarge, format_domain_menu,
-    resolve_outcome_text, resolve_pending_domain, stage_attachment,
+    ATTACHMENT_TOO_LARGE_NOTICE, AttachmentTooLarge,
+    resolve_outcome_text, resolve_pending_domain, stage_attachment, stage_outcome_text,
 )
 from ..knowledge.admin import try_admin_command
 from ..knowledge.memory import try_remember
@@ -173,6 +173,10 @@ class AttachmentStageIn(BaseModel):
     original_filename: str | None = Field(default=None, max_length=255)
     mime_type: str | None = Field(default=None, max_length=128)
     caption: str | None = None
+    #: ADR-021 фаза 2b: адресат для АСИНХРОННОГО уведомления после фоновой
+    #: транскрипции voice-вложений — тот же смысл, что у `recipient` в
+    #: `BatchStageIn`/`AttachmentResolveIn` ниже.
+    recipient: str | None = Field(default=None, max_length=128)
 
 
 @router.post("/knowledge/attachment/stage")
@@ -192,14 +196,14 @@ def knowledge_attachment_stage(body: AttachmentStageIn,
     try:
         pending = stage_attachment(session, channel=body.channel, data=data,
                                    original_filename=body.original_filename,
-                                   mime_type=body.mime_type, caption=body.caption)
+                                   mime_type=body.mime_type, caption=body.caption,
+                                   recipient=body.recipient)
     except AttachmentTooLarge:
         session.rollback()
         return {"status": "too_large", "text": ATTACHMENT_TOO_LARGE_NOTICE}
     session.commit()
     return {"status": "staged", "pending_id": str(pending.id),
-            "text": format_domain_menu(session, pending.knowledge_user_id,
-                                   pending.original_filename)}
+            "text": stage_outcome_text(session, pending)}
 
 
 class AttachmentResolveIn(BaseModel):

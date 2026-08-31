@@ -13,6 +13,12 @@
 `NEEDS_REVIEW` при провале quality gate (§14.6: «если Docling тоже
 FAIL — source status NEEDS_REVIEW, не создавать уверенные knowledge
 facts»).
+
+ADR-021 фаза 2b: тот же процесс опрашивает и `knowledge_pending_
+attachments` с `kind == "voice"` без транскрипта — после document-job'ов,
+отдельной round-robin очередью (`claim_next_voice_pending()`/
+`process_voice_pending()`), решая Remember-или-документ уже после
+фоновой транскрипции.
 """
 
 from __future__ import annotations
@@ -24,14 +30,18 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .audio import strip_timestamps, transcribe_audio
 from .batch_intake import finalize_batch_if_terminal, sync_item_from_job
+from .chat_intake import voice_ready_menu_text
 from .embeddings import embed_texts_or_none
 from .ingest import split_chunks
+from .memory import try_remember
 from .parsers import parse_file
 from .tenancy import bind_knowledge_user
 from ..models import (
     KnowledgeBatchItem, KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus,
-    KnowledgeSource, KnowledgeStatus, KnowledgeUser, KnowledgeUserStatus,
+    KnowledgePendingAttachment, KnowledgeSource, KnowledgeStatus, KnowledgeUser,
+    KnowledgeUserStatus,
 )
 from ..outbox import enqueue
 
@@ -45,6 +55,15 @@ POLL_INTERVAL_SECONDS = 5
 #: рестарта распределение снова стартует с начала списка, это не портит
 #: гарантию "ни один тенант не голодает бесконечно").
 _last_served_tenant_index = -1
+
+#: ADR-021 фаза 2b: отдельная переменная от `_last_served_tenant_index` —
+#: voice-pending и document-job — разные очереди, round-robin по одной не
+#: должен влиять на другую.
+_last_served_voice_tenant_index = -1
+
+VOICE_TRANSCRIBE_FAILED_NOTICE = (
+    "Не получилось расшифровать голосовое — попробуйте прислать ещё раз."
+)
 
 
 def _active_tenant_ids(session: Session) -> list:
@@ -95,6 +114,92 @@ def claim_next_job(session: Session) -> KnowledgeIngestJob | None:
             session.flush()
             return job
     return None
+
+
+def claim_next_voice_pending(session: Session) -> KnowledgePendingAttachment | None:
+    """Взять один voice-pending без транскрипта (ADR-021 фаза 2b) — тот же
+    round-robin по тенантам, что `claim_next_job()`, отдельным индексом
+    (`_last_served_voice_tenant_index`).
+
+    `FOR UPDATE SKIP LOCKED` здесь держит блокировку строки на всё время
+    вызова `process_voice_pending()` (транскрипция — медленный шаг,
+    ~11с+), не только на сам SELECT — вызывающая сторона обязана не
+    коммитить/закрывать сессию до конца обработки, тот же контракт, что
+    уже есть у `claim_next_job()`/`process_job()`. Крах воркера ДО
+    commit откатывает транзакцию — `transcript` остаётся NULL, строка
+    снова доступна следующему опросу, тот же fail-safe, что у
+    document-job'ов.
+    """
+    global _last_served_voice_tenant_index
+    tenants = _active_tenant_ids(session)
+    if not tenants:
+        return None
+    n = len(tenants)
+    for offset in range(n):
+        idx = (_last_served_voice_tenant_index + 1 + offset) % n
+        tenant_id = tenants[idx]
+        bind_knowledge_user(session, tenant_id)
+        pending = session.scalar(
+            select(KnowledgePendingAttachment)
+            .where(KnowledgePendingAttachment.knowledge_user_id == tenant_id,
+                  KnowledgePendingAttachment.kind == "voice",
+                  KnowledgePendingAttachment.transcript.is_(None))
+            .order_by(KnowledgePendingAttachment.created_at)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        if pending is not None:
+            _last_served_voice_tenant_index = idx
+            return pending
+    return None
+
+
+def process_voice_pending(session: Session, pending: KnowledgePendingAttachment) -> None:
+    """Асинхронная обработка одного voice-pending без транскрипта
+    (ADR-021 фаза 2b, §14.10-14.11): транскрипция → проверка на Remember-
+    команду → либо подтверждение Remember (вложение как документ больше
+    не нужно), либо (не команда) — сохранить транскрипт и спросить домен,
+    как для обычного документа, только теперь с текстом на руках
+    (`voice_ready_menu_text()`). Не коммитит — вызывающий код решает
+    транзакцию, тот же контракт, что `process_job()`.
+
+    Один try/except на всё тело — тот же урок, что уже стоил живого
+    краш-лупа у `process_job()` (29.08.2026): исключение после успешного
+    шага не должно улетать необработанным из этой функции и ронять
+    `run_forever()`. Не-Remember путь НЕ парсит файл здесь — второй раз
+    (через `register_file_for_ingest()`) это сделает обычный document-
+    pipeline, когда владелец ответит на вопрос о домене; сознательный
+    компромисс "проще, но транскрибируем дважды" (ADR-021), не баг.
+    """
+    pending_id = pending.id
+    channel = pending.channel
+    recipient = pending.recipient
+    spool_path = Path(pending.spool_path)
+
+    try:
+        transcript = transcribe_audio(spool_path)
+        stripped = strip_timestamps(transcript)
+        outcome = try_remember(session, channel=channel, text=stripped,
+                               knowledge_user_id=pending.knowledge_user_id, origin_kind="voice")
+        if outcome.status != "not_command":
+            spool_path.unlink(missing_ok=True)
+            notice = outcome.text
+            reference = f"voice-remember-{outcome.status}:{pending_id}"
+            session.delete(pending)
+        else:
+            pending.transcript = transcript
+            notice = voice_ready_menu_text(session, pending)
+            reference = f"voice-transcribed:{pending_id}"
+    except Exception as exc:
+        logger.warning("knowledge voice pending %s: обработка упала: %s", pending_id, exc)
+        spool_path.unlink(missing_ok=True)
+        session.delete(pending)
+        notice = VOICE_TRANSCRIBE_FAILED_NOTICE
+        reference = f"voice-failed:{pending_id}"
+
+    if recipient:
+        enqueue(session, channel=channel, recipient=recipient,
+               reference=reference, payload_reference={"text": notice})
 
 
 def _frontmatter(source: KnowledgeSource) -> str:
@@ -254,13 +359,25 @@ def run_forever(session_factory) -> None:  # pragma: no cover — процесс
         try:
             with session_factory() as session:
                 job = claim_next_job(session)
-                if job is None:
+                if job is not None:
+                    process_job(session, job)
                     session.commit()
-                    time.sleep(POLL_INTERVAL_SECONDS)
+                    logger.info("knowledge ingest job %s -> %s", job.id, job.status)
                     continue
-                process_job(session, job)
+
+                # ADR-021 фаза 2b: voice-pending опрашивается ПОСЛЕ
+                # document-job'ов — голосовые заметки не должны отодвигать
+                # уже поставленные в очередь документы, они и так медленнее
+                # любого одиночного document-job'а (транскрипция, ~11с+).
+                pending = claim_next_voice_pending(session)
+                if pending is not None:
+                    process_voice_pending(session, pending)
+                    session.commit()
+                    logger.info("knowledge voice pending %s обработан", pending.id)
+                    continue
+
                 session.commit()
-                logger.info("knowledge ingest job %s -> %s", job.id, job.status)
+                time.sleep(POLL_INTERVAL_SECONDS)
         except Exception:
             logger.exception("knowledge ingest worker: необработанная ошибка цикла")
             time.sleep(POLL_INTERVAL_SECONDS)
