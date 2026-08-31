@@ -241,6 +241,16 @@ services:
       # helm_core/knowledge/chat_intake.py) или самим воркером в P8.5.2-
       # тестах, обязан резолвиться без трансляции путей.
       - /opt/helm-knowledge:/opt/helm-knowledge
+      # НАЙДЕНО живым тестом 31.08.2026 (ADR-021 фаза 2b): без этого
+      # `worker.py::process_voice_pending()` падает `FileNotFoundError`
+      # на `pending.spool_path` для КАЖДОГО voice-pending — `stage_
+      # attachment()` пишет файл в spool из helm-core (у него это
+      # смонтировано, см. ниже), но сам транскрибирует и решает
+      # Remember-или-документ уже worker в ОТДЕЛЬНОМ контейнере, который
+      # этот путь никогда не видел. group_add 1001 (тот же GID хостового
+      # `helm`, что уже даёт доступ к /opt/helm-knowledge) уже есть у
+      # этого сервиса — добавлен только сам mount.
+      - /opt/helm-state/knowledge-spool:/opt/helm-state/knowledge-spool
     # Нет ни ports, ни healthcheck HTTP — это не веб-сервис, опрашивает
     # knowledge_ingest_jobs циклом (worker.py::run_forever), наружу
     # ничего не слушает.
