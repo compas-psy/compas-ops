@@ -37,6 +37,7 @@ on:
           - deploy        # код + панель + пересборка контейнеров
           - migrate       # alembic upgrade head (после deploy)
           - embed-benchmark  # разовый замер embedding-моделей (P8.5.4 остаток, §33)
+          - gigaam-benchmark  # разовый замер GigaAM-моделей (P8.5.3, §33)
           - restore-test  # backup.sh + restore_test.sh
           - rollback      # alembic downgrade до указанной ревизии
       code_ref:
@@ -596,6 +597,47 @@ jobs:
             sudo docker compose build helm-embed
             sudo docker compose run --rm --entrypoint python3 helm-embed \
               -m helm_core.knowledge.embed_benchmark
+          '
+
+      # ── gigaam-benchmark: разовый замер моделей GigaAM (голос → текст) ──
+      - name: Замер GigaAM-моделей
+        # Тестовое аудио — синтетическая русская речь (espeak-ng), не
+        # живой голос: в контейнере/на раннере нет ни микрофона, ни TTS
+        # лучше espeak. Смысловая проверка поэтому визуальная ("узнаёт ли
+        # модель разумные слова"), не WER — см. docstring
+        # gigaam_benchmark.py. Пересобирается helm-knowledge-worker
+        # целиком (GigaAM встраивается в него, не отдельным сервисом —
+        # спека прямо требует "on-demand worker, not resident daemon
+        # model", в отличие от helm-embed) — самодостаточное действие,
+        # доставляет себе helm_core/Dockerfile.worker/docker-compose.yml,
+        # тот же паттерн, что уже был найден необходимым для
+        # embed-benchmark.
+        if: inputs.action == 'gigaam-benchmark'
+        run: |
+          sudo apt-get update && sudo apt-get install --no-install-recommends -y espeak-ng
+          espeak-ng -v ru -w /tmp/gigaam-test-raw.wav \
+            "Встреча перенесена на четверг, не забудьте предупредить клиента о переносе созвона."
+          ffmpeg -y -i /tmp/gigaam-test-raw.wav -acodec pcm_s16le -ar 16000 -ac 1 /tmp/gigaam-test.wav
+          cd helm/tree
+          scp -i ~/.ssh/id_deploy -r control-plane/helm_core "$VPS_USER@$VPS_HOST:/tmp/helm_core"
+          scp -i ~/.ssh/id_deploy control-plane/Dockerfile.worker "$VPS_USER@$VPS_HOST:/tmp/Dockerfile.worker"
+          scp -i ~/.ssh/id_deploy compose/docker-compose.yml "$VPS_USER@$VPS_HOST:/tmp/docker-compose.yml"
+          scp -i ~/.ssh/id_deploy /tmp/gigaam-test.wav "$VPS_USER@$VPS_HOST:/tmp/gigaam-test.wav"
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
+            set -e
+            sudo rm -rf /opt/helm/control-plane/helm_core
+            sudo mv /tmp/helm_core /opt/helm/control-plane/helm_core
+            sudo mv /tmp/Dockerfile.worker /opt/helm/control-plane/Dockerfile.worker
+            sudo mv /tmp/docker-compose.yml /opt/helm/compose/docker-compose.yml
+            sudo chown -R root:root /opt/helm/control-plane/helm_core \
+              /opt/helm/control-plane/Dockerfile.worker /opt/helm/compose/docker-compose.yml
+            sudo chmod -R go-w /opt/helm/control-plane/helm_core
+            cd /opt/helm/compose
+            sudo docker compose build helm-knowledge-worker
+            sudo docker compose run --rm -v /tmp/gigaam-test.wav:/tmp/test.wav:ro \
+              --entrypoint python3 helm-knowledge-worker \
+              -m helm_core.knowledge.gigaam_benchmark --audio /tmp/test.wav
+            rm -f /tmp/gigaam-test.wav
           '
 
       - name: Зарегистрировать вебхук Knowledge-бота
