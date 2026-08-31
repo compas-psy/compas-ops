@@ -28,22 +28,45 @@ WORKDIR /opt/helm/knowledge-worker
 # (~1.2GB лишних nvidia_*-пакетов на сервере без GPU — проверено
 # эмпирически в песочнице разработки установкой без этого флага).
 #
-# torchvision — ОБЯЗАТЕЛЬНО той же командой, с того же индекса: НАЙДЕНО
-# живым тестом на сервере — установка одного torch здесь и torchvision
-# отдельно (как транзитивная зависимость docling с обычного PyPI)
-# дала несовместимую пару сборок (разные ABI) и уронила Docling с
+# torchvision/torchaudio — ОБЯЗАТЕЛЬНО той же командой, с того же индекса:
+# НАЙДЕНО живым тестом на сервере — установка одного torch здесь и
+# torchvision отдельно (как транзитивная зависимость docling с обычного
+# PyPI) дала несовместимую пару сборок (разные ABI) и уронила Docling с
 # `RuntimeError: operator torchvision::nms does not exist` при первой
 # же попытке импортировать transformers.AutoImageProcessor — классическая
 # ошибка рассинхрона torch/torchvision, а не проблема самого файла или
 # кода. torch и torchvision обязаны приходить из ОДНОЙ команды install
-# с ОДНОГО индекса, чтобы pip подобрал совместимую пару версий.
-RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# с ОДНОГО индекса, чтобы pip подобрал совместимую пару версий. torchaudio
+# добавлен той же командой заранее (нужен GigaAM, ставится ниже) — по
+# той же причине: если оставить его транзитивной зависимостью gigaam[torch]
+# с обычного PyPI, есть риск того же класса ABI-рассинхрона.
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 
 # MarkItDown — только нужные extras (§14.6: "only required extras"), не
 # [all] (тянет Azure cloud SDK и youtube/audio-transcription — облачные
 # и ненужные, извлечение аудио делает GigaAM, не MarkItDown).
 RUN pip install --no-cache-dir "markitdown[docx,pptx,xlsx,xls,pdf,outlook]==0.1.7"
 RUN pip install --no-cache-dir docling
+
+# GigaAM (§14.7, P8.5.3) — git install, не PyPI: пакет на PyPI (0.1.0,
+# апрель 2025) не несёт актуальное семейство v3 моделей, которое есть на
+# main ветке репозитория (проверено живьём — карточки моделей и код
+# main расходятся с релизом на PyPI). Запинено на конкретный commit
+# (§33 "pin versions"), не на плавающий main.
+#
+# БЕЗ extras [longform]: официальный transcribe_longform() тянет
+# pyannote.audio==4.0.* для VAD, а её дефолтная сегментационная модель
+# ("pyannote/segmentation-3.0") — gated на HuggingFace: требует владельца
+# лично зайти на HF, создать токен и принять лицензию — это `/human`-
+# задача (устав §6, CLAUDE.md §5.2 — агент не может принимать
+# лицензионные соглашения от лица владельца), и она блокировала бы ЛЮБОЙ
+# запуск транскрипции до её выполнения. Вместо этого — Silero VAD
+# (MIT, не gated, ставится ниже) для собственной сегментации длинных
+# файлов на куски ≤25с (жёсткий лимит `.transcribe()` у GigaAM без
+# longform, проверено по коду репозитория), сборка сегментов и таймкодов
+# — в helm_core, не в GigaAM.
+RUN pip install --no-cache-dir "gigaam[torch] @ git+https://github.com/salute-developers/GigaAM.git@7447938d791c4f3e643386ee22c33777004293a5"
+RUN pip install --no-cache-dir "silero-vad==6.2.1"
 
 # sqlalchemy/psycopg — БЕЗ версии pydantic/pydantic-settings рядом с
 # ними: НАЙДЕНО живым тестом на сервере — если запинить pydantic ДО
