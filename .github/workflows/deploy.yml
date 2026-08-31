@@ -31,6 +31,7 @@ on:
           - backup-unlock # снять зависшую блокировку репозитория бэкапов
           - backup        # снять точку возврата
           - logs          # логи helm-core и воркера, ничего не менять
+          - recon         # разовая read-only разведка исходника Hermes (см. script)
           - secrets       # положить секреты из GitHub Secrets на сервер
           - register-knowledge-webhook  # зарегистрировать вебхук Knowledge-бота в Telegram
           - deploy        # код + панель + пересборка контейнеров
@@ -43,6 +44,10 @@ on:
         default: main
       revision:
         description: 'Ревизия для rollback (например 03af17f40250)'
+        required: false
+        default: ''
+      script:
+        description: 'Имя файла в scripts/ для action=recon (read-only)'
         required: false
         default: ''
 
@@ -564,6 +569,27 @@ jobs:
             done
             echo "=== права на секреты ==="
             sudo ls -l /etc/helm/secrets/
+          '
+
+      # ── recon: разовая read-only разведка исходника Hermes ───────────
+      - name: Разведка
+        # Скрипты живут в scripts/*.sh (по образцу hermes-recon*.sh —
+        # каждая волна разведки своим файлом, ничего не перезаписывает
+        # предыдущую). Доставляется и выполняется в один шаг, как
+        # register-knowledge-webhook, но ничего не оставляет на сервере:
+        # это одноразовое чтение, а не постоянный инструмент. Сам файл
+        # решает, что смотреть — этот шаг только доставка + запуск.
+        if: inputs.action == 'recon'
+        run: |
+          if [ -z "${{ inputs.script }}" ]; then
+            echo "::error::Для recon нужно указать script (имя файла в scripts/)"
+            exit 1
+          fi
+          scp -i ~/.ssh/id_deploy "helm/tree/scripts/${{ inputs.script }}" \
+              "$VPS_USER@$VPS_HOST:/tmp/recon.sh"
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
+            bash /tmp/recon.sh
+            rm -f /tmp/recon.sh
           '
 
       - name: Проверка восстановления
