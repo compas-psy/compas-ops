@@ -174,10 +174,18 @@ jobs:
             cd /opt/helm/compose
             sudo docker compose build helm-core helm-knowledge-worker
             sudo docker compose up -d --force-recreate helm-core helm-knowledge-worker
+            # §14.12 Z2 (gemma2:2b, живой замер 31.08.2026,
+            # docs/KNOWLEDGE_MODELS.md) — не пересоздаётся при каждом
+            # деплое (та же логика, что уже у helm-embed: model-сервис,
+            # не код этого репозитория), но обязан БЫТЬ ПОДНЯТ и нести
+            # выбранную модель — идемпотентно на каждый normal deploy,
+            # не только на первый.
+            sudo docker compose up -d ollama
+            sudo docker compose exec -T ollama ollama pull gemma2:2b
             sudo docker compose restart caddy
             sudo systemctl restart hermes-gateway
             sleep 20
-            sudo docker compose ps helm-core helm-knowledge-worker caddy
+            sudo docker compose ps helm-core helm-knowledge-worker ollama caddy
           '
 
       # ── migrate: отдельным шагом, после проверки ревизии ─────────────

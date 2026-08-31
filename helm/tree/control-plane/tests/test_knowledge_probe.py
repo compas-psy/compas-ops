@@ -16,6 +16,8 @@ from helm_core.models import (
 )
 from helm_core.models.tables import KNOWLEDGE_EMBED_DIM
 
+from conftest import SYSTEM_OWNER_ID
+
 
 # ── §14.5: дедуп по SHA256 ────────────────────────────────────────────────
 
@@ -279,3 +281,79 @@ def test_vector_search_does_not_leak_across_tenants(session, monkeypatch):
     result = probe(session, query="что там с инфраструктурой у нас")
 
     assert result.outcome == "NEEDS_REASONING"
+
+
+# ── §14.12 Z2-рефраз (gemma2:2b, живой замер 31.08.2026) ───────────────────
+#
+# rephrase.py — своя HTTP-логика, замокана здесь тестами
+# test_knowledge_rephrase.py; здесь проверяется только ПРОВОДКА в
+# probe.py — когда рефраз применяется (Z0), когда нет (Z1, недоступность
+# Ollama) — реальная сеть не нужна ни одному тесту.
+
+def test_z0_answer_uses_rephrase_when_available(session, monkeypatch):
+    monkeypatch.setattr(probe_module, "rephrase_or_none",
+                        lambda session, **kw: "Живой пересказ факта.")
+
+    ingest_text(session, domain="engineering", text="Встречу перенесли на четверг.",
+               original_filename="meeting-notes.md")
+    session.flush()
+
+    result = probe(session, query="когда встреча")
+
+    assert result.mode == "Z0"
+    assert result.answer_text == "Живой пересказ факта.\n\nИсточник: meeting-notes.md"
+
+
+def test_z0_answer_falls_back_to_raw_text_when_rephrase_unavailable(session, monkeypatch):
+    """Fail-open явно (не полагаясь на реальный сетевой сбой, как
+    остальные Z0-тесты этого файла) — тот же корректный деградированный
+    путь, что "модель не прошла бенчмарк" (KNOWLEDGE_MODELS.md)."""
+    monkeypatch.setattr(probe_module, "rephrase_or_none", lambda session, **kw: None)
+
+    ingest_text(session, domain="engineering", text="Встречу перенесли на четверг.",
+               original_filename="meeting-notes.md")
+    session.flush()
+
+    result = probe(session, query="когда встреча")
+
+    assert result.mode == "Z0"
+    assert result.answer_text == "Встречу перенесли на четверг.\n\nИсточник: meeting-notes.md"
+
+
+def test_z1_answer_is_never_rephrased(session, monkeypatch):
+    """Замер (docs/KNOWLEDGE_MODELS.md) проверял рефраз ровно ОДНОГО
+    факта — совмещать несколько разных находок в одном вызове модели
+    непроверено, сознательно нетронутая часть, не забытая."""
+    monkeypatch.setattr(probe_module, "rephrase_or_none",
+                        lambda session, **kw: "НЕ ДОЛЖНО ПОЯВИТЬСЯ")
+
+    ingest_text(session, domain="engineering", text="Решение №1: используем Postgres.")
+    ingest_text(session, domain="engineering", text="Решение №2: используем Docker.")
+    ingest_text(session, domain="engineering", text="Решение №3: используем Caddy.")
+    session.flush()
+
+    result = probe(session, query="какие решения приняли по инфраструктуре")
+
+    assert result.mode == "Z1"
+    assert "НЕ ДОЛЖНО ПОЯВИТЬСЯ" not in result.answer_text
+    assert "Найдено 3 совпадений" in result.answer_text
+
+
+def test_z0_rephrase_receives_question_and_evidence_text(session, monkeypatch):
+    captured = {}
+
+    def fake_rephrase_or_none(session, **kw):
+        captured.update(kw)
+        return None
+
+    monkeypatch.setattr(probe_module, "rephrase_or_none", fake_rephrase_or_none)
+
+    ingest_text(session, domain="engineering", text="Встречу перенесли на четверг.",
+               original_filename="meeting-notes.md")
+    session.flush()
+
+    probe(session, query="когда встреча")
+
+    assert captured["question"] == "когда встреча"
+    assert captured["evidence_text"] == "Встречу перенесли на четверг."
+    assert captured["knowledge_user_id"] == SYSTEM_OWNER_ID

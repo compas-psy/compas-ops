@@ -20,6 +20,13 @@ Pre-LLM gate: вызывается ДО диспетчеризации к Hermes
 пока не создаёт туда записи (P8.5.2 — экстракция связей при ingest, тоже
 отложена). Известный пробел, не молчаливый — несколько найденных чанков
 показываются как есть, без утверждения, что они согласуются.
+
+Z2-рефраз (§14.12, docs/KNOWLEDGE_MODELS.md) — `rephrase.py`, локальный
+Ollama, только для Z0: перефразирует единственную найденную цитату в
+более естественный тон персональным стилем владельца (`style.py`).
+Fail-open — недоступность Ollama не роняет Probe, Z0-текст уходит как
+есть. mode остаётся "Z0" в обоих случаях (рефраз не создаёт новый
+уровень ответа, это пост-обработка уже найденного).
 """
 
 from __future__ import annotations
@@ -37,6 +44,7 @@ from .recall import (
     MemoryHit, build_or_tsquery, compose_memory_answer, is_future_reminder,
     is_historical_query, search_memories,
 )
+from .rephrase import rephrase_or_none
 from .tenancy import bind_knowledge_user
 from ..models import KnowledgeAnswerRun, KnowledgeChunk, KnowledgeDomain, KnowledgeSource, KnowledgeStatus
 from ..models.base import utcnow
@@ -265,6 +273,25 @@ def probe(session: Session, *, query: str, domain: str | None = None,
         return ProbeResult(outcome="NEEDS_REASONING")
 
     answer_text, mode = _compose_answer(evidence)
+
+    # §14.12 Z2-рефраз (docs/KNOWLEDGE_MODELS.md, gemma2:2b выбран живым
+    # замером 31.08.2026) — ТОЛЬКО для Z0 (одна цитата). Замер проверял
+    # рефраз ровно одного факта за раз; Z1 (пронумерованный список
+    # нескольких находок) рефразом не покрыт — совмещать несколько
+    # разных фактов в одном вызове модели непроверено и рискованнее
+    # (больше риск подмешать одну находку в формулировку другой), это
+    # сознательно нетронутая, а не забытая часть. paid_ai_used не
+    # трогается ни в одной ветке — локальный Ollama-рефраз не платный
+    # вызов (§14.14).
+    if mode == "Z0":
+        rephrased = rephrase_or_none(
+            session, question=query, evidence_text=evidence[0].chunk_text,
+            knowledge_user_id=knowledge_user_id,
+        )
+        if rephrased is not None:
+            cite = evidence[0].original_filename or evidence[0].source_id
+            answer_text = f"{rephrased}\n\nИсточник: {cite}"
+
     session.add(KnowledgeAnswerRun(
         knowledge_user_id=knowledge_user_id,
         query_hash=query_hash(query), domain=domain, mode=mode,

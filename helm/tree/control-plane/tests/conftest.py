@@ -16,6 +16,7 @@ from helm_core.actions.fixtures import build_registry
 from helm_core.approvals.service import ApprovalService
 from helm_core.ingest import IngestService
 from helm_core.knowledge.rls import apply_rls
+from helm_core.knowledge.style import OWNER_STYLE_VERSION
 from helm_core.models import Base, KnowledgeUser, KnowledgeUserRole
 
 OWNER_ID = "tg:100500"
@@ -41,7 +42,13 @@ def seed_system_owner(engine) -> None:
     заново в каждом месте, где схема пересоздаётся.
     """
     with Session(engine) as s:
-        s.add(KnowledgeUser(id=SYSTEM_OWNER_ID, role=KnowledgeUserRole.SYSTEM_OWNER))
+        # style_profile_version=OWNER_STYLE_VERSION — тестовая копия
+        # зеркалит боевую строку ПОСЛЕ миграции e4a7c9f2b6d1 (backfill
+        # владельца на текущую версию style.py), не "только что созданный
+        # пользователь" — та же логика, что уже применена ко всей
+        # остальной схеме этой фикстуры.
+        s.add(KnowledgeUser(id=SYSTEM_OWNER_ID, role=KnowledgeUserRole.SYSTEM_OWNER,
+                            style_profile_version=OWNER_STYLE_VERSION))
         s.commit()
 
 
