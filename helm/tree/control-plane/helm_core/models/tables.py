@@ -25,6 +25,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from sqlalchemy.dialects.postgresql import TSVECTOR
+from pgvector.sqlalchemy import Vector
 
 from .base import (
     ApprovalStatus, Base, KnowledgeBatchItemStatus, KnowledgeBatchStatus, KnowledgeIngestStatus,
@@ -339,11 +340,12 @@ class MetricPoint(Base):
 
 # ── HELM Knowledge / «второй мозг» (ТЗ §14, v3.4) ──────────────────────────
 #
-# Только лексический слой в этом заходе (V3.4-DELTA.md, "Conflicts found"):
-# dense/pgvector ждёт выбора embedding-модели бенчмарком на живом сервере —
-# pgvector-колонка требует фиксированной размерности, которую нельзя задать
-# заранее (BGE-M3 1024 против e5-base 768, §14.9). Колонка добавится
-# отдельной миграцией после решения, не сейчас.
+# dense/pgvector: модель и размерность выбраны живым замером 31.08.2026
+# (ADR-025) — sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2,
+# 384. Смена модели на другую размерность — новая миграция колонки, не
+# правка этой константы на живую: тип столбца фиксирует форму при
+# создании.
+KNOWLEDGE_EMBED_DIM = 384
 
 
 class KnowledgeSource(Base):
@@ -413,6 +415,15 @@ class KnowledgeChunk(Base):
     #: без выражения в generated column миграция проще и переносимее между
     #: минорными версиями Postgres.
     tsv: Mapped[str | None] = mapped_column(TSVECTOR)
+    #: ADR-025 — дополняет tsv, не заменяет (§14.12 "FTS + pgvector").
+    #: Nullable: ingest откатывается на NULL, если embedding-сервис
+    #: недоступен в момент разбора (embeddings.embed_texts_or_none) —
+    #: чанк остаётся лексически находимым, просто без семантического слоя
+    #: до бэкафилла. Без ANN-индекса пока: корпус мал (единицы источников
+    #: на 31.08.2026), ivfflat/hnsw на таком объёме калибровать не на чем
+    #: — точный ORDER BY embedding <=> ... достаточно быстр без индекса и
+    #: добавляется отдельной additive-миграцией, когда объём это оправдает.
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(KNOWLEDGE_EMBED_DIM))
     created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
 
     __table_args__ = (

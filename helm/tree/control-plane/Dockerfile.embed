@@ -18,14 +18,19 @@ WORKDIR /opt/helm/embed
 # torchvision: он нужен Docling для OCR/layout-моделей изображений, эмбеддинги
 # текста в нём не нуждаются.
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
-RUN pip install --no-cache-dir "sentence-transformers==3.3.1"
+RUN pip install --no-cache-dir "sentence-transformers==3.3.1" \
+      "fastapi==0.115.6" "uvicorn[standard]==0.34.0"
 
 COPY helm_core ./helm_core
 
 USER helm-embed
+EXPOSE 8090
 
-# Пока не сервис, а инструмент замера (embed_benchmark.py) — CMD станет
-# постоянным HTTP-сервисом (uvicorn) только после того, как бенчмарк на
-# живом сервере выберет модель (ADR-025). Держать здесь недописанный сервис
-# заранее — код без потребителя, спекуляция, которую §2 CLAUDE.md запрещает.
-CMD ["python3", "-m", "helm_core.knowledge.embed_benchmark"]
+# Постоянный сервис (ADR-025 — модель выбрана живым замером 31.08.2026).
+# embed_benchmark.py остаётся в образе для повторного замера при смене
+# кандидатов в будущем — запускается через override:
+#   docker compose run --rm --entrypoint python3 helm-embed \
+#     -m helm_core.knowledge.embed_benchmark
+CMD ["uvicorn", "helm_core.knowledge.embed_service:create_app", "--factory", \
+     "--host", "0.0.0.0", "--port", "8090", "--workers", "1", \
+     "--no-server-header"]

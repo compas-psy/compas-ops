@@ -7,9 +7,14 @@ absent-from-corpus, health ACL isolation, SHA256-дедуп.
 
 from sqlalchemy import select
 
+from helm_core.knowledge import ingest as ingest_module
+from helm_core.knowledge import probe as probe_module
 from helm_core.knowledge.ingest import ingest_text
 from helm_core.knowledge.probe import MIN_RANK_SCORE, probe
-from helm_core.models import KnowledgeAnswerRun, KnowledgeChunk, KnowledgeSource
+from helm_core.models import (
+    KnowledgeAnswerRun, KnowledgeChunk, KnowledgeSource, KnowledgeUser, KnowledgeUserRole,
+)
+from helm_core.models.tables import KNOWLEDGE_EMBED_DIM
 
 
 # ── §14.5: дедуп по SHA256 ────────────────────────────────────────────────
@@ -197,3 +202,80 @@ def test_local_answer_evidence_never_below_threshold(session):
 
     assert result.outcome == "LOCAL_ANSWER"
     assert all(e.rank >= MIN_RANK_SCORE for e in result.evidence)
+
+
+# ── ADR-025 Phase 2: pgvector дополняет лексику ────────────────────────────
+#
+# Реальная модель — не детерминированная функция текста, замер её
+# качества сделан отдельно (embed_benchmark.py, живой сервер, см.
+# ADR-025). Здесь эмбеддинг подменяется управляемым one-hot вектором —
+# тесты ниже проверяют проводку (hybrid orchestration в probe.py:
+# tenant/domain-фильтр, исключение уже найденных лексикой чанков,
+# fail-open), не качество самой модели.
+
+def _one_hot_embedding(index: int) -> list[float]:
+    vector = [0.0] * KNOWLEDGE_EMBED_DIM
+    vector[index] = 1.0
+    return vector
+
+
+def test_semantic_paraphrase_without_shared_stems_now_matches(session, monkeypatch):
+    """До Phase 2 такой запрос эскалировался бы (см.
+    test_question_absent_from_corpus_escalates выше: тот же класс —
+    «есть только перефразировка, ни одного общего словного корня») —
+    теперь его находит _vector_search."""
+    same_topic = _one_hot_embedding(0)
+    monkeypatch.setattr(ingest_module, "embed_texts_or_none",
+                        lambda texts: [same_topic for _ in texts])
+    monkeypatch.setattr(probe_module, "embed_texts_or_none",
+                        lambda texts: [same_topic for _ in texts])
+
+    ingest_text(session, domain="engineering", text="Мигрируем базу на Postgres.",
+               original_filename="infra-note.md")
+    session.flush()
+
+    result = probe(session, query="что там с хранилищем данных")
+
+    assert result.outcome == "LOCAL_ANSWER"
+    assert result.mode == "Z0"
+    assert "infra-note.md" in result.answer_text
+
+
+def test_vector_search_skipped_when_embed_service_unavailable(session, monkeypatch):
+    """Fail-open (ADR-025): недоступный embed-сервис не роняет и не
+    блокирует probe() — деградация до чисто лексического поведения, как
+    было до Phase 2, а не исключение."""
+    monkeypatch.setattr(probe_module, "embed_texts_or_none",
+                        lambda texts: [None] * len(texts))
+
+    ingest_text(session, domain="engineering", text="Решение: используем Postgres.")
+    session.flush()
+
+    result = probe(session, query="какая погода в Токио")
+
+    assert result.outcome == "NEEDS_REASONING"
+    assert result.answer_text is None
+
+
+def test_vector_search_does_not_leak_across_tenants(session, monkeypatch):
+    """§30.8.5 «cross-user pgvector result 0»: `_vector_search` обязана
+    держать тот же tenant-предикат, что `_lexical_search` (см.
+    test_knowledge_tenancy.py) — проверено отдельно, а не по аналогии,
+    потому что это отдельный запрос с собственным WHERE."""
+    other_user = KnowledgeUser(role=KnowledgeUserRole.KNOWLEDGE_USER)
+    session.add(other_user)
+    session.flush()
+
+    same_vector = _one_hot_embedding(1)
+    monkeypatch.setattr(ingest_module, "embed_texts_or_none",
+                        lambda texts: [same_vector for _ in texts])
+    monkeypatch.setattr(probe_module, "embed_texts_or_none",
+                        lambda texts: [same_vector for _ in texts])
+
+    ingest_text(session, domain="engineering", text="Заметка чужого пользователя про облако.",
+               knowledge_user_id=other_user.id)
+    session.flush()
+
+    result = probe(session, query="что там с инфраструктурой у нас")
+
+    assert result.outcome == "NEEDS_REASONING"

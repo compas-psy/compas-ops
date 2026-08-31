@@ -4,12 +4,16 @@ Pre-LLM gate: вызывается ДО диспетчеризации к Hermes
 `helm-control`, MAX — `/hooks/max`), не «совет RAG поискать». Каждый
 обычный вопрос владельца проходит через это ДО платной модели.
 
-Только лексический слой в этом заходе (без embeddings/rank fusion/
-rerank — ждут выбора модели бенчмарком, V3.4-DELTA.md). Это означает:
-probe находит меньше, чем финальная версия (семантическая перефразировка
-без общих слов с источником пока не найдётся), но то, что находит —
-находит бесплатно, детерминированно и с проверяемым provenance, что и
-есть суть §14.11, а не полнота покрытия.
+Гибридный поиск (ADR-025, §14.12 "FTS + pgvector"): лексический слой
+(`ts_rank` на `tsvector`) остаётся первым и приоритетным — он уже
+откалиброван на реальном использовании (`MIN_RANK_SCORE`). pgvector
+дополняет его результатами, которых лексика не видит вовсе
+(перефразировка без общих словных корней с источником) — не заменяет и
+не переупорядочивает то, что лексика уже нашла. Рано или поздно
+`MIN_COSINE_SIMILARITY` потребует такой же калибровки на реальном
+использовании, какую уже прошёл `MIN_RANK_SCORE` — сегодня это первая
+прикидка по минимальному живому замеру (см. ADR-025), не финальное
+число.
 
 Обнаружение противоречий (§14.13: «no unresolved contradiction») здесь
 НЕ реализовано: оно требует заполненного knowledge_relations, а ничто
@@ -28,6 +32,7 @@ from typing import Literal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .embeddings import embed_texts_or_none
 from .recall import (
     MemoryHit, build_or_tsquery, compose_memory_answer, is_future_reminder,
     is_historical_query, search_memories,
@@ -49,9 +54,18 @@ MIN_RANK_SCORE = 0.003
 #: evidence pack, уходящего в Hermes при NEEDS_REASONING.
 MAX_EVIDENCE = 5
 
+#: ADR-025: первая прикидка, не откалиброванный порог (нет golden-set —
+#: тот же статус, что MIN_RANK_SCORE до своего первого реального
+#: замера). Измерено на минимальной проверке смысла (embed_benchmark.py,
+#: 31.08.2026): у выбранной модели (MiniLM-L12-v2) отвлекающий текст на
+#: другую тему даёт похожесть от -0.04 до 0.01, реальные "перефразировка
+#: без общих корней" — 0.20-0.55. Порог взят с запасом над потолком шума.
+MIN_COSINE_SIMILARITY = 0.35
+
 
 @dataclass
 class Evidence:
+    chunk_id: str
     source_id: str
     chunk_text: str
     original_filename: str | None
@@ -118,9 +132,40 @@ def _lexical_search(session: Session, *, query: str, domain: str | None,
 
     rows = session.execute(stmt).all()
     return [
-        Evidence(source_id=str(src.id), chunk_text=chunk.text,
+        Evidence(chunk_id=str(chunk.id), source_id=str(src.id), chunk_text=chunk.text,
                 original_filename=src.original_filename, rank=float(r))
         for chunk, src, r in rows
+    ]
+
+
+def _vector_search(session: Session, *, query_embedding: list[float], domain: str | None,
+                   knowledge_user_id: uuid.UUID, exclude_chunk_ids: set[str]) -> list[Evidence]:
+    """ADR-025: та же тенантная/доменная фильтрация, что `_lexical_search`,
+    но по косинусному расстоянию, а не `tsv`. `exclude_chunk_ids` — чанки,
+    уже найденные лексически, не дублируются здесь (лексика приоритетнее,
+    см. docstring модуля)."""
+    similarity = (1 - KnowledgeChunk.embedding.cosine_distance(query_embedding)).label("similarity")
+    stmt = (
+        select(KnowledgeChunk, KnowledgeSource, similarity)
+        .join(KnowledgeSource, KnowledgeChunk.source_id == KnowledgeSource.id)
+        .where(KnowledgeChunk.embedding.isnot(None))
+        .where(KnowledgeSource.status != KnowledgeStatus.ARCHIVED)
+        .where(KnowledgeSource.knowledge_user_id == knowledge_user_id)
+        .order_by(similarity.desc())
+        .limit(MAX_EVIDENCE)
+    )
+    # §14.15 — то же исключение health/simpas-zapiski из общего поиска,
+    # что уже применяет _lexical_search (см. её комментарий).
+    stmt = (stmt.where(KnowledgeSource.domain == domain) if domain is not None
+           else stmt.where(KnowledgeSource.domain.notin_(
+               [KnowledgeDomain.HEALTH, KnowledgeDomain.SIMPAS_ZAPISKI])))
+
+    rows = session.execute(stmt).all()
+    return [
+        Evidence(chunk_id=str(chunk.id), source_id=str(src.id), chunk_text=chunk.text,
+                original_filename=src.original_filename, rank=float(sim))
+        for chunk, src, sim in rows
+        if str(chunk.id) not in exclude_chunk_ids and float(sim) >= MIN_COSINE_SIMILARITY
     ]
 
 
@@ -194,10 +239,28 @@ def probe(session: Session, *, query: str, domain: str | None = None,
 
     evidence = _lexical_search(session, query=query, domain=domain,
                                knowledge_user_id=knowledge_user_id)
+    evidence = [e for e in evidence if e.rank >= MIN_RANK_SCORE]
+
+    # ADR-025: pgvector дополняет лексику местами, до MAX_EVIDENCE — не
+    # запрашивается вовсе, если лексика уже набрала полный колчан
+    # (экономит HTTP-вызов к embed-сервису на самом частом случае, когда
+    # обычный лексический поиск и так справился). Fail-open: недоступный
+    # embed-сервис — это НЕ повод эскалировать вопрос, который лексика
+    # уже покрыла бы сама; для чисто-перефразированных вопросов без
+    # лексических совпадений это просто означает эскалацию, как и было
+    # до ADR-025 — деградация до прежнего поведения, не новый отказ.
+    if len(evidence) < MAX_EVIDENCE:
+        query_embedding = embed_texts_or_none([query])[0]
+        if query_embedding is not None:
+            exclude_ids = {e.chunk_id for e in evidence}
+            vector_hits = _vector_search(
+                session, query_embedding=query_embedding, domain=domain,
+                knowledge_user_id=knowledge_user_id, exclude_chunk_ids=exclude_ids,
+            )
+            evidence = (evidence + vector_hits)[:MAX_EVIDENCE]
 
     # §14.13 quality gate: без evidence выше порога — сразу эскалация, а
     # не «уверенный бесплатный ответ ради экономии».
-    evidence = [e for e in evidence if e.rank >= MIN_RANK_SCORE]
     if not evidence:
         return ProbeResult(outcome="NEEDS_REASONING")
 

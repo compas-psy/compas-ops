@@ -25,6 +25,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .batch_intake import finalize_batch_if_terminal, sync_item_from_job
+from .embeddings import embed_texts_or_none
 from .ingest import split_chunks
 from .parsers import parse_file
 from .tenancy import bind_knowledge_user
@@ -179,11 +180,17 @@ def process_job(session: Session, job: KnowledgeIngestJob) -> None:
         Path(source.source_path).parent.mkdir(parents=True, exist_ok=True)
         Path(source.source_path).write_text(_frontmatter(source) + result.text, encoding="utf-8")
 
-        for ordinal, chunk_text in enumerate(split_chunks(result.text)):
+        chunks = split_chunks(result.text)
+        # ADR-025: та же fail-open политика, что ingest_text() — сбой
+        # embed-сервиса не должен превращать job в FAILED, чанк просто
+        # остаётся без embedding до бэкафилла.
+        embeddings = embed_texts_or_none(chunks)
+        for ordinal, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
             session.add(KnowledgeChunk(
                 knowledge_user_id=tenant_id, source_id=source.id, ordinal=ordinal,
                 text=chunk_text,
                 tsv=func.to_tsvector("russian", chunk_text),
+                embedding=embedding,
             ))
             chunk_count += 1
         job.status = KnowledgeIngestStatus.DONE
