@@ -59,7 +59,11 @@ def _run_one(model_name: str, audio_path: str) -> dict:
     rss_after_load = _vm_rss_kb()
 
     t0 = time.monotonic()
-    text = model.transcribe(audio_path)
+    # transcribe() возвращает TranscriptionResult(text=..., words=...), не
+    # голую строку — НАЙДЕНО живым запуском 31.08.2026 ("TypeError: Object
+    # of type TranscriptionResult is not JSON serializable"), в README и в
+    # доступных фрагментах кода репозитория это не документировано явно.
+    text = model.transcribe(audio_path).text
     transcribe_seconds = time.monotonic() - t0
     rss_after_inference = _vm_rss_kb()
 
