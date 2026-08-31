@@ -419,7 +419,7 @@ jobs:
             ls -l /etc/helm/secrets/telegram_bot_token /etc/helm/secrets/knowledge_telegram_bot_token
 
             cd /opt/helm/compose
-            sudo docker compose build helm-core helm-knowledge-worker
+            sudo docker compose build helm-core helm-knowledge-worker helm-embed
 
             # Обломки прерванного пересоздания. При --force-recreate
             # compose сначала переименовывает старый контейнер в
@@ -462,18 +462,18 @@ jobs:
             echo "=== схема после ==="
             sudo docker compose run --rm --no-deps helm-core python3 -m alembic current
 
-            sudo docker compose up -d --force-recreate helm-core helm-knowledge-worker
+            sudo docker compose up -d --force-recreate helm-core helm-knowledge-worker helm-embed
             sudo docker compose restart caddy
             sudo systemctl restart hermes-gateway
             sleep 20
-            sudo docker compose ps helm-core helm-knowledge-worker caddy
+            sudo docker compose ps helm-core helm-knowledge-worker helm-embed caddy
 
             # Без этой проверки выкат отчитывается успехом, пока сервис
             # лежит: docker compose ps печатает "Restarting" и выходит с
             # нулём. Ровно так и случилось 30.08.2026 — helm-core крутился
             # в цикле перезапусков, а зелёный workflow говорил, что всё
             # хорошо. Молчаливый провал хуже громкого.
-            for svc in helm-core helm-knowledge-worker; do
+            for svc in helm-core helm-knowledge-worker helm-embed; do
               if ! sudo docker compose ps $svc | grep -q Up; then
                 echo "::error::$svc не поднялся"
                 sudo docker compose logs --tail=80 $svc
@@ -569,11 +569,14 @@ jobs:
         # потому что compose-файл на сервере был из последнего deploy, а
         # тот не содержал ещё не выкаченного сервиса.
         #
-        # helm-embed НЕ входит в up -d обычного deploy (docker-compose.yml
-        # комментарий у сервиса) — это инструмент, не постоянный сервис,
-        # пока модель не выбрана по факту замера (§33, ADR-025). Первый
-        # прогон качает веса всех кандидатов с huggingface.co — несколько
-        # минут и несколько ГБ трафика, ожидаемо.
+        # helm-embed теперь постоянный сервис (ADR-025, модель выбрана) —
+        # CMD образа по умолчанию поднимает uvicorn, не бенчмарк. Этот шаг
+        # остаётся для повторного замера при смене кандидатов в будущем —
+        # `--entrypoint` переопределяет CMD ровно так, как документирует
+        # сам Dockerfile.embed. Без override `run --rm` тут просто поднял
+        # бы ещё один постоянный сервис и завис до таймаута шага (60 мин).
+        # Первый прогон на новом кандидате качает его веса с
+        # huggingface.co — несколько минут и несколько ГБ трафика.
         if: inputs.action == 'embed-benchmark'
         run: |
           cd helm/tree
@@ -591,7 +594,8 @@ jobs:
             sudo chmod -R go-w /opt/helm/control-plane/helm_core
             cd /opt/helm/compose
             sudo docker compose build helm-embed
-            sudo docker compose run --rm helm-embed
+            sudo docker compose run --rm --entrypoint python3 helm-embed \
+              -m helm_core.knowledge.embed_benchmark
           '
 
       - name: Зарегистрировать вебхук Knowledge-бота
