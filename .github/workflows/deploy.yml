@@ -614,7 +614,10 @@ jobs:
         # embed-benchmark.
         if: inputs.action == 'gigaam-benchmark'
         run: |
-          sudo apt-get update && sudo apt-get install --no-install-recommends -y espeak-ng
+          # ffmpeg НЕ предустановлен на ubuntu-latest раннере (найдено
+          # живым запуском 31.08.2026 — "ffmpeg: command not found"),
+          # espeak-ng сам по себе предустановлен не был тоже — оба явно.
+          sudo apt-get update && sudo apt-get install --no-install-recommends -y espeak-ng ffmpeg
           espeak-ng -v ru -w /tmp/gigaam-test-raw.wav \
             "Встреча перенесена на четверг, не забудьте предупредить клиента о переносе созвона."
           ffmpeg -y -i /tmp/gigaam-test-raw.wav -acodec pcm_s16le -ar 16000 -ac 1 /tmp/gigaam-test.wav
