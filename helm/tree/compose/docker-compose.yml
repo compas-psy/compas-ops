@@ -293,6 +293,33 @@ services:
         # запрос в обработке, не голая цифра замера.
         limits: {memory: 1200m}
 
+  ollama:
+    # §14.12/ADR-021-style контракт (Z2, «опциональный локальный
+    # генератор»): one-shot runtime, не резидентная модель — OLLAMA_KEEP_ALIVE=0
+    # выгружает веса сразу после ответа, сервер сам по себе лёгкий, пока
+    # ни одна модель не загружена. НЕ входит в основной `deploy`'s up -d
+    # (см. docstring helm-embed выше про тот же принцип на этапе замера) —
+    # поднимается вручную для ollama-benchmark.sh, промоутится в общий
+    # деплой только после выбора модели живым замером (§33).
+    image: ollama/ollama:0.33.2
+    <<: *restart
+    logging: *logging
+    environment:
+      OLLAMA_KEEP_ALIVE: "0"
+    volumes:
+      - ollama_models:/root/.ollama
+    # §4.6 / test_perimeter.py::NEVER_PUBLIC_PORTS — тот же loopback-only
+    # паттерн, что уже у n8n/helm-core: сам образ ollama/ollama не несёт
+    # curl (минимальный образ), замер зовёт HTTP API с ХОСТА, не изнутри
+    # контейнера через docker exec.
+    ports: ["127.0.0.1:11434:11434"]
+    deploy:
+      resources:
+        # Первая прикидка на время замера кандидатов (qwen2.5:3b/gemma2:2b/
+        # llama3.2:3b, все q4 ~2-3GB) — уточняется по факту бенчмарка,
+        # тот же принцип, что и у helm-knowledge-worker/helm-embed выше.
+        limits: {memory: 4g}
+
   n8n:
     image: n8nio/n8n:2.36.8
     <<: *restart
@@ -448,8 +475,9 @@ secrets:
   knowledge_telegram_webhook_secret: {file: /etc/helm/secrets/knowledge_telegram_webhook_secret}
 
 volumes:
-  pgdata:       {name: helm_pgdata}
-  caddy_data:   {name: helm_caddy_data}
-  caddy_config: {name: helm_caddy_config}
-  n8n_data:     {name: helm_n8n_data}
-  forgejo_data: {name: helm_forgejo_data}
+  pgdata:        {name: helm_pgdata}
+  caddy_data:    {name: helm_caddy_data}
+  caddy_config:  {name: helm_caddy_config}
+  n8n_data:      {name: helm_n8n_data}
+  forgejo_data:  {name: helm_forgejo_data}
+  ollama_models: {name: helm_ollama_models}
