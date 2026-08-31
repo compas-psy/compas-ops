@@ -86,6 +86,20 @@ RUN pip install --no-cache-dir -U pydantic-settings
 
 COPY helm_core ./helm_core
 
+# Веса выбранной модели (e2e_rnnt, ADR-021) запекаются один раз НА
+# СБОРКЕ, не при каждом старте контейнера — тот же приём и та же
+# причина, что у helm-embed/HF_HOME (ADR-025): без этого
+# gigaam.load_model(...) качал бы веса с сети при КАЖДОМ
+# force-recreate (каждый выкат), и первая живая транскрипция после
+# деплоя зависела бы от доступности источника весов именно в этот
+# момент, а не в момент сборки. Путь читается из
+# audio.py::GIGAAM_DOWNLOAD_ROOT (не дублируется здесь строкой) —
+# единственный источник истины на сборку и рантайм.
+RUN GIGAAM_DIR=$(python3 -c "from helm_core.knowledge.audio import GIGAAM_DOWNLOAD_ROOT; print(GIGAAM_DOWNLOAD_ROOT)") \
+    && python3 -c "from helm_core.knowledge.audio import MODEL_NAME, GIGAAM_DOWNLOAD_ROOT; \
+import gigaam; gigaam.load_model(MODEL_NAME, download_root=GIGAAM_DOWNLOAD_ROOT)" \
+    && chown -R helm-worker:helm-worker "$GIGAAM_DIR"
+
 USER helm-worker
 
 CMD ["python3", "-m", "helm_core.knowledge.worker_main"]

@@ -17,6 +17,8 @@ import pytest
 
 markitdown = pytest.importorskip("markitdown", reason="markitdown — опциональная зависимость воркера, не control-plane")
 
+from helm_core.knowledge import parsers  # noqa: E402
+from helm_core.knowledge.audio import is_audio_file  # noqa: E402
 from helm_core.knowledge.parsers import (  # noqa: E402
     MAX_DOMINANT_CHAR_RATIO,
     _dominant_char_ratio,
@@ -85,3 +87,45 @@ def test_parse_file_escalates_when_fast_path_extraction_is_broken():
     вернуть плохой markitdown-текст как будто он прошёл gate."""
     with pytest.raises(ModuleNotFoundError):
         parse_file(FIXTURES / "sample_broken_font.pdf")
+
+
+# ── аудио/видео → GigaAM (§14.7, ADR-021) ─────────────────────────────────
+#
+# gigaam/torch/silero_vad не установлены в этом окружении (тяжёлые
+# зависимости воркера, живой замер — только на сервере, см. ADR-021) —
+# transcribe_audio() мокается, тестируется РОУТИНГ parse_file(), не сама
+# транскрипция.
+
+@pytest.mark.parametrize("filename", [
+    "voice.ogg", "note.oga", "clip.opus", "song.mp3", "audio.wav",
+    "track.m4a", "lossless.flac", "video.mp4", "movie.mov", "clip.webm",
+])
+def test_is_audio_file_recognizes_audio_and_video_extensions(filename):
+    assert is_audio_file(Path(filename))
+
+
+@pytest.mark.parametrize("filename", ["sample.docx", "sample.txt", "sample.pdf"])
+def test_is_audio_file_rejects_document_extensions(filename):
+    assert not is_audio_file(Path(filename))
+
+
+def test_parse_file_routes_audio_to_gigaam_before_markitdown(monkeypatch):
+    monkeypatch.setattr(parsers, "transcribe_audio",
+                        lambda path: "Встречу перенесли на четверг, предупредите клиента.")
+
+    result = parse_file(Path("voice.ogg"))
+
+    assert result.parser == "gigaam"
+    assert result.quality_ok is True
+    assert "четверг" in result.text
+
+
+def test_parse_file_audio_empty_transcript_is_needs_review(monkeypatch):
+    """Пустая/бессмысленная расшифровка (тишина, нераспознанная речь) —
+    тот же quality gate, что у документов, не отдельная логика."""
+    monkeypatch.setattr(parsers, "transcribe_audio", lambda path: "")
+
+    result = parse_file(Path("voice.ogg"))
+
+    assert result.parser == "gigaam"
+    assert result.quality_ok is False

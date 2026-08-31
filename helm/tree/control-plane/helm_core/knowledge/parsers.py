@@ -22,6 +22,8 @@ import collections
 from dataclasses import dataclass
 from pathlib import Path
 
+from .audio import is_audio_file, transcribe_audio
+
 #: Пустой/почти пустой результат — явный провал извлечения, не «короткий
 #: документ». 20 символов — заведомо меньше любого осмысленного факта.
 MIN_TEXT_LENGTH = 20
@@ -43,7 +45,7 @@ MAX_DOMINANT_CHAR_RATIO = 0.25
 @dataclass
 class ParseResult:
     text: str
-    parser: str  # "markitdown" | "docling"
+    parser: str  # "markitdown" | "docling" | "gigaam"
     quality_ok: bool
 
 
@@ -90,7 +92,17 @@ def parse_file(path: Path) -> ParseResult:
     создавать уверенные knowledge facts (§14.6 — «bad fast-path
     extraction escalates to Docling», «если Docling тоже FAIL — source
     status NEEDS_REVIEW»).
+
+    Аудио/видео (§14.7, ADR-021) — отдельная ветка ДО MarkItDown/Docling:
+    ни один из них не умеет речь, попытка "распарсить" .ogg как документ
+    заведомо провалила бы quality gate. Тот же `_quality_ok()` gate
+    применяется и к транскрипту — пустая/бессмысленная расшифровка
+    эскалирует в NEEDS_REVIEW тем же путём, что и плохой документ.
     """
+    if is_audio_file(path):
+        text = transcribe_audio(path)
+        return ParseResult(text=text, parser="gigaam", quality_ok=_quality_ok(text))
+
     text = _parse_with_markitdown(path)
     if _quality_ok(text):
         return ParseResult(text=text, parser="markitdown", quality_ok=True)
