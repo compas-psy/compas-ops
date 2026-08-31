@@ -561,17 +561,34 @@ jobs:
 
       # ── embed-benchmark: разовый замер моделей эмбеддингов ────────────
       - name: Замер embedding-моделей
+        # Самодостаточное действие, как register-knowledge-webhook: не
+        # часть deploy, поэтому доставляет само то немногое, что ему
+        # нужно (helm_core, свой Dockerfile, актуальный docker-compose.yml
+        # с сервисом helm-embed), а не полагается на предыдущий deploy —
+        # НАЙДЕНО живым запуском 31.08.2026: "no such service: helm-embed",
+        # потому что compose-файл на сервере был из последнего deploy, а
+        # тот не содержал ещё не выкаченного сервиса.
+        #
         # helm-embed НЕ входит в up -d обычного deploy (docker-compose.yml
         # комментарий у сервиса) — это инструмент, не постоянный сервис,
-        # пока модель не выбрана по факту замера (§33, ADR-025). Собирает
-        # образ и гоняет embed_benchmark.py одноразовым контейнером, тем
-        # же паттерном run --rm, что уже используют migrate/deploy.
-        # Первый прогон качает веса всех кандидатов с huggingface.co —
-        # несколько минут и несколько ГБ трафика, ожидаемо.
+        # пока модель не выбрана по факту замера (§33, ADR-025). Первый
+        # прогон качает веса всех кандидатов с huggingface.co — несколько
+        # минут и несколько ГБ трафика, ожидаемо.
         if: inputs.action == 'embed-benchmark'
         run: |
+          cd helm/tree
+          scp -i ~/.ssh/id_deploy -r control-plane/helm_core "$VPS_USER@$VPS_HOST:/tmp/helm_core"
+          scp -i ~/.ssh/id_deploy control-plane/Dockerfile.embed "$VPS_USER@$VPS_HOST:/tmp/Dockerfile.embed"
+          scp -i ~/.ssh/id_deploy compose/docker-compose.yml "$VPS_USER@$VPS_HOST:/tmp/docker-compose.yml"
           ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
             set -e
+            sudo rm -rf /opt/helm/control-plane/helm_core
+            sudo mv /tmp/helm_core /opt/helm/control-plane/helm_core
+            sudo mv /tmp/Dockerfile.embed /opt/helm/control-plane/Dockerfile.embed
+            sudo mv /tmp/docker-compose.yml /opt/helm/compose/docker-compose.yml
+            sudo chown -R root:root /opt/helm/control-plane/helm_core \
+              /opt/helm/control-plane/Dockerfile.embed /opt/helm/compose/docker-compose.yml
+            sudo chmod -R go-w /opt/helm/control-plane/helm_core
             cd /opt/helm/compose
             sudo docker compose build helm-embed
             sudo docker compose run --rm helm-embed
