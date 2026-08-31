@@ -213,7 +213,9 @@ jobs:
               "$VPS_USER@$VPS_HOST:/tmp/recon.sh"
           ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
             bash /tmp/recon.sh
+            rc=$?
             rm -f /tmp/recon.sh
+            exit $rc
           '
 
       - name: Проверка восстановления
