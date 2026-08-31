@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session
 from ..models import KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus, KnowledgeSource, KnowledgeStatus
 from .embeddings import embed_texts_or_none
 from .quotas import check_and_record_ingest, check_queue_depth, record_entry_formed
+from .relations import note_id_for, store_relations
 from .tenancy import bind_knowledge_user
 
 #: Корень Vault (§14.2). Параметр, а не только константа: тесты обязаны
@@ -92,6 +93,12 @@ def ingest_text(session: Session, *, domain: str, text: str,
     session.add(source)
     session.flush()
     record_entry_formed(session, knowledge_user_id=knowledge_user_id, sources=1)
+
+    # P8.5.6 слой 1 (E13, решение владельца 31.08.2026): [[wikilink]] +
+    # явный YAML relations: — детерминированно, до любого Graphify.
+    store_relations(session, knowledge_user_id=knowledge_user_id,
+                    from_id=note_id_for(original_filename=original_filename, source_id=source.id),
+                    source_id=source.id, text=text)
 
     chunks = split_chunks(text)
     # ADR-025: недоступность embed-сервиса не должна мешать созданию

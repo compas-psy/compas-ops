@@ -37,6 +37,7 @@ from .embeddings import embed_texts_or_none
 from .ingest import split_chunks
 from .memory import try_remember
 from .parsers import parse_file
+from .relations import note_id_for, store_relations
 from .tenancy import bind_knowledge_user
 from ..models import (
     KnowledgeBatchItem, KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus,
@@ -284,6 +285,15 @@ def process_job(session: Session, job: KnowledgeIngestJob) -> None:
         # health/client_restricted содержимое без единой видимой пометки.
         Path(source.source_path).parent.mkdir(parents=True, exist_ok=True)
         Path(source.source_path).write_text(_frontmatter(source) + result.text, encoding="utf-8")
+
+        # P8.5.6 слой 1 (E13, решение владельца 31.08.2026): [[wikilink]] +
+        # явный YAML relations: в ИСХОДНОМ тексте (result.text), до того как
+        # HELM допишет свой собственный frontmatter поверх него — тот же
+        # текст, который видел бы Obsidian, открой владелец raw-файл.
+        store_relations(session, knowledge_user_id=tenant_id,
+                        from_id=note_id_for(original_filename=source.original_filename,
+                                            source_id=source.id),
+                        source_id=source.id, text=result.text)
 
         chunks = split_chunks(result.text)
         # ADR-025: та же fail-open политика, что ingest_text() — сбой
