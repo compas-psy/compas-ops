@@ -216,6 +216,11 @@ jobs:
 
       - name: Доставка файлов
         if: inputs.action == 'deploy'
+        # actions.yaml — живой запуск 31.08.2026 упал: код завёл новое RED-
+        # действие delete_knowledge_user, а policy на сервере оставалась
+        # старой (весь config/ монтируется в контейнер как есть, но выкат
+        # копировал из него только Caddyfile). registry.action() падает при
+        # импорте на незнакомом policy — helm-core ушёл в Restarting.
         run: |
           cd helm/tree
           scp -i ~/.ssh/id_deploy -r control-plane/helm_core "$VPS_USER@$VPS_HOST:/tmp/helm_core"
@@ -223,6 +228,7 @@ jobs:
           scp -i ~/.ssh/id_deploy -r panel/dist "$VPS_USER@$VPS_HOST:/tmp/panel-dist"
           scp -i ~/.ssh/id_deploy compose/docker-compose.yml "$VPS_USER@$VPS_HOST:/tmp/docker-compose.yml"
           scp -i ~/.ssh/id_deploy config/Caddyfile "$VPS_USER@$VPS_HOST:/tmp/Caddyfile"
+          scp -i ~/.ssh/id_deploy config/policies/actions.yaml "$VPS_USER@$VPS_HOST:/tmp/actions.yaml"
           scp -i ~/.ssh/id_deploy scripts/backup.sh scripts/restore_test.sh \
               scripts/knowledge-telegram-register-webhook.sh "$VPS_USER@$VPS_HOST:/tmp/"
           scp -i ~/.ssh/id_deploy hermes/plugins/helm-control/__init__.py "$VPS_USER@$VPS_HOST:/tmp/helm-control-init.py"
@@ -324,11 +330,13 @@ jobs:
             sudo mv /tmp/migrations /opt/helm/control-plane/migrations
             sudo mv /tmp/docker-compose.yml /opt/helm/compose/docker-compose.yml
             sudo mv /tmp/Caddyfile /opt/helm/config/Caddyfile
+            sudo mv /tmp/actions.yaml /opt/helm/config/policies/actions.yaml
             sudo mv /tmp/backup.sh /opt/helm/scripts/backup.sh
             sudo mv /tmp/restore_test.sh /opt/helm/scripts/restore_test.sh
             sudo mv /tmp/knowledge-telegram-register-webhook.sh /opt/helm/scripts/knowledge-telegram-register-webhook.sh
             sudo chown -R root:root /opt/helm/control-plane/helm_core /opt/helm/control-plane/migrations \
               /opt/helm/compose/docker-compose.yml /opt/helm/config/Caddyfile \
+              /opt/helm/config/policies/actions.yaml \
               /opt/helm/scripts/backup.sh /opt/helm/scripts/restore_test.sh \
               /opt/helm/scripts/knowledge-telegram-register-webhook.sh
             sudo chmod -R go-w /opt/helm/control-plane/helm_core /opt/helm/control-plane/migrations
