@@ -245,6 +245,27 @@ services:
         # политикой egress-прокси этой среды).
         limits: {memory: 3g}
 
+  helm-embed:
+    # P8.5.4 остаток (§33) — пока инструмент замера (Dockerfile.embed CMD =
+    # embed_benchmark.py), не постоянный сервис: `docker compose up` его
+    # НЕ поднимает (сознательно не в списке up -d в deploy.yml), только
+    # `docker compose run --rm helm-embed` для разового прогона бенчмарка.
+    # Отдельный образ от helm-core (768MB, без torch) и от воркера
+    # (Docling — другой набор моделей) — эмбеддингам не нужен ни один из
+    # системных пакетов воркера (opencv/ffmpeg), только CPU-only torch.
+    build:
+      context: ../control-plane
+      dockerfile: Dockerfile.embed
+    image: helm-embed:0.1.0
+    logging: *logging
+    deploy:
+      resources:
+        # Разовый прогон замера четырёх кандидатов (крупнейший — BAAI/bge-m3,
+        # ~2.2ГБ весов) в отдельных подпроцессах — не измеренный предел,
+        # первая прикидка с запасом под самую тяжёлую модель. Постоянный
+        # сервис (после выбора модели) получит свой, обмеренный лимит.
+        limits: {memory: 4g}
+
   n8n:
     image: n8nio/n8n:2.36.8
     <<: *restart

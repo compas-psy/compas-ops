@@ -1,0 +1,31 @@
+# HELM Knowledge embedding service (P8.5.4 остаток, §33 — модель фиксируется
+# только после замера на живом сервере, не заранее).
+#
+# Отдельный образ от Control Plane (768MB, без torch вовсе — см.
+# Dockerfile.worker) и от воркера (Docling — другой набор моделей и
+# system-библиотек, opencv/ffmpeg здесь не нужны): эмбеддингам нужен только
+# CPU-only torch + sentence-transformers, отдельный процесс со своим лимитом
+# памяти, который не должен конкурировать за RAM ни с живыми вебхуками
+# (helm-core), ни с разбором документов (воркер).
+FROM python:3.12.8-slim-bookworm AS base
+
+RUN useradd --system --create-home --uid 10003 helm-embed
+
+WORKDIR /opt/helm/embed
+
+# CPU-only torch с официального индекса — тот же приём, что Dockerfile.worker
+# (иначе pip тянет CUDA-сборку, ~1.2GB лишнего на сервере без GPU). Здесь без
+# torchvision: он нужен Docling для OCR/layout-моделей изображений, эмбеддинги
+# текста в нём не нуждаются.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir "sentence-transformers==3.3.1"
+
+COPY helm_core ./helm_core
+
+USER helm-embed
+
+# Пока не сервис, а инструмент замера (embed_benchmark.py) — CMD станет
+# постоянным HTTP-сервисом (uvicorn) только после того, как бенчмарк на
+# живом сервере выберет модель (ADR-025). Держать здесь недописанный сервис
+# заранее — код без потребителя, спекуляция, которую §2 CLAUDE.md запрещает.
+CMD ["python3", "-m", "helm_core.knowledge.embed_benchmark"]
