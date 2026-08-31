@@ -826,3 +826,46 @@ class KnowledgeMemory(Base):
         Index("ix_knowledge_memories_user_dedup", "knowledge_user_id", "dedup_hash"),
         Index("ix_knowledge_memories_tsv", "tsv", postgresql_using="gin"),
     )
+
+
+class KnowledgeCustomDomain(Base):
+    """Домены сверх встроенного списка (P8.5.0-11 хвост, ADR-024
+    "Scalable dynamic Knowledge taxonomy" — узкий срез).
+
+    Встроенный `KnowledgeDomain` enum (`models/base.py`) остаётся как
+    есть и не удаляется: он несёт защитную семантику — `simpas/zapiski`
+    принудительно получает `client_restricted` sensitivity
+    (`chat_intake.py`/`batch_intake.py`), это привязка к конкретным
+    Python-значениям, а не то, что можно превратить в произвольную
+    строку без потери гарантии. Эта таблица — только добавка: домен,
+    который владелец придумал сам, набрав имя вместо номера в меню
+    (§14.5 "No hardcoded domain enum", "Bot/Panel selector:
+    recent/most-used domains").
+
+    Topics/entities/relations из того же раздела ТЗ (§14.5) сюда
+    намеренно не входят — они осмысленны только вместе с Graphify
+    (P8.5.6, ещё не реализован, ждёт живого сервера). Версии источников
+    (D2 в §14.7) отложены отдельным решением владельца 31.08.2026: тот
+    механизм по сути опирается на локальные embeddings (P8.5.4 хвост),
+    которых тоже пока нет — делать его раньше значило бы либо
+    переделывать, либо подменять embeddings грубой эвристикой.
+    """
+
+    __tablename__ = "knowledge_domains"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_users.id"), nullable=False)
+    #: Ровно то, что дальше пишется в `domain` источника/памяти/batch'а —
+    #: строка, не FK: тот же принцип, что уже применён для остальных
+    #: domain-полей в кодовой базе (см. комментарий у `KnowledgeMemory.domain`).
+    key: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: "recent/most-used" в меню — по этому полю и `last_used_at`, не по
+    #: алфавиту и не по дате создания.
+    use_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+    last_used_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("knowledge_user_id", "key", name="uq_knowledge_domains_user_key"),
+    )

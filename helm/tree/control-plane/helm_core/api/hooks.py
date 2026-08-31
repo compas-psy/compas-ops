@@ -254,7 +254,8 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
 
             enqueue(session, channel="max", recipient=inbound.chat_id,
                     reference=f"attachment-staged:{pending.id}",
-                    payload_reference={"text": format_domain_menu(pending.original_filename)})
+                    payload_reference={"text": format_domain_menu(session, pending.knowledge_user_id,
+                                                   pending.original_filename)})
             session.commit()
             return {"status": "attachment_staged", "pending_id": str(pending.id)}
 
@@ -287,7 +288,7 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
         if has_pending_batch:
             batch_outcome = resolve_batch_domain(session, channel="max", reply_text=inbound.text)
             if batch_outcome.status != "not_pending":
-                text = batch_resolve_outcome_text(batch_outcome)
+                text = batch_resolve_outcome_text(session, batch_outcome)
                 if text is not None:
                     enqueue(session, channel="max", recipient=inbound.chat_id,
                             reference=f"batch-{batch_outcome.status}:{batch_outcome.batch.id}:{inbound.message_id}",
@@ -317,7 +318,7 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
         }.get(resolved.status, (None, None))
         if reference is not None:
             enqueue(session, channel="max", recipient=inbound.chat_id, reference=reference,
-                    payload_reference={"text": resolve_outcome_text(resolved)})
+                    payload_reference={"text": resolve_outcome_text(session, resolved)})
             session.commit()
             return {"status": response_status}
 

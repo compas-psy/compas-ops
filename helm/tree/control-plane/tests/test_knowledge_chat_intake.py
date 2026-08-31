@@ -16,28 +16,47 @@ from helm_core.knowledge.chat_intake import (
     MAX_ATTACHMENT_BYTES, AttachmentTooLarge, format_domain_menu,
     parse_domain_reply, resolve_pending_domain, stage_attachment,
 )
-from helm_core.models import KnowledgeChunk, KnowledgeIngestJob, KnowledgePendingAttachment, KnowledgeSource
+from helm_core.knowledge.tenancy import bind_knowledge_user
+from helm_core.models import (
+    KnowledgeChunk, KnowledgeCustomDomain, KnowledgeIngestJob, KnowledgePendingAttachment,
+    KnowledgeSource, KnowledgeUser, KnowledgeUserRole,
+)
+
+from conftest import SYSTEM_OWNER_ID
+
+
+@pytest.fixture
+def second_user(session):
+    user = KnowledgeUser(role=KnowledgeUserRole.KNOWLEDGE_USER)
+    session.add(user)
+    session.flush()
+    return user
 
 
 # ── parse_domain_reply() / format_domain_menu() ───────────────────────────
 
-def test_format_domain_menu_lists_all_domains_numbered():
-    menu = format_domain_menu("report.pdf")
+def test_format_domain_menu_lists_all_domains_numbered(session):
+    menu = format_domain_menu(session, SYSTEM_OWNER_ID, "report.pdf")
     assert "report.pdf" in menu
     assert "1. personal" in menu
     assert "11. library" in menu
 
 
-def test_parse_domain_reply_by_number():
-    assert parse_domain_reply("9") == "engineering"
+def test_parse_domain_reply_by_number(session):
+    assert parse_domain_reply(session, SYSTEM_OWNER_ID, "9") == "engineering"
 
 
-def test_parse_domain_reply_by_name_case_insensitive():
-    assert parse_domain_reply(" ENGINEERING ") == "engineering"
+def test_parse_domain_reply_by_name_case_insensitive(session):
+    assert parse_domain_reply(session, SYSTEM_OWNER_ID, " ENGINEERING ") == "engineering"
 
 
-def test_parse_domain_reply_out_of_range_number_is_invalid():
-    assert parse_domain_reply("999") is None
+def test_parse_domain_reply_out_of_range_number_is_invalid(session):
+    """999 не попадает ни во встроенные домены, ни (при пустом реестре)
+    в пользовательские — приглашение к вводу нового домена цифрами не
+    работает специально: цифровой ответ ВСЕГДА читается как номер меню,
+    никогда как имя нового домена (иначе "1" никогда не создать доменом,
+    но и не спутать с выбором пункта 1 тоже нельзя)."""
+    assert parse_domain_reply(session, SYSTEM_OWNER_ID, "999") is None
 
 
 @pytest.mark.parametrize("alias, expected", [
@@ -48,25 +67,92 @@ def test_parse_domain_reply_out_of_range_number_is_invalid():
     ("marketing", "psy-marketing"),
     ("docs", "signalai-docs"),
 ])
-def test_parse_domain_reply_short_alias(alias, expected):
+def test_parse_domain_reply_short_alias(session, alias, expected):
     """Найдено живым использованием 29.08.2026: 'simpas/company' неудобно
     набирать на телефоне — короткие алиасы для доменов с '/' или '-'."""
-    assert parse_domain_reply(alias) == expected
+    assert parse_domain_reply(session, SYSTEM_OWNER_ID, alias) == expected
 
 
-def test_format_domain_menu_shows_alias_next_to_full_name():
-    menu = format_domain_menu("report.pdf")
+def test_format_domain_menu_shows_alias_next_to_full_name(session):
+    menu = format_domain_menu(session, SYSTEM_OWNER_ID, "report.pdf")
     assert "simpas/company (company)" in menu
     assert "1. personal" in menu, "у коротких доменов без алиаса формат не меняется"
 
 
-def test_parse_domain_reply_gibberish_is_invalid():
-    assert parse_domain_reply("какая погода в Москве") is None
-
-
 @pytest.mark.parametrize("word", ["отмена", "Cancel", "нет"])
-def test_parse_domain_reply_cancel_words(word):
-    assert parse_domain_reply(word) == "__cancel__"
+def test_parse_domain_reply_cancel_words(session, word):
+    assert parse_domain_reply(session, SYSTEM_OWNER_ID, word) == "__cancel__"
+
+
+# ── §14.5 "No hardcoded domain enum" — реестр пользовательских доменов ─────
+
+def test_typing_a_new_name_creates_a_custom_domain(session):
+    """Раньше набранное имя, не совпавшее со встроенным списком,
+    отклонялось как invalid — владельцу оставалось выбирать только из
+    11+library. Явный ответ на прямой вопрос меню — не "silent creation
+    from one document" (§14.5): решение принял человек, а не эвристика."""
+    bind_knowledge_user(session, SYSTEM_OWNER_ID)
+    result = parse_domain_reply(session, SYSTEM_OWNER_ID, "путешествия")
+    assert result == "путешествия"
+    row = session.scalars(select(KnowledgeCustomDomain)).one()
+    assert row.knowledge_user_id == SYSTEM_OWNER_ID
+    assert row.key == "путешествия"
+    assert row.use_count == 1
+
+
+def test_custom_domain_appears_in_menu_after_first_use(session):
+    bind_knowledge_user(session, SYSTEM_OWNER_ID)
+    parse_domain_reply(session, SYSTEM_OWNER_ID, "путешествия")
+    session.flush()
+    menu = format_domain_menu(session, SYSTEM_OWNER_ID, "report.pdf")
+    assert "12. путешествия" in menu
+
+
+def test_reusing_a_custom_domain_by_name_bumps_use_count_not_duplicates(session):
+    bind_knowledge_user(session, SYSTEM_OWNER_ID)
+    parse_domain_reply(session, SYSTEM_OWNER_ID, "путешествия")
+    session.flush()
+    result = parse_domain_reply(session, SYSTEM_OWNER_ID, "Путешествия")
+    assert result == "путешествия"
+    rows = session.scalars(select(KnowledgeCustomDomain)).all()
+    assert len(rows) == 1, "второй ввод того же имени не должен завести вторую строку"
+    assert rows[0].use_count == 2
+
+
+def test_selecting_a_custom_domain_by_its_menu_number(session):
+    bind_knowledge_user(session, SYSTEM_OWNER_ID)
+    parse_domain_reply(session, SYSTEM_OWNER_ID, "путешествия")
+    session.flush()
+    # 11 встроенных + library = позиция 12.
+    assert parse_domain_reply(session, SYSTEM_OWNER_ID, "12") == "путешествия"
+
+
+def test_custom_domains_are_scoped_per_user(session, second_user):
+    """v3.8 §14.4: реестр доменов — тоже tenant-scoped таблица. Домен,
+    придуманный одним пользователем, не должен всплывать в меню другого
+    и тем более не должен быть виден в его RLS-срезе."""
+    bind_knowledge_user(session, SYSTEM_OWNER_ID)
+    parse_domain_reply(session, SYSTEM_OWNER_ID, "путешествия")
+    session.flush()
+    bind_knowledge_user(session, second_user.id)
+    menu_other = format_domain_menu(session, second_user.id, "report.pdf")
+    assert "путешествия" not in menu_other
+
+
+def test_too_long_custom_domain_name_is_invalid(session):
+    bind_knowledge_user(session, SYSTEM_OWNER_ID)
+    too_long = "a" * 33
+    assert parse_domain_reply(session, SYSTEM_OWNER_ID, too_long) is None
+    assert session.scalars(select(KnowledgeCustomDomain)).all() == []
+
+
+def test_multi_word_reply_is_invalid_not_a_domain(session):
+    """Домен — один токен, ни один встроенный не содержит пробела.
+    Ответ из нескольких слов остаётся invalid, как и до появления
+    реестра — по той же причине, по которой это исходно ожидалось."""
+    bind_knowledge_user(session, SYSTEM_OWNER_ID)
+    assert parse_domain_reply(session, SYSTEM_OWNER_ID, "какая погода в Москве") is None
+    assert session.scalars(select(KnowledgeCustomDomain)).all() == []
 
 
 # ── stage_attachment() ─────────────────────────────────────────────────────
@@ -300,8 +386,6 @@ def test_resolve_pending_domain_over_storage_quota_is_rejected_without_orphan_fi
     """v3.8 §14.4: файл уже физически перенесён в raw/ до проверки квоты
     (квота живёт в БД) — байты не должны остаться сиротой на диске, и
     pending не должен зависнуть в состоянии, которое нельзя разрешить."""
-    from conftest import SYSTEM_OWNER_ID
-    from helm_core.models import KnowledgeUser
     owner = session.get(KnowledgeUser, SYSTEM_OWNER_ID)
     owner.storage_quota_bytes = 5
     session.flush()

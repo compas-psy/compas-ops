@@ -61,7 +61,7 @@
 | 021 | Local parser/GigaAM/Ollama Knowledge pipeline | не написан |
 | 022 | Smart source dedup + versioning | не написан |
 | 023 | Knowledge lifecycle management Panel/bot | не написан |
-| 024 | Scalable dynamic Knowledge taxonomy | не написан |
+| 024 | Scalable dynamic Knowledge taxonomy | ✅ `ADR-024-dynamic-domain-registry.md` — узкий срез, только реестр доменов, topics/aliases ждут Graphify |
 | 025 | Global-within-user hybrid retrieval | не написан |
 | 026 | Safe ZIP batch ingest + exactly-once completion | ✅ `ADR-026-zip-batch-ingest.md` |
 | 027 | Micro-Memory «Запомни» fast path | не написан |
@@ -70,7 +70,7 @@
 | 030 | Tenant isolation: user key + RLS + no cross-user dedup | не написан |
 | 031 | Per-user fair queue/quotas/style isolation | не написан |
 
-**Написано 7 из 31.** Важная оговорка: «не написан» не значит «решение не
+**Написано 8 из 31.** Важная оговорка: «не написан» не значит «решение не
 принято». Половина этих решений уже реализована в коде и обоснована в
 `V3.8-DELTA.md` и `WORKPLAN.md` — не хватает именно отдельного документа
 в формате ADR. Список §35 требует их до передачи.

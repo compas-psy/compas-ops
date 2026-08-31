@@ -40,7 +40,10 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import KnowledgeDomain, KnowledgePendingAttachment, KnowledgeSensitivity, KnowledgeSource
+from ..models import (
+    KnowledgeCustomDomain, KnowledgeDomain, KnowledgePendingAttachment,
+    KnowledgeSensitivity, KnowledgeSource,
+)
 from .ingest import DEFAULT_VAULT_ROOT, RegisterFileResult, register_file_for_ingest
 from .quotas import QuotaExceeded
 from .tenancy import bind_knowledge_user
@@ -84,52 +87,117 @@ class AttachmentTooLarge(Exception):
         super().__init__(f"вложение {size} байт превышает лимит {limit} байт")
 
 
-def domain_list_lines() -> list[str]:
+#: Домен ограничен той же длиной, что колонка `domain` везде в схеме
+#: (`String(32)`) — миграция 8b2f4e7a1c93. Не про безопасность, а про то,
+#: чтобы явно отказать раньше, чем БД обрежет/уронит запись.
+_MAX_CUSTOM_DOMAIN_LEN = 32
+
+
+def _custom_domains(session: Session, knowledge_user_id: uuid.UUID) -> list[KnowledgeCustomDomain]:
+    """Домены, которые ЭТОТ пользователь когда-то ввёл сам — "recent/
+    most-used" половина реестра (§14.5). Порядок: по частоте, затем по
+    свежести — то, чем чаще и недавнее пользуются, всплывает выше."""
+    return list(session.scalars(
+        select(KnowledgeCustomDomain)
+        .where(KnowledgeCustomDomain.knowledge_user_id == knowledge_user_id)
+        .order_by(KnowledgeCustomDomain.use_count.desc(),
+                  KnowledgeCustomDomain.last_used_at.desc())
+    ))
+
+
+def domain_list_lines(session: Session, knowledge_user_id: uuid.UUID) -> list[str]:
     """Пронумерованный список доменов с алиасами — общая часть меню для
     одиночных вложений (`format_domain_menu`) и ZIP-batch
     (`batch_intake.py::format_batch_domain_menu`), чтобы формулировки не
     разошлись между ними (тот же риск, что уже стоил отладки для
-    cross-channel текстов P8.5.7)."""
+    cross-channel текстов P8.5.7).
+
+    Встроенные домены идут первыми и в фиксированном порядке — владелец
+    уже помнит их номера наизусть, менять порядок ради "recent/most-
+    used" означало бы ломать привычку ради домена, добавленного вчера.
+    Домены, которые пользователь когда-то ввёл сам (реестр
+    `knowledge_domains`, ADR-024, узкий срез), добавляются следом —
+    именно они "recent/most-used" в буквальном смысле §14.5, встроенные
+    добавлять в тот же счётчик незачем, они и так всегда на виду.
+    """
     lines = []
     for i, d in enumerate(_DOMAINS, 1):
         alias = _ALIAS_BY_DOMAIN.get(d.value)
         label = f"{d.value} ({alias})" if alias else d.value
         lines.append(f"{i}. {label}")
+    offset = len(_DOMAINS)
+    for i, custom in enumerate(_custom_domains(session, knowledge_user_id), offset + 1):
+        lines.append(f"{i}. {custom.key}")
     return lines
 
 
-def format_domain_menu(original_filename: str | None) -> str:
+def format_domain_menu(session: Session, knowledge_user_id: uuid.UUID,
+                       original_filename: str | None) -> str:
     """Текст владельцу сразу после получения файла — до какого-либо парсинга."""
     lines = [
         f"Файл «{original_filename or 'без имени'}» получен и сохранён.",
-        "В какой домен положить? Ответьте номером или именем:",
-        *domain_list_lines(),
+        "В какой домен положить? Ответьте номером или именем — можно",
+        "новым, если подходящего домена в списке ещё нет:",
+        *domain_list_lines(session, knowledge_user_id),
         "Или «отмена» — файл не будет сохранён.",
     ]
     return "\n".join(lines)
 
 
-def parse_domain_reply(text: str) -> str | None:
-    """Канонический domain (значение enum), `_CANCEL_SENTINEL`, или None,
-    если ответ не распознан — вызывающая сторона обязана в этом случае
-    повторить меню, а не угадывать намерение владельца."""
+def parse_domain_reply(session: Session, knowledge_user_id: uuid.UUID, text: str) -> str | None:
+    """Канонический domain, `_CANCEL_SENTINEL`, или None, если ответ не
+    распознан — вызывающая сторона обязана в этом случае повторить меню,
+    а не угадывать намерение владельца.
+
+    §14.5 "No hardcoded domain enum": набранное имя, которое не встроено
+    и не совпадает с уже существующим доменом ЭТОГО пользователя,
+    создаёт новый — не отклоняется как invalid. Это не "силой из одного
+    документа" (§14.5 "Do not silently create a permanent new domain
+    from one document") — домен создаёт явный текстовый ответ на прямой
+    вопрос меню, не догадка по содержимому файла.
+    """
     stripped = text.strip()
     if not stripped:
         return None
     if stripped.casefold() in _CANCEL_WORDS:
         return _CANCEL_SENTINEL
+
+    customs = _custom_domains(session, knowledge_user_id)
+
     if stripped.isdigit():
         idx = int(stripped)
+        combined_len = len(_DOMAINS) + len(customs)
         if 1 <= idx <= len(_DOMAINS):
             return _DOMAINS[idx - 1].value
+        if len(_DOMAINS) < idx <= combined_len:
+            custom = customs[idx - len(_DOMAINS) - 1]
+            custom.use_count += 1
+            return custom.key
         return None
+
     lowered = stripped.casefold()
     if lowered in _DOMAIN_ALIASES:
         return _DOMAIN_ALIASES[lowered]
     for d in _DOMAINS:
         if d.value.casefold() == lowered:
             return d.value
-    return None
+    for custom in customs:
+        if custom.key.casefold() == lowered:
+            custom.use_count += 1
+            return custom.key
+
+    if len(stripped) > _MAX_CUSTOM_DOMAIN_LEN or any(ch.isspace() for ch in stripped):
+        # Домен — один токен (`personal`, `simpas/company`, `psy-
+        # marketing` — ни один встроенный домен не содержит пробела).
+        # Ответ из нескольких слов читается как случайный/непонятый
+        # текст, не как имя домена, — старое поведение ("not a domain"
+        # -> invalid) остаётся верным по той же причине, по которой оно
+        # изначально было выбрано для теста.
+        return None
+    custom = KnowledgeCustomDomain(knowledge_user_id=knowledge_user_id, key=stripped)
+    session.add(custom)
+    session.flush()
+    return custom.key
 
 
 def stage_attachment(session: Session, *, channel: str, data: bytes,
@@ -209,7 +277,7 @@ def resolve_pending_domain(session: Session, *, channel: str, reply_text: str,
     if pending is None:
         return ResolveOutcome(status="not_pending")
 
-    parsed = parse_domain_reply(reply_text)
+    parsed = parse_domain_reply(session, knowledge_user_id, reply_text)
     if parsed is None:
         return ResolveOutcome(status="invalid", pending=pending)
 
@@ -333,7 +401,7 @@ ATTACHMENT_QUOTA_EXCEEDED_NOTICE = (
 )
 
 
-def resolve_outcome_text(outcome: ResolveOutcome) -> str | None:
+def resolve_outcome_text(session: Session, outcome: ResolveOutcome) -> str | None:
     """Текст владельцу для исхода `resolve_pending_domain()`. None —
     только для `not_pending`: вызывающая сторона продолжает обычный
     register()/probe()/chief pipeline, ответа от диалога вложений нет."""
@@ -352,5 +420,6 @@ def resolve_outcome_text(outcome: ResolveOutcome) -> str | None:
     if outcome.status == "quota_exceeded":
         return ATTACHMENT_QUOTA_EXCEEDED_NOTICE
     if outcome.status == "invalid":
-        return format_domain_menu(outcome.pending.original_filename)
+        return format_domain_menu(session, outcome.pending.knowledge_user_id,
+                                  outcome.pending.original_filename)
     return None  # not_pending

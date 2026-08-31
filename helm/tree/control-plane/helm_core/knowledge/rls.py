@@ -20,6 +20,7 @@ TENANT_SCOPED_TABLES = (
     "knowledge_sources", "knowledge_chunks", "knowledge_notes", "knowledge_relations",
     "knowledge_ingest_jobs", "knowledge_pending_attachments", "knowledge_ingest_batches",
     "knowledge_batch_items", "knowledge_answer_runs", "knowledge_memories",
+    "knowledge_domains",
 )
 
 POLICY_NAME = "knowledge_tenant_isolation"
@@ -44,15 +45,34 @@ PREDICATE = (
 )
 
 
-def apply_rls(connection: Connection) -> None:
+def apply_rls_to_table(connection: Connection, table: str) -> None:
     """`FORCE`, не только `ENABLE` — таблицами владеет та же роль
     (`helm_app`/тестовая `helm`), что накатывает миграции и обслуживает
     рантайм; без FORCE Postgres не применяет RLS к владельцу таблицы
-    (см. V3.8-DELTA.md, "RLS не подействует без FORCE")."""
+    (см. V3.8-DELTA.md, "RLS не подействует без FORCE").
+
+    Однотабличный вариант — для миграции, которая ДОБАВЛЯЕТ таблицу в
+    `TENANT_SCOPED_TABLES` уже ПОСЛЕ того, как `apply_rls()` в целом была
+    накатана прошлой миграцией: та прошлая миграция при чистом
+    `alembic upgrade head` с нуля выполнится РАНЬШЕ, чем эта новая
+    таблица вообще создана (порядок ревизий фиксирован историей, а
+    `TENANT_SCOPED_TABLES` читается по актуальному коду, не по снимку на
+    момент авторства старой миграции) — вызвать заново весь `apply_rls()`
+    оттуда значило бы попытаться настроить RLS на несуществующей ещё
+    таблице. У новой таблицы RLS включает миграция, которая её создаёт,
+    вызовом именно этой функции, не общего цикла."""
+    connection.execute(text(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY"))
+    connection.execute(text(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY"))
+    connection.execute(text(
+        f"CREATE POLICY {POLICY_NAME} ON {table} "
+        f"USING ({PREDICATE}) WITH CHECK ({PREDICATE})"
+    ))
+
+
+def apply_rls(connection: Connection) -> None:
+    """Все tenant-scoped таблицы разом — для тестовой фикстуры и для
+    самой первой RLS-миграции. Более новым таблицам, добавленным ПОСЛЕ
+    этой первой миграции, использовать `apply_rls_to_table()` напрямую
+    в миграции, которая их создаёт — см. её docstring."""
     for table in TENANT_SCOPED_TABLES:
-        connection.execute(text(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY"))
-        connection.execute(text(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY"))
-        connection.execute(text(
-            f"CREATE POLICY {POLICY_NAME} ON {table} "
-            f"USING ({PREDICATE}) WITH CHECK ({PREDICATE})"
-        ))
+        apply_rls_to_table(connection, table)

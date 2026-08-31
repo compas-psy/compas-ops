@@ -83,15 +83,17 @@ class ArchiveTooLarge(Exception):
         super().__init__(f"архив {size} байт превышает лимит {limit} байт")
 
 
-def format_batch_domain_menu(archive_filename: str | None,
+def format_batch_domain_menu(session: Session, knowledge_user_id: uuid.UUID,
+                             archive_filename: str | None,
                              decisions: list[zip_safety.MemberDecision]) -> str:
     eligible = sum(1 for d in decisions if d.eligible)
     skipped = len(decisions) - eligible
     lines = [f"Архив «{archive_filename or 'без имени'}» получен: {len(decisions)} файлов."]
     if skipped:
         lines.append(f"{eligible} будут обработаны, {skipped} пропущено (формат/безопасность).")
-    lines.append("В какой домен положить всё содержимое? Ответьте номером или именем:")
-    lines.extend(domain_list_lines())
+    lines.append("В какой домен положить всё содержимое? Ответьте номером или именем —")
+    lines.append("можно новым, если подходящего домена в списке ещё нет:")
+    lines.extend(domain_list_lines(session, knowledge_user_id))
     lines.append("Или «отмена» — архив не будет обработан.")
     return "\n".join(lines)
 
@@ -179,8 +181,10 @@ def stage_batch(session: Session, *, channel: str, data: bytes,
     batch.status = KnowledgeBatchStatus.WAITING_DOMAIN
     session.flush()
 
-    return StageBatchResult(batch=batch, text=format_batch_domain_menu(original_filename, decisions),
-                            waiting_for_domain=True)
+    return StageBatchResult(
+        batch=batch,
+        text=format_batch_domain_menu(session, knowledge_user_id, original_filename, decisions),
+        waiting_for_domain=True)
 
 
 @dataclass
@@ -200,7 +204,7 @@ def resolve_batch_domain(session: Session, *, channel: str, reply_text: str,
     `chat_intake.resolve_pending_domain()`) — `knowledge_ingest_batches`
     tenant-scoped под RLS, запрос ниже иначе не увидел бы ни одной строки.
     """
-    bind_knowledge_user(session, None)
+    knowledge_user_id = bind_knowledge_user(session, None)
 
     batch = session.scalar(
         select(KnowledgeIngestBatch)
@@ -212,7 +216,7 @@ def resolve_batch_domain(session: Session, *, channel: str, reply_text: str,
     if batch is None:
         return ResolveBatchOutcome(status="not_pending")
 
-    parsed = parse_domain_reply(reply_text)
+    parsed = parse_domain_reply(session, knowledge_user_id, reply_text)
     if parsed is None:
         return ResolveBatchOutcome(status="invalid", batch=batch)
 
@@ -263,7 +267,7 @@ def resolve_batch_domain(session: Session, *, channel: str, reply_text: str,
     return ResolveBatchOutcome(status="queued", batch=batch)
 
 
-def batch_resolve_outcome_text(outcome: "ResolveBatchOutcome") -> str | None:
+def batch_resolve_outcome_text(session: Session, outcome: "ResolveBatchOutcome") -> str | None:
     """Текст владельцу для исхода `resolve_batch_domain()` — единственное
     место для ОБОИХ каналов (MAX/Telegram), тот же принцип, что уже есть у
     `chat_intake.resolve_outcome_text()` для одиночных вложений (расхождение
@@ -271,7 +275,8 @@ def batch_resolve_outcome_text(outcome: "ResolveBatchOutcome") -> str | None:
     раунда отладки)."""
     if outcome.status == "invalid" and outcome.batch is not None:
         decisions = zip_safety.preflight(Path(outcome.batch.archive_raw_path))
-        return format_batch_domain_menu(outcome.batch.archive_filename, decisions)
+        return format_batch_domain_menu(session, outcome.batch.knowledge_user_id,
+                                        outcome.batch.archive_filename, decisions)
     if outcome.status == "cancelled":
         return "Хорошо, архив не обрабатываю."
     if outcome.status == "blocked" and outcome.batch is not None:

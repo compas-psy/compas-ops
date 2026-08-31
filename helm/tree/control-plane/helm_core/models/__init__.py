@@ -8,6 +8,7 @@ from .base import (
 from .tables import (
     ActionTrust, Approval, Artifact, BudgetDaily, ChannelEvent, Decision,
     KnowledgeAnswerRun, KnowledgeBatchItem, KnowledgeChannelIdentity, KnowledgeChunk,
+    KnowledgeCustomDomain,
     KnowledgeIngestBatch, KnowledgeIngestJob, KnowledgeInvite, KnowledgeMemory,
     KnowledgeNote, KnowledgePendingAttachment, KnowledgeRelation,
     KnowledgeSource, KnowledgeUser, KnowledgeUserUsage, MetricPoint, ModelRun, OutboxMessage,
@@ -21,7 +22,8 @@ __all__ = [
     "BudgetDaily", "Channel", "ChannelEvent", "Decision",
     "KnowledgeAnswerMode", "KnowledgeAnswerRun", "KnowledgeBatchItem",
     "KnowledgeBatchItemStatus", "KnowledgeBatchStatus", "KnowledgeChannelIdentity",
-    "KnowledgeChunk", "KnowledgeDomain", "KnowledgeIngestBatch", "KnowledgeIngestJob",
+    "KnowledgeChunk", "KnowledgeCustomDomain", "KnowledgeDomain",
+    "KnowledgeIngestBatch", "KnowledgeIngestJob",
     "KnowledgeIngestStatus", "KnowledgeInvite", "KnowledgeMemory", "KnowledgeMemoryKind",
     "KnowledgeMemoryStatus", "KnowledgeNote", "KnowledgePendingAttachment",
     "KnowledgeRelation", "KnowledgeSensitivity", "KnowledgeSource", "KnowledgeStatus",

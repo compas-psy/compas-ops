@@ -167,7 +167,8 @@ def knowledge_attachment_stage(body: AttachmentStageIn,
         return {"status": "too_large", "text": ATTACHMENT_TOO_LARGE_NOTICE}
     session.commit()
     return {"status": "staged", "pending_id": str(pending.id),
-            "text": format_domain_menu(pending.original_filename)}
+            "text": format_domain_menu(session, pending.knowledge_user_id,
+                                   pending.original_filename)}
 
 
 class AttachmentResolveIn(BaseModel):
@@ -189,7 +190,7 @@ def knowledge_attachment_resolve(body: AttachmentResolveIn,
     outcome = resolve_pending_domain(session, channel=body.channel, reply_text=body.reply_text,
                                      recipient=body.recipient)
     session.commit()
-    return {"status": outcome.status, "text": resolve_outcome_text(outcome)}
+    return {"status": outcome.status, "text": resolve_outcome_text(session, outcome)}
 
 
 class BatchStageIn(BaseModel):
@@ -238,7 +239,7 @@ def knowledge_batches_resolve_domain(body: BatchResolveIn,
     `helm-control`) продолжает обычный путь, если это не про batch."""
     outcome = resolve_batch_domain(session, channel=body.channel, reply_text=body.reply_text)
     session.commit()
-    return {"status": outcome.status, "text": batch_resolve_outcome_text(outcome),
+    return {"status": outcome.status, "text": batch_resolve_outcome_text(session, outcome),
             "batch_id": str(outcome.batch.id) if outcome.batch else None}
 
 
