@@ -23,6 +23,20 @@ RUN pip install --no-cache-dir "sentence-transformers==3.3.1" \
 
 COPY helm_core ./helm_core
 
+# Веса скачиваются один раз НА СБОРКЕ, не при каждом старте контейнера
+# (§33 — веса модели такая же фиксируемая зависимость, как версия пакета).
+# Без этого шага SentenceTransformer(MODEL_NAME) в embed_service.py тянул
+# бы веса с huggingface.co при каждом `force-recreate` (каждый выкат) —
+# лишний внешний трафик и время подъёма сервиса зависели бы от
+# доступности huggingface.co именно в момент рестарта, а не сборки.
+# HF_HOME фиксирован явно: сборка идёт от root (домашний каталог
+# /root), а сервис в рантайме — от helm-embed (другой $HOME); без общего
+# пути кэш, скачанный при сборке, был бы недоступен процессу в рантайме.
+ENV HF_HOME=/opt/helm/embed/hf-cache
+RUN python3 -c "from helm_core.knowledge.embed_service import MODEL_NAME; \
+from sentence_transformers import SentenceTransformer; SentenceTransformer(MODEL_NAME)" \
+    && chown -R helm-embed:helm-embed "$HF_HOME"
+
 USER helm-embed
 EXPOSE 8090
 

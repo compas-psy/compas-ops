@@ -246,10 +246,12 @@ services:
         limits: {memory: 3g}
 
   helm-embed:
-    # P8.5.4 остаток (§33) — пока инструмент замера (Dockerfile.embed CMD =
-    # embed_benchmark.py), не постоянный сервис: `docker compose up` его
-    # НЕ поднимает (сознательно не в списке up -d в deploy.yml), только
-    # `docker compose run --rm helm-embed` для разового прогона бенчмарка.
+    # ADR-025: постоянный HTTP-сервис (после выбора модели живым замером,
+    # см. embed_benchmark.py/embed_service.py) — helm-core и воркер ходят
+    # к нему за эмбеддингами через helm_core/knowledge/embeddings.py.
+    # embed_benchmark.py остаётся в образе для повторного замера при
+    # смене кандидатов: `docker compose run --rm --entrypoint python3
+    # helm-embed -m helm_core.knowledge.embed_benchmark`.
     # Отдельный образ от helm-core (768MB, без torch) и от воркера
     # (Docling — другой набор моделей) — эмбеддингам не нужен ни один из
     # системных пакетов воркера (opencv/ffmpeg), только CPU-only torch.
@@ -257,14 +259,21 @@ services:
       context: ../control-plane
       dockerfile: Dockerfile.embed
     image: helm-embed:0.1.0
+    <<: *restart
     logging: *logging
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8090/healthz')"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 30s
     deploy:
       resources:
-        # Разовый прогон замера четырёх кандидатов (крупнейший — BAAI/bge-m3,
-        # ~2.2ГБ весов) в отдельных подпроцессах — не измеренный предел,
-        # первая прикидка с запасом под самую тяжёлую модель. Постоянный
-        # сервис (после выбора модели) получит свой, обмеренный лимит.
-        limits: {memory: 4g}
+        # Модель резидентно занимает 854МБ (живой замер embed_benchmark.py,
+        # 31.08.2026, ADR-025) — лимит с запасом под FastAPI/uvicorn и один
+        # запрос в обработке, не голая цифра замера.
+        limits: {memory: 1200m}
 
   n8n:
     image: n8nio/n8n:2.36.8
