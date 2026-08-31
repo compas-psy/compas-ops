@@ -132,16 +132,32 @@ jobs:
           npm run build
 
       - name: Доставка файлов
+        # НАЙДЕНО 31.08.2026 (F-260831-07): семь последовательных `scp -r`
+        # зависали на живом сервере пять раз подряд (~8+ минут без
+        # прогресса) — диск/память сервера в порядке (проверено дважды),
+        # лёгкие ssh-команды (verify/recon) отрабатывают за секунды.
+        # Суммарный объём передаваемого — единицы мегабайт (helm_core +
+        # migrations + panel/dist), полное зависание на такой мелочи не
+        # похоже на throttling по скорости — больше похоже на известный
+        # класс багов OpenSSH 9.x: `scp -r` по умолчанию идёт через SFTP-
+        # подсистему, а не старый SCP-протокол, и есть задокументированные
+        # зависания именно на рекурсивной передаче дерева из многих
+        # мелких файлов (helm_core — десятки .py). Одна tar-архивация +
+        # один поток через `ssh exec` вообще не использует SFTP-подсистему.
         if: inputs.action == 'deploy'
         run: |
           cd helm/tree
-          scp -i ~/.ssh/id_deploy -r control-plane/helm_core "$VPS_USER@$VPS_HOST:/tmp/helm_core"
-          scp -i ~/.ssh/id_deploy -r control-plane/migrations "$VPS_USER@$VPS_HOST:/tmp/migrations"
-          scp -i ~/.ssh/id_deploy -r panel/dist "$VPS_USER@$VPS_HOST:/tmp/panel-dist"
-          scp -i ~/.ssh/id_deploy compose/docker-compose.yml "$VPS_USER@$VPS_HOST:/tmp/docker-compose.yml"
-          scp -i ~/.ssh/id_deploy config/Caddyfile "$VPS_USER@$VPS_HOST:/tmp/Caddyfile"
-          scp -i ~/.ssh/id_deploy scripts/backup.sh scripts/restore_test.sh "$VPS_USER@$VPS_HOST:/tmp/"
-          scp -i ~/.ssh/id_deploy hermes/plugins/helm-control/__init__.py "$VPS_USER@$VPS_HOST:/tmp/helm-control-init.py"
+          stage=$(mktemp -d)
+          cp -r control-plane/helm_core "$stage/helm_core"
+          cp -r control-plane/migrations "$stage/migrations"
+          cp -r panel/dist "$stage/panel-dist"
+          cp compose/docker-compose.yml "$stage/docker-compose.yml"
+          cp config/Caddyfile "$stage/Caddyfile"
+          cp scripts/backup.sh scripts/restore_test.sh "$stage/"
+          cp hermes/plugins/helm-control/__init__.py "$stage/helm-control-init.py"
+          tar -czf - -C "$stage" . \
+            | ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" 'tar -xzf - -C /tmp'
+          rm -rf "$stage"
 
       - name: Разложить и пересобрать
         if: inputs.action == 'deploy'
