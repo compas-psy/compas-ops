@@ -226,14 +226,28 @@ answer_text:
 Транзакция откачена, тестовые данные не остались в базе. E12 фаза 2
 закрыта этим прогоном.
 
-## Graphify (§14.10) — challenger, не модель, но тот же принцип отбора
+## Graphify (P8.5.6) — challenger, не модель, но тот же принцип отбора
 
 Не установлен. Разрешён только как derived/on-demand индекс — сравнение
 `FTS + pgvector + relations` против того же + Graphify structural paths
 на реальных multi-hop golden cases. Включается в hot path только если
 измеримо улучшает эти конкретные случаи; решение фиксируется в
-`ADR-015` (документ ещё не создан — создаётся вместе с самим
+`ADR-019` (документ ещё не создан — создаётся вместе с самим
 экспериментом, не раньше).
+
+Исправлено 31.08.2026 (E13): было указано `§14.10`/`ADR-015` — оба
+номера ошибочны. `§14.10` по 15+ независимым цитатам в кодовой базе
+(`memory.py`, `recall.py`, `probe.py`, тесты, ADR-021, WORKPLAN.md,
+V3.8-DELTA.md) — это Micro-Memory «Запомни», не Graphify. Точный номер
+параграфа спеки именно для Graphify как отдельной темы ни разу не
+процитирован нигде в репозитории — держим якорем `P8.5.6` (используется
+последовательно в 10+ файлах: ROADMAP-TO-DONE.md, ADR-024, ADR-026,
+batch_intake.py, memory.py, tables.py, KNOWLEDGE.md, WORKPLAN.md,
+V3.4/V3.7-DELTA.md), а не гадаем номер параграфа. `ADR-015` в
+`docs/adr/README.md` — это «HELM Panel static frontend + Control Plane
+backend», не Graphify; правильный номер по той же таблице — `ADR-019`
+(«Knowledge canonical Markdown/Postgres; Graphify derived», не
+написан).
 
 ## Как обновлять этот документ
 
