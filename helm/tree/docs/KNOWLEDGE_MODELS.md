@@ -249,6 +249,45 @@ backend», не Graphify; правильный номер по той же та�
 («Knowledge canonical Markdown/Postgres; Graphify derived», не
 написан).
 
+### Слой 1 knowledge_relations — сделан и живьём проверен 31.08.2026, эксперимент отложен
+
+По детальному распоряжению владельца: `knowledge_relations` заполняется
+детерминированно, без LLM, двумя явными источниками —
+`helm_core/knowledge/relations.py`. `[[wikilink]]` в теле заметки даёт
+`relation_type=relates_to` ВСЕГДА, `evidence_type=explicit_link` (сам
+факт `[[A]]→[[B]]` не означает causes/supports, додумывать тип
+запрещено). Явный список `relations:` в YAML-frontmatter даёт
+`relation_type` дословно из текста владельца, `evidence_type=explicit`;
+запись без поля `type` отбрасывается целиком, не додумывается.
+Frontmatter разбирается вручную построчным сканированием, без PyYAML —
+та же причина, что у `worker.py::_frontmatter()`: PyYAML не зависимость
+`Dockerfile.worker`, а `process_job()` — основной вызывающий на
+реальных файлах. Вписано в оба ingest-пути (`ingest_text()`/
+`process_job()`), 19 тестов.
+
+Живая проверка после деплоя (`scripts/verify-e13-relations.sh`,
+откатываемая транзакция) — `ingest_text()` с `[[Вторая заметка]]` в
+тексте:
+
+```
+source_id: 3145f9f2-8a54-43c6-94cd-2d5e5c6399af
+relations found: 1
+from_id: e13-verify-first | to_id: Вторая заметка | relation_type: relates_to | evidence_type: explicit_link
+транзакция откачена — тестовые данные не остались в базе
+```
+
+Живая разведка РЕАЛЬНОГО корпуса (`scripts/e13-corpus-check.sh`) дала
+честный результат: `knowledge_sources` — 4 реальные строки владельца
+(PDF, домен `health` — консультации/гистология), ноль `[[wikilink]]` и
+ноль YAML `relations:` в тексте, `knowledge_relations` пуста. **E13 =
+INSUFFICIENT_REAL_CORPUS** — 4 несвязанных документа одного домена не
+дают multi-hop вопроса ни при каком качестве парсера; реальный
+Obsidian-вклад владельца (ZIP-пачка) в прод ещё не залит. Инференс-слой
+Ollama и сам Graphify challenger сознательно не строятся сейчас —
+решение после реального ZIP-ингеста, не на 4 документах ради
+демонстрации (владелец прямо предостерёг против доказательства пользы
+Graphify синтетикой/неподходящими данными).
+
 ## Как обновлять этот документ
 
 Каждое решение здесь — результат прогнанного на живом сервере
