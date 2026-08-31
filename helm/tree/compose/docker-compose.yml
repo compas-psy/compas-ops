@@ -143,11 +143,19 @@ services:
       # означал бы сам контейнер, не хост — та же ошибка, что уже нашлась
       # для HERMES_BRIDGE_URL, см. extra_hosts ниже). NO_PROXY явно
       # исключает то, что уже работает напрямую: MAX API (platform-api2.
-      # max.ru — свой сертификат/маршрут, трогать незачем), Hermes bridge
-      # и собственный healthcheck контейнера.
+      # max.ru — свой сертификат/маршрут, трогать незачем), Hermes bridge,
+      # собственный healthcheck контейнера и helm-embed (ADR-025) — служба
+      # в той же bridge-сети по Docker DNS, не за пределами сервера.
+      # НАЙДЕНО живым запуском 31.08.2026: без этого исключения
+      # embeddings.py::embed_texts() (urllib.request, читает HTTP(S)_PROXY
+      # из окружения процесса) слал запрос к "helm-embed" через
+      # sing-box-туннель, который это имя не резолвит — "HTTP Error 502:
+      # Bad Gateway" на каждый вызов. Fail-open (embed_texts_or_none)
+      # проглотил ошибку молча: ingest/probe продолжали работать чисто
+      # лексически, semantic-слой был мёртв до этой строчки.
       HTTPS_PROXY: http://host.docker.internal:18080
       HTTP_PROXY: http://host.docker.internal:18080
-      NO_PROXY: 127.0.0.1,localhost,host.docker.internal,platform-api2.max.ru
+      NO_PROXY: 127.0.0.1,localhost,host.docker.internal,platform-api2.max.ru,helm-embed
     secrets: [helm_database_url, telegram_owner_id, hermes_service_hmac,
               panel_auth_cookie_secret, telegram_bot_token,
               max_webhook_secret, max_bot_token, max_owner_id,
