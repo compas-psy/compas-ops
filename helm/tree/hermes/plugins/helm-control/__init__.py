@@ -66,6 +66,15 @@ P8.5.7 (вложения, добавлено 30.08.2026): ``MessageEvent.raw_mes
 хосте), поэтому вызвать эти функции напрямую нельзя: два новых HMAC-
 подписанных HTTP-эндпоинта, тот же паттерн, что уже у
 ``_register_task``/``_probe_local_answer``.
+
+F-260829-25 (31.08.2026): у Telegram, в отличие от MAX, не было способа
+узнать постфактум, что сообщение реально дошло до платной модели —
+Control Plane видит только ``pre_gateway_dispatch``/``pre_llm_call``,
+оба ДО вызова LLM. Живая разведка (три волны, ``scripts/hermes-recon-
+post-response-hook*.sh``) нашла реальный, вызываемый хук
+``post_llm_call`` (``agent/turn_finalizer.py``, не декоративный, как
+каталог ``~/.hermes/hooks/<name>/`` из P8.5.7 выше) с ``user_message``
+прямо в payload — см. ``_on_post_llm_call``.
 """
 
 from __future__ import annotations
@@ -93,6 +102,9 @@ BATCH_RESOLVE_URL = "http://127.0.0.1:8080/internal/knowledge/batches/resolve-do
 #: helm_core/api/internal.py: POST /internal/knowledge/remember).
 KNOWLEDGE_REMEMBER_URL = "http://127.0.0.1:8080/internal/knowledge/remember"
 KNOWLEDGE_ADMIN_URL = "http://127.0.0.1:8080/internal/knowledge/admin"
+#: F-260829-25 — тот же HMAC-паттерн (см. helm_core/api/internal.py:
+#: POST /internal/knowledge/paid-escalation).
+KNOWLEDGE_PAID_ESCALATION_URL = "http://127.0.0.1:8080/internal/knowledge/paid-escalation"
 HMAC_SECRET_PATH = "/etc/helm/secrets/hermes_service_hmac"
 REQUEST_TIMEOUT = 5
 #: §14.5.1 "bounded size" — тот же потолок, что уже применяется на
@@ -514,6 +526,58 @@ def _probe_local_answer(text: str) -> dict | None:
         return None
 
 
+def _log_paid_escalation(channel: str, text: str) -> None:
+    """POST /internal/knowledge/paid-escalation. Fail-open, как
+    `_probe_local_answer()`: это метрика (§14.14), не гейт — пропавшая
+    запись не должна ронять сам ответ владельцу или мешать ему."""
+    body = json.dumps({"channel": channel, "text": text}).encode("utf-8")
+    ts = str(time.time())
+    sig = _sign(_read_secret(), ts, body)
+    req = urllib.request.Request(
+        KNOWLEDGE_PAID_ESCALATION_URL, data=body, method="POST",
+        headers={"Content-Type": "application/json", "X-Helm-Timestamp": ts,
+                "X-Helm-Signature": sig},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT):
+            pass
+    except Exception as exc:
+        print(f"[helm-control] knowledge_paid_escalation failed: {exc}", flush=True)
+
+
+def _on_post_llm_call(**kwargs) -> None:
+    """F-260829-25 — §14.14 paid-avoidance metric для Telegram.
+
+    НАЙДЕНО живой разведкой 31.08.2026 (три волны, scripts/hermes-recon-
+    post-response-hook*.sh): `post_llm_call` — реальный, вызываемый хук
+    (`agent/turn_finalizer.py`), не декоративный, как каталог
+    `~/.hermes/hooks/<name>/` из P8.5.7. Вызывается ОДИН РАЗ ЗА ХОД,
+    СРАЗУ ПОСЛЕ настоящего ответа модели, с `session_id`, `task_id`,
+    `user_message` (оригинальный текст) и `platform` прямо в payload —
+    отдельного кэша текста не нужно, в отличие от `_task_ids` для
+    `pre_llm_call`.
+
+    Сам факт вызова уже значит платную эскалацию: если `_probe_local_
+    answer()` в `pre_gateway_dispatch` вернул LOCAL_ANSWER, тот вернул
+    `{"action": "skip"}` и ход до LLM не дошёл — `post_llm_call` для
+    него не сработает вовсе. Ровно то же условие, что уже проверяет
+    `/hooks/max` перед логированием (`_run_chief_and_enqueue_reply()`),
+    только там оно верно по построению (Control Plane сам зовёт Hermes
+    синхронно), а здесь подтверждено тем, что этот хук вообще добежал.
+
+    Не привязан к MAX: тот не идёт через Hermes-gateway (Control Plane
+    вызывает `/v1/responses` напрямую и логирует сам в `hooks.py`) —
+    `post_llm_call` для него просто не должен сработать, но платформа
+    всё равно проверяется явно, а не молчаливым предположением.
+    """
+    if str(kwargs.get("platform") or "").lower() != "telegram":
+        return
+    text = kwargs.get("user_message")
+    if not text:
+        return
+    _log_paid_escalation("telegram", text)
+
+
 def handle(event=None, gateway=None, session_store=None, **kwargs):
     # pre_gateway_dispatch передаёт event+gateway; pre_llm_call — нет.
     if event is not None and gateway is not None:
@@ -662,3 +726,4 @@ def _on_pre_llm_call(kwargs: dict):
 def register(ctx) -> None:
     ctx.register_hook("pre_gateway_dispatch", handle)
     ctx.register_hook("pre_llm_call", handle)
+    ctx.register_hook("post_llm_call", _on_post_llm_call)

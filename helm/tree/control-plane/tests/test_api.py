@@ -160,6 +160,32 @@ def test_knowledge_remember_endpoint_requires_service_auth(client):
     assert r.status_code == 422 or r.status_code == 401
 
 
+# ── F-260829-25: /internal/knowledge/paid-escalation ─────────────────────────
+
+def test_knowledge_paid_escalation_endpoint_logs_answer_run(client):
+    from helm_core.knowledge.tenancy import bind_knowledge_user
+    from helm_core.models import KnowledgeAnswerRun
+
+    r = post_internal(client, "/internal/knowledge/paid-escalation", {
+        "channel": "telegram", "text": "какая погода в Москве",
+    })
+    assert r.status_code == 201, r.text
+    assert r.json() == {"status": "logged"}
+
+    with client.app.state.session_factory() as session:
+        bind_knowledge_user(session, None)
+        run = session.scalars(select(KnowledgeAnswerRun)).one()
+        assert run.mode == "C1"
+        assert run.paid_ai_used is True
+        assert run.domain is None
+
+
+def test_knowledge_paid_escalation_endpoint_requires_service_auth(client):
+    r = client.post("/internal/knowledge/paid-escalation",
+                    json={"channel": "telegram", "text": "что угодно"})
+    assert r.status_code == 422 or r.status_code == 401
+
+
 # ── P8.6.2 Telegram-сторона: /internal/knowledge/users/invite ────────────────
 
 def test_knowledge_users_invite_endpoint_creates_invited_user(client):

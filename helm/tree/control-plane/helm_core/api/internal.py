@@ -31,8 +31,9 @@ from ..knowledge.chat_intake import (
 from ..knowledge.admin import try_admin_command
 from ..knowledge.memory import try_remember
 from ..knowledge.onboarding import create_invite, reactivate_user, suspend_user
-from ..knowledge.probe import probe
-from ..models import ModelRun, Task, TaskEvent, TaskStatus, utcnow
+from ..knowledge.probe import probe, query_hash
+from ..knowledge.tenancy import bind_knowledge_user
+from ..models import KnowledgeAnswerRun, ModelRun, Task, TaskEvent, TaskStatus, utcnow
 from ..outbox import enqueue
 from .deps import get_session
 from .security import require_service_auth
@@ -131,6 +132,36 @@ def knowledge_admin(body: KnowledgeAdminIn,
     outcome = try_admin_command(session, text=body.text)
     session.commit()
     return {"status": outcome.status, "text": outcome.text}
+
+
+class PaidEscalationIn(BaseModel):
+    channel: str = Field(min_length=1, max_length=32)
+    text: str = Field(min_length=1)
+
+
+@router.post("/knowledge/paid-escalation", status_code=status.HTTP_201_CREATED)
+def knowledge_paid_escalation(body: PaidEscalationIn,
+                              session: Session = Depends(get_session)) -> dict[str, str]:
+    """§14.14 paid-avoidance metric постфактум для Telegram (F-260829-25).
+
+    `/hooks/max` логирует это же прямо внутри своего запроса — Control
+    Plane сам вызывает Hermes синхронно и видит результат в тот же момент.
+    Для Telegram Hermes вызывает модель у себя внутри gateway; `helm-
+    control` узнаёт об этом только из хука `post_llm_call`, который
+    срабатывает ПОСЛЕ реального ответа — отсюда отдельный эндпоинт вместо
+    записи внутри `/hooks/*`. Сам факт вызова уже означает эскалацию:
+    `post_llm_call` фиксирует ход, только если тот дошёл до LLM — если
+    Probe вернул LOCAL_ANSWER, `pre_gateway_dispatch` вернул бы
+    `{"action": "skip"}` и до модели дело не дошло бы вовсе.
+    """
+    knowledge_user_id = bind_knowledge_user(session, None)
+    session.add(KnowledgeAnswerRun(
+        knowledge_user_id=knowledge_user_id,
+        query_hash=query_hash(body.text), domain=None, mode="C1",
+        paid_ai_used=True, evidence_count=0,
+    ))
+    session.commit()
+    return {"status": "logged"}
 
 
 class AttachmentStageIn(BaseModel):
