@@ -36,6 +36,7 @@ on:
           - register-knowledge-webhook  # зарегистрировать вебхук Knowledge-бота в Telegram
           - deploy        # код + панель + пересборка контейнеров
           - migrate       # alembic upgrade head (после deploy)
+          - embed-benchmark  # разовый замер embedding-моделей (P8.5.4 остаток, §33)
           - restore-test  # backup.sh + restore_test.sh
           - rollback      # alembic downgrade до указанной ревизии
       code_ref:
@@ -230,10 +231,20 @@ jobs:
         # старой (весь config/ монтируется в контейнер как есть, но выкат
         # копировал из него только Caddyfile). registry.action() падает при
         # импорте на незнакомом policy — helm-core ушёл в Restarting.
+        #
+        # Dockerfile*/pyproject.toml — найдено при добавлении Dockerfile.embed
+        # (P8.5.4 остаток, 31.08.2026): выкат ни разу не досылал их вовсе,
+        # только helm_core/migrations. Dockerfile/Dockerfile.worker на
+        # сервере — то, что положено при самом первом bring-up, и с тех пор
+        # ни разу не обновлялось этим пайплайном. Пока правки не требовались
+        # (новых pip-пакетов в образы не добавляли) — не было видно. Тот же
+        # класс пробела, что и у actions.yaml выше.
         run: |
           cd helm/tree
           scp -i ~/.ssh/id_deploy -r control-plane/helm_core "$VPS_USER@$VPS_HOST:/tmp/helm_core"
           scp -i ~/.ssh/id_deploy -r control-plane/migrations "$VPS_USER@$VPS_HOST:/tmp/migrations"
+          scp -i ~/.ssh/id_deploy control-plane/Dockerfile control-plane/Dockerfile.worker \
+              control-plane/Dockerfile.embed control-plane/pyproject.toml "$VPS_USER@$VPS_HOST:/tmp/"
           scp -i ~/.ssh/id_deploy -r panel/dist "$VPS_USER@$VPS_HOST:/tmp/panel-dist"
           scp -i ~/.ssh/id_deploy compose/docker-compose.yml "$VPS_USER@$VPS_HOST:/tmp/docker-compose.yml"
           scp -i ~/.ssh/id_deploy config/Caddyfile "$VPS_USER@$VPS_HOST:/tmp/Caddyfile"
@@ -337,6 +348,10 @@ jobs:
             sudo rm -rf /opt/helm/control-plane/helm_core /opt/helm/control-plane/migrations
             sudo mv /tmp/helm_core /opt/helm/control-plane/helm_core
             sudo mv /tmp/migrations /opt/helm/control-plane/migrations
+            sudo mv /tmp/Dockerfile /opt/helm/control-plane/Dockerfile
+            sudo mv /tmp/Dockerfile.worker /opt/helm/control-plane/Dockerfile.worker
+            sudo mv /tmp/Dockerfile.embed /opt/helm/control-plane/Dockerfile.embed
+            sudo mv /tmp/pyproject.toml /opt/helm/control-plane/pyproject.toml
             sudo mv /tmp/docker-compose.yml /opt/helm/compose/docker-compose.yml
             sudo mv /tmp/Caddyfile /opt/helm/config/Caddyfile
             sudo mv /tmp/actions.yaml /opt/helm/config/policies/actions.yaml
@@ -344,6 +359,8 @@ jobs:
             sudo mv /tmp/restore_test.sh /opt/helm/scripts/restore_test.sh
             sudo mv /tmp/knowledge-telegram-register-webhook.sh /opt/helm/scripts/knowledge-telegram-register-webhook.sh
             sudo chown -R root:root /opt/helm/control-plane/helm_core /opt/helm/control-plane/migrations \
+              /opt/helm/control-plane/Dockerfile /opt/helm/control-plane/Dockerfile.worker \
+              /opt/helm/control-plane/Dockerfile.embed /opt/helm/control-plane/pyproject.toml \
               /opt/helm/compose/docker-compose.yml /opt/helm/config/Caddyfile \
               /opt/helm/config/policies/actions.yaml \
               /opt/helm/scripts/backup.sh /opt/helm/scripts/restore_test.sh \
@@ -540,6 +557,24 @@ jobs:
             end
             $chk$;
           SQL
+          '
+
+      # ── embed-benchmark: разовый замер моделей эмбеддингов ────────────
+      - name: Замер embedding-моделей
+        # helm-embed НЕ входит в up -d обычного deploy (docker-compose.yml
+        # комментарий у сервиса) — это инструмент, не постоянный сервис,
+        # пока модель не выбрана по факту замера (§33, ADR-025). Собирает
+        # образ и гоняет embed_benchmark.py одноразовым контейнером, тем
+        # же паттерном run --rm, что уже используют migrate/deploy.
+        # Первый прогон качает веса всех кандидатов с huggingface.co —
+        # несколько минут и несколько ГБ трафика, ожидаемо.
+        if: inputs.action == 'embed-benchmark'
+        run: |
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
+            set -e
+            cd /opt/helm/compose
+            sudo docker compose build helm-embed
+            sudo docker compose run --rm helm-embed
           '
 
       - name: Зарегистрировать вебхук Knowledge-бота
