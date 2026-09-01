@@ -38,29 +38,29 @@
 
 | № | Тема по ТЗ | Состояние |
 |---|---|---|
-| 001 | Hermes cognitive / Control Plane canonical state | не написан |
-| 002 | n8n adapter boundary | не написан |
-| 003 | LiteLLM routing ownership | не написан |
-| 004 | Hermes state/Kanban non-canonical | не написан |
-| 005 | Health isolation | не написан |
-| 006 | Forgejo primary / GitHub mirror+CI | не написан |
-| 007 | SignalAI single-writer migration | не написан |
-| 008 | Skills promotion | не написан |
+| 001 | Hermes cognitive / Control Plane canonical state | ✅ `ADR-001-hermes-control-plane-canonical-state.md` |
+| 002 | n8n adapter boundary | не написан — **действительно не решено**, не только не задокументировано: n8n развёрнут (127.0.0.1-only), но ни одного коннектора не заведено, `helm_core` его вообще не импортирует. Писать ADR не из чего |
+| 003 | LiteLLM routing ownership | ✅ `ADR-003-litellm-routing-ownership.md` — статическая часть; динамическая эскалация по типу вопроса отложена, см. документ |
+| 004 | Hermes state/Kanban non-canonical | ✅ `ADR-004-hermes-state-non-canonical.md` — синтез из нескольких мест, не одна прямая цитата, см. оговорку в документе |
+| 005 | Health isolation | ✅ `ADR-005-health-isolation.md` — частично: логическое исключение сделано, схема/роль Postgres отложена отдельной задачей |
+| 006 | Forgejo primary / GitHub mirror+CI | ✅ `ADR-006-forgejo-primary-github-mirror.md` — план и целевая архитектура решены, сама миграция репозиториев (шаги 2-11) не выполнена |
+| 007 | SignalAI single-writer migration | не написан — **действительно не решено**: Milestone D не начата по требованию самой спеки (раньше нельзя), архитектуры single-writer не существует ни в каком виде |
+| 008 | Skills promotion | ✅ `ADR-008-skills-promotion.md` — гейт (policy YAML) решён, исполнитель не зарегистрирован, `skills/` пуст |
 | 009 | Action registry / RED executor | ✅ `ADR-009-action-registry.md` |
-| 010 | Graduated trust | не написан |
-| 011 | No heavy monitoring stack in v1 | не написан |
+| 010 | Graduated trust | ✅ `ADR-010-graduated-trust.md` — схема и инварианты защищены на уровне БД, живой цикл повышения доверия не подключён к боевому пути |
+| 011 | No heavy monitoring stack in v1 | ✅ `ADR-011-no-heavy-monitoring-v1.md` |
 | 012 | Durable execution DBOS spike decision | ✅ `ADR-012-durable-execution.md` |
-| 013 | Telegram pre-dispatch Control Plane gate | не написан |
+| 013 | Telegram pre-dispatch Control Plane gate | ✅ `ADR-013-telegram-pre-dispatch-gate.md` |
 | 014 | MAX direct Control Plane ingress | ✅ `ADR-014-max-responses-api.md` |
-| 015 | HELM Panel static frontend + Control Plane backend | не написан |
-| 016 | Panel Telegram OIDC + WebAuthn | не написан |
+| 015 | HELM Panel static frontend + Control Plane backend | ✅ `ADR-015-panel-static-frontend.md` |
+| 016 | Panel Telegram OIDC + WebAuthn | ✅ `ADR-016-panel-telegram-webauthn.md` — реализовано другое: Telegram Login Widget, не OIDC (задокументированное отклонение, OIDC недоступен у BotFather для этого бота) |
 | 017 | Live-server-first initial deployment | ✅ `ADR-017-offline-build.md` — отклонено, выбрана офлайн-сборка |
 | 018 | Multimodel implementation policy | ✅ `ADR-018-single-agent.md` — отклонено фактически |
-| 019 | Knowledge canonical Markdown/Postgres; Graphify derived | не написан |
-| 020 | Strict zero-paid Knowledge lock | не написан |
+| 019 | Knowledge canonical Markdown/Postgres; Graphify derived | не написан — сознательно: решение фиксируется вместе с самим Graphify-экспериментом, который пока `E13 = INSUFFICIENT_REAL_CORPUS` (см. `docs/KNOWLEDGE_MODELS.md`) |
+| 020 | Strict zero-paid Knowledge lock | ✅ `ADR-020-strict-zero-paid-knowledge-lock.md` |
 | 021 | Local parser/GigaAM/Ollama Knowledge pipeline | 🟡 `ADR-021-gigaam-voice-pipeline.md` — модель GigaAM выбрана живым замером (e2e_rnnt), фаза 2 (схема/wiring/voice-Remember) в процессе. Ollama (1.8) — отдельно, не в этом ADR |
-| 022 | Smart source dedup + versioning | не написан |
-| 023 | Knowledge lifecycle management Panel/bot | не написан |
+| 022 | Smart source dedup + versioning | ✅ `ADR-022-source-dedup-versioning.md` — дедуп сделан, версионирование сознательно отложено (решение владельца 31.08.2026, D2/§14.7) |
+| 023 | Knowledge lifecycle management Panel/bot | ✅ `ADR-023-knowledge-lifecycle-panel-bot.md` — lifecycle памяти через бота сделан; документы через бота и любой lifecycle через Panel — нет |
 | 024 | Scalable dynamic Knowledge taxonomy | ✅ `ADR-024-dynamic-domain-registry.md` — узкий срез, только реестр доменов, topics/aliases ждут Graphify |
 | 025 | Global-within-user hybrid retrieval | ✅ `ADR-025-hybrid-retrieval.md` — модель выбрана по живому замеру (MiniLM-L12-v2, 384-dim), hybrid retrieval выкачен и подтверждён живьём 31.08.2026 |
 | 026 | Safe ZIP batch ingest + exactly-once completion | ✅ `ADR-026-zip-batch-ingest.md` |
@@ -70,10 +70,14 @@
 | 030 | Tenant isolation: user key + RLS + no cross-user dedup | ✅ `ADR-030-tenant-isolation-rls.md` |
 | 031 | Per-user fair queue/quotas/style isolation | ✅ `ADR-031-per-user-fair-queue-quotas-style.md` |
 
-**Написано 13 из 31.** Важная оговорка: «не написан» не значит «решение
-не принято». Часть оставшихся решений уже реализована в коде и
-обоснована в `V3.8-DELTA.md` и `WORKPLAN.md` — не хватает именно
-отдельного документа в формате ADR. Список §35 требует их до передачи.
+**Написано 27 из 31, один (`021`) частично, три сознательно не
+написаны.** Для оставшихся это не оговорка формата, а два разных
+честных случая: `002` и `007` — решение **действительно не принято**
+(n8n-адаптер и переезд SignalAI, оба проверены отдельным исследованием
+31.08.2026, писать ADR не из чего); `019` — решение сознательно
+отложено вместе с самим Graphify-экспериментом (`E13 =
+INSUFFICIENT_REAL_CORPUS`). Ни один из трёх не «забыт» — для каждого
+выше в таблице написано, почему именно он не написан.
 
 ## Наши собственные решения (100+)
 

@@ -1,8 +1,8 @@
 {
  "generated_by": "tools/graphify.py",
- "corpus_hash": "9d229f17c67f50ebea7a685d1c948278f224d6f61c56d580a7546ae3c98a6d2e",
- "node_count": 488,
- "edge_count": 1878,
+ "corpus_hash": "d108de26df09cc46ef69af0b6fcb1af744e0a3ed1856a3a477461a0de2020eac",
+ "node_count": 527,
+ "edge_count": 2035,
  "nodes": [
   {
    "id": "file:.github/workflows/board.yml",
@@ -1361,6 +1361,12 @@
    "title": "recall.py"
   },
   {
+   "id": "file:helm/tree/control-plane/helm_core/knowledge/relations.py",
+   "type": "file",
+   "path": "helm/tree/control-plane/helm_core/knowledge/relations.py",
+   "title": "relations.py"
+  },
+  {
    "id": "file:helm/tree/control-plane/helm_core/knowledge/rephrase.py",
    "type": "file",
    "path": "helm/tree/control-plane/helm_core/knowledge/rephrase.py",
@@ -1649,6 +1655,12 @@
    "title": "test_knowledge_recall.py"
   },
   {
+   "id": "file:helm/tree/control-plane/tests/test_knowledge_relations.py",
+   "type": "file",
+   "path": "helm/tree/control-plane/tests/test_knowledge_relations.py",
+   "title": "test_knowledge_relations.py"
+  },
+  {
    "id": "file:helm/tree/control-plane/tests/test_knowledge_rephrase.py",
    "type": "file",
    "path": "helm/tree/control-plane/tests/test_knowledge_rephrase.py",
@@ -1823,16 +1835,130 @@
    "title": "HELM Knowledge — Retrieval / Free-first Probe (ТЗ §14.9–§14.14)"
   },
   {
+   "id": "file:helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "type": "file",
+   "path": "helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "title": "ADR-001. Hermes cognitive / Control Plane canonical state"
+  },
+  {
+   "id": "adr:001",
+   "type": "adr",
+   "value": "001",
+   "label": "ADR-001"
+  },
+  {
+   "id": "adr:004",
+   "type": "adr",
+   "value": "004",
+   "label": "ADR-004"
+  },
+  {
+   "id": "file:helm/tree/docs/adr/ADR-003-litellm-routing-ownership.md",
+   "type": "file",
+   "path": "helm/tree/docs/adr/ADR-003-litellm-routing-ownership.md",
+   "title": "ADR-003. LiteLLM routing ownership"
+  },
+  {
+   "id": "adr:003",
+   "type": "adr",
+   "value": "003",
+   "label": "ADR-003"
+  },
+  {
+   "id": "file:helm/tree/docs/adr/ADR-004-hermes-state-non-canonical.md",
+   "type": "file",
+   "path": "helm/tree/docs/adr/ADR-004-hermes-state-non-canonical.md",
+   "title": "ADR-004. Hermes state/Kanban non-canonical"
+  },
+  {
+   "id": "file:helm/tree/docs/adr/ADR-005-health-isolation.md",
+   "type": "file",
+   "path": "helm/tree/docs/adr/ADR-005-health-isolation.md",
+   "title": "ADR-005. Health isolation"
+  },
+  {
+   "id": "adr:005",
+   "type": "adr",
+   "value": "005",
+   "label": "ADR-005"
+  },
+  {
+   "id": "adr:030",
+   "type": "adr",
+   "value": "030",
+   "label": "ADR-030"
+  },
+  {
+   "id": "file:helm/tree/docs/adr/ADR-006-forgejo-primary-github-mirror.md",
+   "type": "file",
+   "path": "helm/tree/docs/adr/ADR-006-forgejo-primary-github-mirror.md",
+   "title": "ADR-006. Forgejo primary / GitHub mirror+CI"
+  },
+  {
+   "id": "adr:006",
+   "type": "adr",
+   "value": "006",
+   "label": "ADR-006"
+  },
+  {
+   "id": "spec_section:18.5",
+   "type": "spec_section",
+   "value": "18.5",
+   "label": "§18.5"
+  },
+  {
+   "id": "file:helm/tree/docs/adr/ADR-008-skills-promotion.md",
+   "type": "file",
+   "path": "helm/tree/docs/adr/ADR-008-skills-promotion.md",
+   "title": "ADR-008. Skills promotion"
+  },
+  {
+   "id": "adr:008",
+   "type": "adr",
+   "value": "008",
+   "label": "ADR-008"
+  },
+  {
    "id": "file:helm/tree/docs/adr/ADR-009-action-registry.md",
    "type": "file",
    "path": "helm/tree/docs/adr/ADR-009-action-registry.md",
    "title": "ADR-009. Реестр действий и единственный путь исполнения"
   },
   {
+   "id": "file:helm/tree/docs/adr/ADR-010-graduated-trust.md",
+   "type": "file",
+   "path": "helm/tree/docs/adr/ADR-010-graduated-trust.md",
+   "title": "ADR-010. Graduated trust"
+  },
+  {
+   "id": "adr:010",
+   "type": "adr",
+   "value": "010",
+   "label": "ADR-010"
+  },
+  {
+   "id": "file:helm/tree/docs/adr/ADR-011-no-heavy-monitoring-v1.md",
+   "type": "file",
+   "path": "helm/tree/docs/adr/ADR-011-no-heavy-monitoring-v1.md",
+   "title": "ADR-011. No heavy monitoring stack in v1"
+  },
+  {
+   "id": "adr:011",
+   "type": "adr",
+   "value": "011",
+   "label": "ADR-011"
+  },
+  {
    "id": "file:helm/tree/docs/adr/ADR-012-durable-execution.md",
    "type": "file",
    "path": "helm/tree/docs/adr/ADR-012-durable-execution.md",
    "title": "ADR-012. Durable execution: Postgres-механизм без живого спайка DBOS"
+  },
+  {
+   "id": "file:helm/tree/docs/adr/ADR-013-telegram-pre-dispatch-gate.md",
+   "type": "file",
+   "path": "helm/tree/docs/adr/ADR-013-telegram-pre-dispatch-gate.md",
+   "title": "ADR-013. Telegram pre-dispatch Control Plane gate"
   },
   {
    "id": "file:helm/tree/docs/adr/ADR-014-max-responses-api.md",
@@ -1847,6 +1973,36 @@
    "label": "F-260829-21"
   },
   {
+   "id": "file:helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "type": "file",
+   "path": "helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "title": "ADR-015. HELM Panel static frontend + Control Plane backend"
+  },
+  {
+   "id": "spec_section:10.5.2",
+   "type": "spec_section",
+   "value": "10.5.2",
+   "label": "§10.5.2"
+  },
+  {
+   "id": "spec_section:10.5.3",
+   "type": "spec_section",
+   "value": "10.5.3",
+   "label": "§10.5.3"
+  },
+  {
+   "id": "file:helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "type": "file",
+   "path": "helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "title": "ADR-016. Panel Telegram Login + WebAuthn (спека предлагала OIDC)"
+  },
+  {
+   "id": "adr:016",
+   "type": "adr",
+   "value": "016",
+   "label": "ADR-016"
+  },
+  {
    "id": "file:helm/tree/docs/adr/ADR-017-offline-build.md",
    "type": "file",
    "path": "helm/tree/docs/adr/ADR-017-offline-build.md",
@@ -1857,6 +2013,18 @@
    "type": "file",
    "path": "helm/tree/docs/adr/ADR-018-single-agent.md",
    "title": "ADR-018. Мультимодельная реализация: фактическое отклонение"
+  },
+  {
+   "id": "file:helm/tree/docs/adr/ADR-020-strict-zero-paid-knowledge-lock.md",
+   "type": "file",
+   "path": "helm/tree/docs/adr/ADR-020-strict-zero-paid-knowledge-lock.md",
+   "title": "ADR-020. Strict zero-paid Knowledge lock"
+  },
+  {
+   "id": "adr:020",
+   "type": "adr",
+   "value": "020",
+   "label": "ADR-020"
   },
   {
    "id": "file:helm/tree/docs/adr/ADR-021-gigaam-voice-pipeline.md",
@@ -1875,6 +2043,30 @@
    "type": "finding",
    "value": "260831-04",
    "label": "F-260831-04"
+  },
+  {
+   "id": "file:helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "type": "file",
+   "path": "helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "title": "ADR-022. Smart source dedup + versioning"
+  },
+  {
+   "id": "adr:022",
+   "type": "adr",
+   "value": "022",
+   "label": "ADR-022"
+  },
+  {
+   "id": "file:helm/tree/docs/adr/ADR-023-knowledge-lifecycle-panel-bot.md",
+   "type": "file",
+   "path": "helm/tree/docs/adr/ADR-023-knowledge-lifecycle-panel-bot.md",
+   "title": "ADR-023. Knowledge lifecycle management Panel/bot"
+  },
+  {
+   "id": "adr:023",
+   "type": "adr",
+   "value": "023",
+   "label": "ADR-023"
   },
   {
    "id": "file:helm/tree/docs/adr/ADR-024-dynamic-domain-registry.md",
@@ -1907,10 +2099,52 @@
    "title": "ADR-026. ZIP batch ingest: безопасная распаковка + durable очередь + exactly-once финал"
   },
   {
+   "id": "file:helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "type": "file",
+   "path": "helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "title": "ADR-027. Micro-Memory «Запомни» fast path"
+  },
+  {
+   "id": "adr:027",
+   "type": "adr",
+   "value": "027",
+   "label": "ADR-027"
+  },
+  {
+   "id": "file:helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "type": "file",
+   "path": "helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "title": "ADR-028. Knowledge tenant model: SYSTEM_OWNER vs KNOWLEDGE_USER"
+  },
+  {
+   "id": "adr:028",
+   "type": "adr",
+   "value": "028",
+   "label": "ADR-028"
+  },
+  {
    "id": "file:helm/tree/docs/adr/ADR-029-dedicated-knowledge-telegram-bot.md",
    "type": "file",
    "path": "helm/tree/docs/adr/ADR-029-dedicated-knowledge-telegram-bot.md",
    "title": "ADR-029. Dedicated Knowledge Telegram Bot + invite/identity verification"
+  },
+  {
+   "id": "file:helm/tree/docs/adr/ADR-030-tenant-isolation-rls.md",
+   "type": "file",
+   "path": "helm/tree/docs/adr/ADR-030-tenant-isolation-rls.md",
+   "title": "ADR-030. Tenant isolation: user key + RLS + no cross-user dedup"
+  },
+  {
+   "id": "file:helm/tree/docs/adr/ADR-031-per-user-fair-queue-quotas-style.md",
+   "type": "file",
+   "path": "helm/tree/docs/adr/ADR-031-per-user-fair-queue-quotas-style.md",
+   "title": "ADR-031. Per-user fair queue/quotas/style isolation"
+  },
+  {
+   "id": "adr:031",
+   "type": "adr",
+   "value": "031",
+   "label": "ADR-031"
   },
   {
    "id": "file:helm/tree/docs/adr/ADR-101-timezone-moscow.md",
@@ -1937,10 +2171,10 @@
    "title": "Решения по архитектуре (ADR)"
   },
   {
-   "id": "adr:020",
-   "type": "adr",
-   "value": "020",
-   "label": "ADR-020"
+   "id": "file:helm/tree/docs/handoff/SECRETS_MAP.md",
+   "type": "file",
+   "path": "helm/tree/docs/handoff/SECRETS_MAP.md",
+   "title": "SECRETS_MAP — где живёт что (без значений)"
   },
   {
    "id": "file:helm/tree/guardian/.pytest_cache/README.md",
@@ -2013,12 +2247,6 @@
    "type": "spec_section",
    "value": "18.3",
    "label": "§18.3"
-  },
-  {
-   "id": "spec_section:18.5",
-   "type": "spec_section",
-   "value": "18.5",
-   "label": "§18.5"
   },
   {
    "id": "spec_section:18.6",
@@ -2195,12 +2423,6 @@
    "title": "HELM Panel"
   },
   {
-   "id": "spec_section:10.5.2",
-   "type": "spec_section",
-   "value": "10.5.2",
-   "label": "§10.5.2"
-  },
-  {
    "id": "file:helm/tree/panel/design-source/HELM_PANEL_DESIGN_BRIEF.md",
    "type": "file",
    "path": "helm/tree/panel/design-source/HELM_PANEL_DESIGN_BRIEF.md",
@@ -2331,6 +2553,12 @@
    "type": "file",
    "path": "helm/tree/scripts/disk-usage-report.sh",
    "title": "disk-usage-report.sh"
+  },
+  {
+   "id": "file:helm/tree/scripts/e13-corpus-check.sh",
+   "type": "file",
+   "path": "helm/tree/scripts/e13-corpus-check.sh",
+   "title": "e13-corpus-check.sh"
   },
   {
    "id": "file:helm/tree/scripts/forgejo-migrate-runbook.md",
@@ -2727,6 +2955,12 @@
    "type": "file",
    "path": "helm/tree/scripts/v37-v38-deploy-runbook.md",
    "title": "Ранбук: выкатить v3.7 + v3.8 одним заходом"
+  },
+  {
+   "id": "file:helm/tree/scripts/verify-e13-relations.sh",
+   "type": "file",
+   "path": "helm/tree/scripts/verify-e13-relations.sh",
+   "title": "verify-e13-relations.sh"
   },
   {
    "id": "file:helm/tree/scripts/verify-gigaam-audio-pipeline.sh",
@@ -6868,7 +7102,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 40
+   "line": 41
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -6876,7 +7110,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 47
+   "line": 48
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -6884,7 +7118,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 67
+   "line": 68
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -6892,7 +7126,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 67
+   "line": 68
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -6900,11 +7134,11 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 70
+   "line": 71
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "to": "adr:025",
+   "to": "roadmap_item:5.6",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -6912,11 +7146,19 @@
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
+   "to": "adr:025",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
+   "line": 104
+  },
+  {
+   "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
    "to": "spec_section:14.5.1",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 132
+   "line": 139
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -6924,7 +7166,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 136
+   "line": 143
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -6932,7 +7174,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 138
+   "line": 145
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -6940,7 +7182,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 154
+   "line": 161
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/memory.py",
@@ -7655,6 +7897,22 @@
    "line": 164
   },
   {
+   "from": "file:helm/tree/control-plane/helm_core/knowledge/relations.py",
+   "to": "roadmap_item:5.6",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/control-plane/helm_core/knowledge/relations.py",
+   "line": 1
+  },
+  {
+   "from": "file:helm/tree/control-plane/helm_core/knowledge/relations.py",
+   "to": "roadmap_item:5.6",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/control-plane/helm_core/knowledge/relations.py",
+   "line": 24
+  },
+  {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/rephrase.py",
    "to": "spec_section:14.12",
    "relation_type": "relates_to",
@@ -7804,7 +8062,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
-   "line": 52
+   "line": 53
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
@@ -7812,7 +8070,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
-   "line": 59
+   "line": 60
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
@@ -7820,7 +8078,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
-   "line": 83
+   "line": 84
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
@@ -7828,7 +8086,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
-   "line": 120
+   "line": 121
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
@@ -7836,7 +8094,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
-   "line": 159
+   "line": 160
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
@@ -7844,7 +8102,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
-   "line": 159
+   "line": 160
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
@@ -7852,7 +8110,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
-   "line": 172
+   "line": 173
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
@@ -7860,7 +8118,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
-   "line": 206
+   "line": 207
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
@@ -7868,7 +8126,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
-   "line": 213
+   "line": 214
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
@@ -7876,7 +8134,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
-   "line": 253
+   "line": 254
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
@@ -7884,7 +8142,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
-   "line": 255
+   "line": 256
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
@@ -7892,7 +8150,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
-   "line": 276
+   "line": 277
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
@@ -7900,7 +8158,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
-   "line": 278
+   "line": 279
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
@@ -7908,11 +8166,11 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
-   "line": 280
+   "line": 281
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
-   "to": "adr:025",
+   "to": "roadmap_item:5.6",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
@@ -7920,11 +8178,19 @@
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
+   "to": "adr:025",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
+   "line": 299
+  },
+  {
+   "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
    "to": "roadmap_item:5.7",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
-   "line": 307
+   "line": 317
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
@@ -7932,7 +8198,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
-   "line": 313
+   "line": 323
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
@@ -7940,7 +8206,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
-   "line": 329
+   "line": 339
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
@@ -7948,7 +8214,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/worker.py",
-   "line": 368
+   "line": 378
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/zip_safety.py",
@@ -9637,6 +9903,14 @@
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/tests/test_knowledge_recall.py",
    "line": 243
+  },
+  {
+   "from": "file:helm/tree/control-plane/tests/test_knowledge_relations.py",
+   "to": "roadmap_item:5.6",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/control-plane/tests/test_knowledge_relations.py",
+   "line": 1
   },
   {
    "from": "file:helm/tree/control-plane/tests/test_knowledge_rephrase.py",
@@ -11335,6 +11609,222 @@
    "line": 172
   },
   {
+   "from": "file:helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "to": "adr:001",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "line": 1
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "to": "adr:012",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "line": 4
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "to": "adr:014",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "line": 4
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "to": "spec_section:10.1",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "line": 22
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "to": "adr:012",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "line": 33
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "to": "adr:014",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "line": 37
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "to": "spec_section:10.1",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "line": 38
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "to": "spec_section:10.2",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "line": 44
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "to": "adr:004",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-001-hermes-control-plane-canonical-state.md",
+   "line": 58
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-003-litellm-routing-ownership.md",
+   "to": "adr:003",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-003-litellm-routing-ownership.md",
+   "line": 1
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-003-litellm-routing-ownership.md",
+   "to": "spec_section:15.4",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-003-litellm-routing-ownership.md",
+   "line": 25
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-004-hermes-state-non-canonical.md",
+   "to": "adr:004",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-004-hermes-state-non-canonical.md",
+   "line": 1
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-004-hermes-state-non-canonical.md",
+   "to": "adr:012",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-004-hermes-state-non-canonical.md",
+   "line": 41
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-004-hermes-state-non-canonical.md",
+   "to": "adr:012",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-004-hermes-state-non-canonical.md",
+   "line": 54
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-004-hermes-state-non-canonical.md",
+   "to": "adr:001",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-004-hermes-state-non-canonical.md",
+   "line": 63
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-005-health-isolation.md",
+   "to": "adr:005",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-005-health-isolation.md",
+   "line": 1
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-005-health-isolation.md",
+   "to": "spec_section:14.15",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-005-health-isolation.md",
+   "line": 9
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-005-health-isolation.md",
+   "to": "spec_section:14.15",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-005-health-isolation.md",
+   "line": 45
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-005-health-isolation.md",
+   "to": "roadmap_item:5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-005-health-isolation.md",
+   "line": 50
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-005-health-isolation.md",
+   "to": "spec_section:14.15",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-005-health-isolation.md",
+   "line": 53
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-005-health-isolation.md",
+   "to": "adr:030",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-005-health-isolation.md",
+   "line": 56
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-005-health-isolation.md",
+   "to": "spec_section:14.15",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-005-health-isolation.md",
+   "line": 75
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-006-forgejo-primary-github-mirror.md",
+   "to": "adr:006",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-006-forgejo-primary-github-mirror.md",
+   "line": 1
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-006-forgejo-primary-github-mirror.md",
+   "to": "spec_section:18.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-006-forgejo-primary-github-mirror.md",
+   "line": 24
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-008-skills-promotion.md",
+   "to": "adr:008",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-008-skills-promotion.md",
+   "line": 1
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-008-skills-promotion.md",
+   "to": "adr:009",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-008-skills-promotion.md",
+   "line": 20
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-008-skills-promotion.md",
+   "to": "adr:009",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-008-skills-promotion.md",
+   "line": 36
+  },
+  {
    "from": "file:helm/tree/docs/adr/ADR-009-action-registry.md",
    "to": "adr:009",
    "relation_type": "relates_to",
@@ -11349,6 +11839,30 @@
    "evidence_type": "explicit_link",
    "file": "helm/tree/docs/adr/ADR-009-action-registry.md",
    "line": 7
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-010-graduated-trust.md",
+   "to": "adr:010",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-010-graduated-trust.md",
+   "line": 1
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-011-no-heavy-monitoring-v1.md",
+   "to": "adr:011",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-011-no-heavy-monitoring-v1.md",
+   "line": 1
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-011-no-heavy-monitoring-v1.md",
+   "to": "spec_section:30.10",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-011-no-heavy-monitoring-v1.md",
+   "line": 33
   },
   {
    "from": "file:helm/tree/docs/adr/ADR-012-durable-execution.md",
@@ -11405,6 +11919,30 @@
    "evidence_type": "explicit_link",
    "file": "helm/tree/docs/adr/ADR-012-durable-execution.md",
    "line": 34
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-013-telegram-pre-dispatch-gate.md",
+   "to": "adr:013",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-013-telegram-pre-dispatch-gate.md",
+   "line": 1
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-013-telegram-pre-dispatch-gate.md",
+   "to": "spec_section:9.3",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-013-telegram-pre-dispatch-gate.md",
+   "line": 9
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-013-telegram-pre-dispatch-gate.md",
+   "to": "spec_section:14.11",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-013-telegram-pre-dispatch-gate.md",
+   "line": 29
   },
   {
    "from": "file:helm/tree/docs/adr/ADR-014-max-responses-api.md",
@@ -11551,6 +12089,182 @@
    "line": 199
   },
   {
+   "from": "file:helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "to": "adr:015",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "line": 1
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "to": "spec_section:10.5.2",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "line": 9
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "to": "spec_section:10.5.3",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "line": 9
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "to": "spec_section:7.3",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "line": 9
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "to": "spec_section:10.5.2",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "line": 21
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "to": "spec_section:10.5.2",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "line": 30
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "to": "spec_section:10.5.3",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "line": 30
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "to": "spec_section:7.3",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "line": 36
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "to": "spec_section:10.5.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "line": 36
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "to": "spec_section:30.7",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "line": 40
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "to": "spec_section:7.3",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "line": 43
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "to": "adr:025",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "line": 52
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "to": "roadmap_item:6.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-015-panel-static-frontend.md",
+   "line": 54
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "to": "adr:016",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "line": 1
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "to": "adr:017",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "line": 8
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "to": "spec_section:10.5.6",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "line": 13
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "to": "spec_section:10.5.8.2",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "line": 13
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "to": "spec_section:10.5.7",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "line": 44
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "to": "spec_section:10.5.8",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "line": 47
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "to": "spec_section:10.5.8.1",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "line": 47
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "to": "spec_section:7.2",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "line": 60
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "to": "roadmap_item:6.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-016-panel-telegram-webauthn.md",
+   "line": 66
+  },
+  {
    "from": "file:helm/tree/docs/adr/ADR-017-offline-build.md",
    "to": "adr:017",
    "relation_type": "relates_to",
@@ -11621,6 +12335,46 @@
    "evidence_type": "explicit_link",
    "file": "helm/tree/docs/adr/ADR-018-single-agent.md",
    "line": 23
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-020-strict-zero-paid-knowledge-lock.md",
+   "to": "adr:020",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-020-strict-zero-paid-knowledge-lock.md",
+   "line": 1
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-020-strict-zero-paid-knowledge-lock.md",
+   "to": "spec_section:14.1",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-020-strict-zero-paid-knowledge-lock.md",
+   "line": 8
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-020-strict-zero-paid-knowledge-lock.md",
+   "to": "adr:029",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-020-strict-zero-paid-knowledge-lock.md",
+   "line": 42
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-020-strict-zero-paid-knowledge-lock.md",
+   "to": "spec_section:14.14",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-020-strict-zero-paid-knowledge-lock.md",
+   "line": 52
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-020-strict-zero-paid-knowledge-lock.md",
+   "to": "roadmap_item:5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-020-strict-zero-paid-knowledge-lock.md",
+   "line": 62
   },
   {
    "from": "file:helm/tree/docs/adr/ADR-021-gigaam-voice-pipeline.md",
@@ -11733,6 +12487,174 @@
    "evidence_type": "explicit_link",
    "file": "helm/tree/docs/adr/ADR-021-gigaam-voice-pipeline.md",
    "line": 275
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "to": "adr:022",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "line": 1
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "to": "spec_section:14.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "line": 9
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "to": "spec_section:14.7",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "line": 9
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "to": "spec_section:14.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "line": 17
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "to": "adr:030",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "line": 21
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "to": "spec_section:14.2",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "line": 21
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "to": "adr:026",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "line": 25
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "to": "adr:024",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "line": 31
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "to": "spec_section:14.7",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "line": 33
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "to": "roadmap_item:5.4",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "line": 33
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "to": "spec_section:14.7",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "line": 39
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "to": "roadmap_item:5.4",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "line": 40
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "to": "adr:025",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "line": 52
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "to": "spec_section:14.7",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-022-source-dedup-versioning.md",
+   "line": 61
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-023-knowledge-lifecycle-panel-bot.md",
+   "to": "adr:023",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-023-knowledge-lifecycle-panel-bot.md",
+   "line": 1
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-023-knowledge-lifecycle-panel-bot.md",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-023-knowledge-lifecycle-panel-bot.md",
+   "line": 10
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-023-knowledge-lifecycle-panel-bot.md",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-023-knowledge-lifecycle-panel-bot.md",
+   "line": 20
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-023-knowledge-lifecycle-panel-bot.md",
+   "to": "adr:030",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-023-knowledge-lifecycle-panel-bot.md",
+   "line": 34
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-023-knowledge-lifecycle-panel-bot.md",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-023-knowledge-lifecycle-panel-bot.md",
+   "line": 39
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-023-knowledge-lifecycle-panel-bot.md",
+   "to": "roadmap_item:6.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-023-knowledge-lifecycle-panel-bot.md",
+   "line": 50
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-023-knowledge-lifecycle-panel-bot.md",
+   "to": "adr:022",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-023-knowledge-lifecycle-panel-bot.md",
+   "line": 53
   },
   {
    "from": "file:helm/tree/docs/adr/ADR-024-dynamic-domain-registry.md",
@@ -11999,6 +12921,190 @@
    "line": 117
   },
   {
+   "from": "file:helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "to": "adr:027",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "line": 1
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "to": "spec_section:14.10",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "line": 14
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "to": "roadmap_item:5.12",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "line": 14
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "to": "spec_section:14.10",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "line": 41
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "to": "adr:101",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "line": 45
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "to": "spec_section:14.10",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "line": 47
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "to": "spec_section:14.10",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "line": 48
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "to": "spec_section:14.10",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "line": 51
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "to": "roadmap_item:5.6",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "line": 60
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "to": "adr:021",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "line": 69
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "to": "spec_section:14.12",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "line": 75
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "to": "spec_section:14.14",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "line": 78
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "to": "spec_section:30.8.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "line": 82
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "to": "spec_section:14.13",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md",
+   "line": 83
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "to": "adr:028",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "line": 1
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "to": "spec_section:14.2",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "line": 11
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "to": "adr:029",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "line": 21
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "to": "spec_section:14.1",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "line": 26
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "to": "adr:029",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "line": 31
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "to": "adr:030",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "line": 35
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "to": "roadmap_item:6.2",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "line": 47
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "to": "spec_section:14.3",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "line": 63
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "to": "roadmap_item:6.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-028-knowledge-tenant-model.md",
+   "line": 64
+  },
+  {
    "from": "file:helm/tree/docs/adr/ADR-029-dedicated-knowledge-telegram-bot.md",
    "to": "adr:029",
    "relation_type": "relates_to",
@@ -12077,6 +13183,94 @@
    "evidence_type": "explicit_link",
    "file": "helm/tree/docs/adr/ADR-029-dedicated-knowledge-telegram-bot.md",
    "line": 98
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-030-tenant-isolation-rls.md",
+   "to": "adr:030",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-030-tenant-isolation-rls.md",
+   "line": 1
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-030-tenant-isolation-rls.md",
+   "to": "spec_section:14.4",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-030-tenant-isolation-rls.md",
+   "line": 10
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-030-tenant-isolation-rls.md",
+   "to": "spec_section:14.2",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-030-tenant-isolation-rls.md",
+   "line": 71
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-031-per-user-fair-queue-quotas-style.md",
+   "to": "adr:031",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-031-per-user-fair-queue-quotas-style.md",
+   "line": 1
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-031-per-user-fair-queue-quotas-style.md",
+   "to": "spec_section:14.4",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-031-per-user-fair-queue-quotas-style.md",
+   "line": 9
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-031-per-user-fair-queue-quotas-style.md",
+   "to": "spec_section:14.4",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-031-per-user-fair-queue-quotas-style.md",
+   "line": 26
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-031-per-user-fair-queue-quotas-style.md",
+   "to": "adr:030",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-031-per-user-fair-queue-quotas-style.md",
+   "line": 47
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-031-per-user-fair-queue-quotas-style.md",
+   "to": "adr:021",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-031-per-user-fair-queue-quotas-style.md",
+   "line": 64
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-031-per-user-fair-queue-quotas-style.md",
+   "to": "adr:028",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-031-per-user-fair-queue-quotas-style.md",
+   "line": 76
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-031-per-user-fair-queue-quotas-style.md",
+   "to": "roadmap_item:6.6",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-031-per-user-fair-queue-quotas-style.md",
+   "line": 78
+  },
+  {
+   "from": "file:helm/tree/docs/adr/ADR-031-per-user-fair-queue-quotas-style.md",
+   "to": "roadmap_item:6.6",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/ADR-031-per-user-fair-queue-quotas-style.md",
+   "line": 87
   },
   {
    "from": "file:helm/tree/docs/adr/ADR-101-timezone-moscow.md",
@@ -12384,11 +13578,75 @@
   },
   {
    "from": "file:helm/tree/docs/adr/README.md",
+   "to": "adr:001",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 41
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
+   "to": "adr:003",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 43
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
+   "to": "adr:004",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 44
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
+   "to": "adr:005",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 45
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
+   "to": "adr:006",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 46
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
+   "to": "adr:008",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 48
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
    "to": "adr:009",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/docs/adr/README.md",
    "line": 49
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
+   "to": "adr:010",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 50
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
+   "to": "adr:011",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 51
   },
   {
    "from": "file:helm/tree/docs/adr/README.md",
@@ -12400,11 +13658,35 @@
   },
   {
    "from": "file:helm/tree/docs/adr/README.md",
+   "to": "adr:013",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 53
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
    "to": "adr:014",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/docs/adr/README.md",
    "line": 54
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
+   "to": "adr:015",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 55
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
+   "to": "adr:016",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 56
   },
   {
    "from": "file:helm/tree/docs/adr/README.md",
@@ -12424,11 +13706,43 @@
   },
   {
    "from": "file:helm/tree/docs/adr/README.md",
+   "to": "adr:020",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 60
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
    "to": "adr:021",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/docs/adr/README.md",
    "line": 61
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
+   "to": "adr:022",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 62
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
+   "to": "spec_section:14.7",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 62
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
+   "to": "adr:023",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 63
   },
   {
    "from": "file:helm/tree/docs/adr/README.md",
@@ -12456,11 +13770,75 @@
   },
   {
    "from": "file:helm/tree/docs/adr/README.md",
+   "to": "adr:027",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 67
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
+   "to": "adr:028",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 68
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
    "to": "adr:029",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/docs/adr/README.md",
    "line": 69
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
+   "to": "adr:030",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 70
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
+   "to": "adr:031",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 71
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/SECRETS_MAP.md",
+   "to": "spec_section:5.4",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/SECRETS_MAP.md",
+   "line": 13
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/SECRETS_MAP.md",
+   "to": "adr:014",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/SECRETS_MAP.md",
+   "line": 43
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/SECRETS_MAP.md",
+   "to": "spec_section:10.2",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/SECRETS_MAP.md",
+   "line": 44
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/SECRETS_MAP.md",
+   "to": "adr:029",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/SECRETS_MAP.md",
+   "line": 47
   },
   {
    "from": "file:helm/tree/guardian/cleanup.sh",
@@ -13128,6 +14506,14 @@
   },
   {
    "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "to": "adr:019",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "line": 144
+  },
+  {
+   "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
    "to": "roadmap_item:5.6",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
@@ -13148,7 +14534,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
-   "line": 154
+   "line": 155
   },
   {
    "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
@@ -13156,7 +14542,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
-   "line": 154
+   "line": 155
   },
   {
    "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
@@ -13164,7 +14550,103 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
-   "line": 155
+   "line": 156
+  },
+  {
+   "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "to": "adr:019",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "line": 162
+  },
+  {
+   "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "to": "adr:101",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "line": 162
+  },
+  {
+   "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "to": "adr:020",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "line": 162
+  },
+  {
+   "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "to": "adr:014",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "line": 163
+  },
+  {
+   "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "to": "adr:021",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "line": 163
+  },
+  {
+   "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "to": "adr:102",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "line": 163
+  },
+  {
+   "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "to": "adr:024",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "line": 164
+  },
+  {
+   "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "to": "adr:026",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "line": 164
+  },
+  {
+   "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "to": "adr:025",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "line": 165
+  },
+  {
+   "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "to": "adr:029",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "line": 165
+  },
+  {
+   "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "to": "adr:019",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "line": 167
+  },
+  {
+   "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "to": "adr:027",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "line": 172
   },
   {
    "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
@@ -13172,7 +14654,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
-   "line": 226
+   "line": 241
   },
   {
    "from": "file:helm/tree/implementation-state/V3.4-DELTA.md",
@@ -15541,6 +17023,14 @@
    "evidence_type": "explicit_link",
    "file": "helm/tree/scripts/disk-cleanup.sh",
    "line": 9
+  },
+  {
+   "from": "file:helm/tree/scripts/e13-corpus-check.sh",
+   "to": "spec_section:5.1",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/scripts/e13-corpus-check.sh",
+   "line": 4
   },
   {
    "from": "file:helm/tree/scripts/forgejo-migrate-runbook.md",
