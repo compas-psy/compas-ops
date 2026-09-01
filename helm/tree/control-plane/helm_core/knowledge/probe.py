@@ -62,6 +62,21 @@ from ..models.base import utcnow
 #: реальном golden-set, не раньше.
 MIN_RANK_SCORE = 0.003
 
+#: НАЙДЕНО 01.09.2026 (реальный чат владельца): "каких врачей я посещал"
+#: вернул 5 совпадений "Врач КДЛ:" — подпись лаборанта на бланке анализа,
+#: попадающая в СВОЙ отдельный чанк (несколько слов), а не реальные
+#: посещения врача. ts_rank(normalization=2) делит ранг на длину
+#: документа — короткий чанк, целиком состоящий из совпавшего слова,
+#: получает завышенный ранг вне зависимости от того, несёт ли он вообще
+#: какую-то информацию. Раз лексика с приоритетом закрывает MAX_EVIDENCE
+#: (ADR-025 docstring выше), 5 одинаковых пустых фрагментов не оставляли
+#: pgvector ни единого шанса найти реальные "ОСМОТР ГАСТРОЭНТЕРОЛОГА"/
+#: "Врач уролог: Кириченко..." (подтверждённый живым замером cosine
+#: 0.67-0.71). Порог — не про качество совпадения, а про то, есть ли в
+#: чанке вообще что процитировать: "Врач КДЛ:" (9 символов) непригоден
+#: как Z0/Z1-цитата независимо от ранга.
+MIN_LEXICAL_CHUNK_CHARS = 20
+
 #: Верхних чанков берём — и для Z1-перечисления, и (в будущем) для
 #: evidence pack, уходящего в Hermes при NEEDS_REASONING.
 MAX_EVIDENCE = 5
@@ -121,6 +136,7 @@ def _lexical_search(session: Session, *, query: str, domain: str | None,
         select(KnowledgeChunk, KnowledgeSource, rank)
         .join(KnowledgeSource, KnowledgeChunk.source_id == KnowledgeSource.id)
         .where(KnowledgeChunk.tsv.op("@@")(tsquery))
+        .where(func.length(KnowledgeChunk.text) >= MIN_LEXICAL_CHUNK_CHARS)
         .where(KnowledgeSource.status != KnowledgeStatus.ARCHIVED)
         # v3.8 §14.4 query rule: knowledge_user_id — первый предикат, не
         # последний штрих. Explicit-предикат здесь — первый слой defense
@@ -194,6 +210,7 @@ def _health_lexical_search(*, query: str, knowledge_user_id: uuid.UUID) -> list[
             .outerjoin(HealthKnowledgeSourcePrivate,
                       HealthKnowledgeChunk.source_id == HealthKnowledgeSourcePrivate.source_id)
             .where(HealthKnowledgeChunk.tsv.op("@@")(tsquery))
+            .where(func.length(HealthKnowledgeChunk.text) >= MIN_LEXICAL_CHUNK_CHARS)
             .where(HealthKnowledgeChunk.knowledge_user_id == knowledge_user_id)
             .order_by(rank.desc())
             .limit(MAX_EVIDENCE)
