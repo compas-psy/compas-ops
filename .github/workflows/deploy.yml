@@ -115,8 +115,21 @@ jobs:
       # ── backup: точка возврата перед всем остальным ──────────────────
       - name: Точка возврата
         if: inputs.action == 'backup' || inputs.action == 'deploy'
+        # НАЙДЕНО 01.09.2026: первый в истории полный бэкап (restic "no
+        # parent snapshot found, will read all files") оборвался через
+        # ~4.5 минуты SSH "Broken pipe" — backup.sh не пишет в stdout,
+        # пока restic молча читает/чанкует/заливает через rclone на
+        # Яндекс Диск, и за это время нет вообще никакого трафика через
+        # соединение. Похоже на idle-таймаут NAT/файрвола на пути
+        # раннер→сервер (типичный дефолт — 300 секунд, совпадает по
+        # времени), а не на реальное зависание restic. ServerAlive*
+        # держит TCP живым на уровне протокола SSH независимо от того,
+        # молчит удалённая команда или нет — тот же класс проблемы, что
+        # уже чинили в F-260831-07 (SFTP-зависание `scp -r`), но здесь
+        # решение не смена протокола, а keepalive.
         run: |
-          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" 'sudo /opt/helm/scripts/backup.sh'
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=12 \
+            -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" 'sudo /opt/helm/scripts/backup.sh'
 
       # ── deploy: код, панель, конфигурация, пересборка ────────────────
       - uses: actions/setup-node@v4
@@ -246,8 +259,11 @@ jobs:
 
       - name: Проверка восстановления
         if: inputs.action == 'restore-test'
+        # Тот же keepalive, что у "Точка возврата" — тут тоже сначала
+        # молча отрабатывает backup.sh.
         run: |
-          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=12 \
+            -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
             'sudo /opt/helm/scripts/backup.sh && sudo /opt/helm/scripts/restore_test.sh'
 
       - name: Откат схемы
