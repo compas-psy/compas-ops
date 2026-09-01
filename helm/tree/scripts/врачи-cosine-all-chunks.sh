@@ -1,8 +1,20 @@
 #!/bin/bash
 # Реальный косинус (через embed_texts_or_none — тот же путь, что probe())
-# между "каких врачей я посещал" и КАЖДЫМ чанком батча "Врачи.zip", без
-# regex-фильтра кандидатов (raw dump уже показал: специальности реально
-# есть в тексте — "ОСМОТР УРОЛОГА", "ОСМОТР ГАСТРОЭНТЕРОЛОГА" и т.д.).
+# между "каких врачей я посещал" и КАЖДЫМ health-чанком, без regex-фильтра
+# кандидатов (raw dump уже показал: специальности реально есть в тексте —
+# "ОСМОТР УРОЛОГА", "ОСМОТР ГАСТРОЭНТЕРОЛОГА" и т.д.).
+#
+# ВАЖНО: фильтр по domain='health' (ASCII), не по archive_filename='Врачи.zip'.
+# Предыдущая версия с кириллическим литералом в WHERE нашла "0 чанков" —
+# притом что тот же самый литерал через обычный psql -c по ssh находил их
+# без проблем. Это воспроизводимый баг ИМЕННО в передаче кириллического
+# строкового литерала внутри Python-источника через
+# `docker compose exec -T ... python3 <<'PY'` — не баг в реальном
+# коде поиска (probe.py никогда не печёт кириллицу в текст SQL-запроса,
+# текст вопроса всегда идёт биндом через параметр функции). domain и все
+# остальные фильтры здесь — чистый ASCII, чтобы не наступить на тот же
+# баг снова.
+#
 # Цель: увидеть, где относительно MIN_COSINE_SIMILARITY=0.35 оказываются
 # именно "голые" чанки-заголовки без слова "врач" — там, где лексика по
 # определению их не найдёт и вся надежда на семантику.
@@ -33,14 +45,12 @@ with Session(engine) as s:
         select c.id, c.text, c.embedding
         from knowledge_chunks c
         join knowledge_sources s on s.id = c.source_id
-        join knowledge_batch_items i on i.source_id = s.id
-        join knowledge_ingest_batches b on b.id = i.batch_id
-        where b.archive_filename = 'Врачи.zip'
+        where s.domain = 'health'
         order by c.source_id, c.ordinal
         """
     )).all()
 
-print(f"всего чанков в батче: {len(rows)}")
+print(f"всего health-чанков: {len(rows)}")
 
 scored = []
 for chunk_id, chunk_text, embedding in rows:
