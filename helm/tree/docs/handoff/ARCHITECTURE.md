@@ -69,8 +69,9 @@ frontmatter (§14.3, читаемо напрямую Obsidian/SFTP) + Postgres
 Мультитенантность — `knowledge_user_id` на каждой tenant-scoped
 таблице, изоляция — двойной слой: явный предикат в коде + PostgreSQL
 RLS `FORCE` (ADR-030). Graphify — задуманный derived-слой поверх
-`knowledge_relations`, ещё не начат (`E13 = INSUFFICIENT_REAL_CORPUS`,
-`docs/KNOWLEDGE_MODELS.md`).
+`knowledge_relations`, решение принято 01.09.2026 (`ADR-019-knowledge-
+canonical-markdown-graphify.md`), реализация (semantic atomizer →
+L2-заметки → relations → Graphify) не начата.
 
 ## Сеть и периметр
 

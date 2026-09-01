@@ -56,7 +56,7 @@
 | 016 | Panel Telegram OIDC + WebAuthn | ✅ `ADR-016-panel-telegram-webauthn.md` — реализовано другое: Telegram Login Widget, не OIDC (задокументированное отклонение, OIDC недоступен у BotFather для этого бота) |
 | 017 | Live-server-first initial deployment | ✅ `ADR-017-offline-build.md` — отклонено, выбрана офлайн-сборка |
 | 018 | Multimodel implementation policy | ✅ `ADR-018-single-agent.md` — отклонено фактически |
-| 019 | Knowledge canonical Markdown/Postgres; Graphify derived | не написан — сознательно: решение фиксируется вместе с самим Graphify-экспериментом, который пока `E13 = INSUFFICIENT_REAL_CORPUS` (см. `docs/KNOWLEDGE_MODELS.md`) |
+| 019 | Knowledge canonical Markdown/Postgres; Graphify derived | 🟡 `ADR-019-knowledge-canonical-markdown-graphify.md` — решение принято 01.09.2026 (E13 пересмотрен, корпус реальный: 90 health-источников), реализация (semantic atomizer, backfill, per-user Graphify, Knowledge Router) не начата, план — в самом документе |
 | 020 | Strict zero-paid Knowledge lock | ✅ `ADR-020-strict-zero-paid-knowledge-lock.md` |
 | 021 | Local parser/GigaAM/Ollama Knowledge pipeline | 🟡 `ADR-021-gigaam-voice-pipeline.md` — модель GigaAM выбрана живым замером (e2e_rnnt), фаза 2 (схема/wiring/voice-Remember) в процессе. Ollama (1.8) — отдельно, не в этом ADR |
 | 022 | Smart source dedup + versioning | ✅ `ADR-022-source-dedup-versioning.md` — дедуп сделан, версионирование сознательно отложено (решение владельца 31.08.2026, D2/§14.7) |
@@ -70,14 +70,12 @@
 | 030 | Tenant isolation: user key + RLS + no cross-user dedup | ✅ `ADR-030-tenant-isolation-rls.md` |
 | 031 | Per-user fair queue/quotas/style isolation | ✅ `ADR-031-per-user-fair-queue-quotas-style.md` |
 
-**Написано 27 из 31, один (`021`) частично, три сознательно не
-написаны.** Для оставшихся это не оговорка формата, а два разных
-честных случая: `002` и `007` — решение **действительно не принято**
-(n8n-адаптер и переезд SignalAI, оба проверены отдельным исследованием
-31.08.2026, писать ADR не из чего); `019` — решение сознательно
-отложено вместе с самим Graphify-экспериментом (`E13 =
-INSUFFICIENT_REAL_CORPUS`). Ни один из трёх не «забыт» — для каждого
-выше в таблице написано, почему именно он не написан.
+**Написано 28 из 31, два (`019`, `021`) частично, два сознательно не
+написаны.** Для оставшихся это не оговорка формата, а честный случай:
+`002` и `007` — решение **действительно не принято** (n8n-адаптер и
+переезд SignalAI, оба проверены отдельным исследованием 31.08.2026,
+писать ADR не из чего). Ни один не «забыт» — для каждого выше в таблице
+написано, почему именно он не написан.
 
 ## Наши собственные решения (100+)
 
