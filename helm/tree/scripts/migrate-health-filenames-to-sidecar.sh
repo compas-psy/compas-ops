@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from helm_core.config import get_settings
 from helm_core.knowledge.health_schema import health_schema_configured, health_session
+from helm_core.knowledge.tenancy import bind_knowledge_user
 from helm_core.models import HealthKnowledgeSourcePrivate, KnowledgeDomain, KnowledgeSource
 
 if not health_schema_configured():
@@ -39,6 +40,13 @@ if not health_schema_configured():
 engine = create_engine(get_settings().database_url)
 migrated, skipped = 0, 0
 with Session(engine) as s:
+    # knowledge_sources под FORCE ROW LEVEL SECURITY (v3.8 Фаза 1) —
+    # без bind_knowledge_user() голая сессия не видит вообще ни одной
+    # строки (RLS молча возвращает пусто, не ошибку). Один тенант
+    # (SYSTEM_OWNER) — тот же приём, что использует probe() и весь
+    # текущий код: "единственный тенант делает это неотличимым от
+    # прежнего поведения" (см. probe.py::probe() docstring).
+    bind_knowledge_user(s, None)
     sources = s.scalars(
         select(KnowledgeSource).where(
             KnowledgeSource.domain == KnowledgeDomain.HEALTH,
