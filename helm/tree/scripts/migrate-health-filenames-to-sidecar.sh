@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from helm_core.config import get_settings
 from helm_core.knowledge.health_schema import health_schema_configured, health_session
-from helm_core.knowledge.tenancy import bind_knowledge_user
+from helm_core.knowledge.tenancy import bind_knowledge_user, set_current_knowledge_user
 from helm_core.models import HealthKnowledgeSourcePrivate, KnowledgeDomain, KnowledgeSource
 
 if not health_schema_configured():
@@ -56,6 +56,13 @@ with Session(engine) as s:
     print(f"найдено health-источников с именем файла в public: {len(sources)}")
 
     for source in sources:
+        # SET LOCAL живёт до конца транзакции — предыдущий s.commit() уже
+        # закрыл её, а expire_on_commit=True (дефолт Session) истёк все
+        # объекты из sources: следующее обращение к source.* внутри этой
+        # итерации перечитывает строку без GUC → RLS её не показывает →
+        # ObjectDeletedError вместо реального обновления. Перепривязка на
+        # каждой итерации — не единожды до цикла.
+        set_current_knowledge_user(s, source.knowledge_user_id)
         with health_session(source.knowledge_user_id) as hs:
             already = hs.get(HealthKnowledgeSourcePrivate, source.id)
             if already is not None:
