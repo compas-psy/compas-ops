@@ -113,20 +113,39 @@ jobs:
           '
 
       # ── backup: точка возврата перед всем остальным ──────────────────
+      # Доставляем актуальный backup.sh/restore_test.sh ДО самого бэкапа —
+      # не через общий "Доставка файлов"/"Разложить и пересобрать" (тот
+      # идёт ПОСЛЕ точки возврата и пересобирает/рестартит helm-core,
+      # чего быть до бэкапа не должно), а отдельным лёгким scp, который
+      # не трогает работающие контейнеры.
+      - name: Доставить актуальный backup.sh
+        if: inputs.action == 'backup' || inputs.action == 'deploy' || inputs.action == 'restore-test'
+        run: |
+          scp -i ~/.ssh/id_deploy scripts/backup.sh scripts/restore_test.sh \
+            "$VPS_USER@$VPS_HOST:/tmp/"
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
+            sudo mv /tmp/backup.sh /opt/helm/scripts/backup.sh
+            sudo mv /tmp/restore_test.sh /opt/helm/scripts/restore_test.sh
+            sudo chown root:root /opt/helm/scripts/backup.sh /opt/helm/scripts/restore_test.sh
+            sudo chmod 755 /opt/helm/scripts/backup.sh /opt/helm/scripts/restore_test.sh
+          '
+
       - name: Точка возврата
         if: inputs.action == 'backup' || inputs.action == 'deploy'
-        # НАЙДЕНО 01.09.2026: первый в истории полный бэкап (restic "no
-        # parent snapshot found, will read all files") оборвался через
-        # ~4.5 минуты SSH "Broken pipe" — backup.sh не пишет в stdout,
-        # пока restic молча читает/чанкует/заливает через rclone на
-        # Яндекс Диск, и за это время нет вообще никакого трафика через
-        # соединение. Похоже на idle-таймаут NAT/файрвола на пути
-        # раннер→сервер (типичный дефолт — 300 секунд, совпадает по
-        # времени), а не на реальное зависание restic. ServerAlive*
-        # держит TCP живым на уровне протокола SSH независимо от того,
-        # молчит удалённая команда или нет — тот же класс проблемы, что
-        # уже чинили в F-260831-07 (SFTP-зависание `scp -r`), но здесь
-        # решение не смена протокола, а keepalive.
+        # НАЙДЕНО 01.09.2026: backup.sh молчит в stdout, пока restic
+        # молча читает/чанкует/заливает через rclone на Яндекс Диск — за
+        # это время нет вообще никакого трафика через SSH-соединение.
+        # Первая попытка оборвалась через ~4.5 минуты "Broken pipe" —
+        # похоже на idle-таймаут NAT/файрвола на пути раннер→сервер
+        # (типичный дефолт 300 секунд совпадает по времени), не на
+        # реальное зависание restic. ServerAlive* держит TCP живым на
+        # уровне протокола SSH независимо от того, молчит удалённая
+        # команда — тот же класс проблемы, что уже чинили в F-260831-07
+        # (SFTP-зависание `scp -r`), но здесь решение не смена протокола,
+        # а keepalive. После этого фикса два прогона подряд реально
+        # проработали ~15 минут (не оборвались) и упёрлись уже в другое —
+        # сам webdav.yandex.ru отвечал 500/timeout на отдельные чанки
+        # (RCLONE_TIMEOUT/RCLONE_LOW_LEVEL_RETRIES в backup.sh).
         run: |
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=12 \
             -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" 'sudo /opt/helm/scripts/backup.sh'
