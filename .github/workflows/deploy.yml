@@ -131,6 +131,7 @@ jobs:
           '
 
       - name: Точка возврата
+        id: backup_step
         if: inputs.action == 'backup' || inputs.action == 'deploy'
         # НАЙДЕНО 01.09.2026: backup.sh молчит в stdout, пока restic
         # молча читает/чанкует/заливает через rclone на Яндекс Диск — за
@@ -146,9 +147,23 @@ jobs:
         # проработали ~15 минут (не оборвались) и упёрлись уже в другое —
         # сам webdav.yandex.ru отвечал 500/timeout на отдельные чанки
         # (RCLONE_TIMEOUT/RCLONE_LOW_LEVEL_RETRIES в backup.sh).
+        #
+        # continue-on-error ТОЛЬКО для deploy (решение владельца
+        # 01.09.2026): раз бэкап зависит от стороннего Yandex WebDAV,
+        # его нестабильность не должна держать заложником готовый и
+        # протестированный код — в репозитории уже 32+ снапшота,
+        # ежедневный cron продолжает пытаться сам по себе. Явный
+        # action=backup по-прежнему падает как раньше: если владелец
+        # запускает бэкап САМ, он должен узнать, что тот не прошёл.
+        continue-on-error: ${{ inputs.action == 'deploy' }}
         run: |
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=12 \
             -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" 'sudo /opt/helm/scripts/backup.sh'
+
+      - name: Бэкап не прошёл — деплой продолжается без свежей точки возврата
+        if: inputs.action == 'deploy' && steps.backup_step.outcome == 'failure'
+        run: |
+          echo "::warning::Бэкап перед деплоем не прошёл (см. шаг 'Точка возврата' выше) — деплой продолжается на последнем существующем снапшоте, не на свежем."
 
       # ── deploy: код, панель, конфигурация, пересборка ────────────────
       - uses: actions/setup-node@v4
@@ -315,7 +330,11 @@ jobs:
             exit 0
           fi
           STATUS='${{ job.status }}'
+          NOTE=''
+          if [ "${{ steps.backup_step.outcome }}" = "failure" ]; then
+            NOTE=' (ВНИМАНИЕ: бэкап перед деплоем не прошёл, деплой продолжился без свежей точки возврата)'
+          fi
           curl -sS -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
             -d "chat_id=$TG_CHAT_ID" \
-            -d "text=Выкат «${{ inputs.action }}»: $STATUS. Логи: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            -d "text=Выкат «${{ inputs.action }}»: $STATUS$NOTE. Логи: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             > /dev/null || true
