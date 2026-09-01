@@ -6,52 +6,53 @@
 # разборе — fail-open тихо оставляет embedding=NULL), (2) если есть —
 # какой реальный косинус даёт "врачи" против чанка со специальностью,
 # и как это соотносится с порогом MIN_COSINE_SIMILARITY=0.35.
+#
+# health.* схема (ADR-005/P12) на этом сервере ещё НЕ создана
+# (scripts/setup-health-role.sh не прогнан) — health-чанки пока в
+# public.knowledge_chunks (domain='health'), запрос идёт туда.
 # Запускается на сервере: bash /tmp/recon.sh
 set -uo pipefail
 
-echo '=== покрытие embedding у health-чанков ==='
+echo '=== покрытие embedding у health-чанков (public, до выката P12) ==='
 sudo docker exec helm-postgres-1 psql -U helm -d helm -tAc \
-  "select count(*) filter (where embedding is not null) as with_embedding,
+  "select count(*) filter (where c.embedding is not null) as with_embedding,
           count(*) as total
-   from health.knowledge_chunks"
+   from knowledge_chunks c
+   join knowledge_sources s on s.id = c.source_id
+   where s.domain = 'health'"
 
 echo '=== примеры чанков со специальностями (первые 200 символов) ==='
 sudo docker exec helm-postgres-1 psql -U helm -d helm -c \
-  "select id, (embedding is not null) as has_embedding, left(text, 200) as text
-   from health.knowledge_chunks
-   where text ~* 'гастроэнтеролог|офтальмолог|невролог|уролог|кардиолог|дерматолог'
+  "select c.id, (c.embedding is not null) as has_embedding, left(c.text, 200) as text
+   from knowledge_chunks c
+   join knowledge_sources s on s.id = c.source_id
+   where s.domain = 'health'
+     and c.text ~* 'гастроэнтеролог|офтальмолог|невролог|уролог|кардиолог|дерматолог'
    limit 10"
 
 echo '=== реальный косинус "врачи" против этих чанков ==='
 cd /opt/helm/compose
 sudo docker compose exec -T helm-core python3 <<'PY'
-from sqlalchemy import create_engine, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy import create_engine, select
 
 from helm_core.config import get_settings
 from helm_core.knowledge.embeddings import embed_texts_or_none
-from helm_core.knowledge.health_schema import health_session
-from helm_core.models import HealthKnowledgeChunk
+from helm_core.models import KnowledgeChunk, KnowledgeSource
+from sqlalchemy.orm import Session
 
 engine = create_engine(get_settings().database_url)
-with Session(engine) as s:
-    row = s.execute(text(
-        "select knowledge_user_id from health.knowledge_chunks limit 1"
-    )).first()
-    if row is None:
-        print("нет health-чанков вообще")
-        raise SystemExit(0)
-    tenant_id = row[0]
 
 query_embedding = embed_texts_or_none(["каких врачей я посещал"])[0]
 if query_embedding is None:
     print("embed-сервис недоступен ПРЯМО СЕЙЧАС — embed_texts_or_none вернул None")
     raise SystemExit(0)
 
-with health_session(tenant_id) as hs:
-    rows = hs.execute(
-        select(HealthKnowledgeChunk.id, HealthKnowledgeChunk.text, HealthKnowledgeChunk.embedding)
-        .where(HealthKnowledgeChunk.text.op("~*")(
+with Session(engine) as s:
+    rows = s.execute(
+        select(KnowledgeChunk.id, KnowledgeChunk.text, KnowledgeChunk.embedding)
+        .join(KnowledgeSource, KnowledgeSource.id == KnowledgeChunk.source_id)
+        .where(KnowledgeSource.domain == "health")
+        .where(KnowledgeChunk.text.op("~*")(
             "гастроэнтеролог|офтальмолог|невролог|уролог|кардиолог|дерматолог"))
         .limit(10)
     ).all()
