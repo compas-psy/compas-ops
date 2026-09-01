@@ -24,21 +24,23 @@ import pytest
 from sqlalchemy import select, text
 
 from helm_core.config import get_settings
+from helm_core.knowledge import atomizer
 from helm_core.knowledge import health_schema
 from helm_core.knowledge import worker as worker_module
+from helm_core.knowledge.atomizer import AtomizedAtom
 from helm_core.knowledge.documents import find_sources, read_original
 from helm_core.knowledge.ingest import ingest_text, register_file_for_ingest
 from helm_core.knowledge.probe import probe
 from helm_core.knowledge.worker import process_job
 from helm_core.models import (
-    HealthKnowledgeChunk, HealthKnowledgeRelation, HealthKnowledgeSourcePrivate,
-    KnowledgeChunk, KnowledgeIngestStatus, KnowledgeRelation, KnowledgeSource, KnowledgeUser,
-    KnowledgeUserRole, OutboxMessage,
+    HealthKnowledgeChunk, HealthKnowledgeNote, HealthKnowledgeRelation, HealthKnowledgeSourcePrivate,
+    KnowledgeChunk, KnowledgeIngestStatus, KnowledgeNote, KnowledgeRelation, KnowledgeSource,
+    KnowledgeUser, KnowledgeUserRole, OutboxMessage,
 )
 from helm_core.models.health_tables import HealthBase
 from conftest import DB_URL
 
-HEALTH_TABLES = ("knowledge_relations", "knowledge_chunks", "knowledge_source_private")
+HEALTH_TABLES = ("knowledge_relations", "knowledge_chunks", "knowledge_source_private", "knowledge_notes")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -67,7 +69,7 @@ def _clean_health_tables(engine):
     with engine.begin() as conn:
         conn.execute(text(
             "TRUNCATE health.knowledge_relations, health.knowledge_chunks, "
-            "health.knowledge_source_private RESTART IDENTITY CASCADE"
+            "health.knowledge_notes, health.knowledge_source_private RESTART IDENTITY CASCADE"
         ))
 
 
@@ -217,6 +219,37 @@ def test_register_file_for_ingest_health_domain_moves_filename(
     assert result.source.original_filename is None
     assert health_schema.read_original_filename(
         source_id=result.source.id, knowledge_user_id=user.id) == "Консультация уролога.pdf"
+
+
+# ── atomizer.py (ADR-019) — та же маршрутизация, что chunks/relations ────
+
+def test_ingest_text_health_domain_routes_notes_to_sidecar(
+        session, tmp_path, monkeypatch, health_configured, user):
+    """Атомизатор не содержит ветки "если health" — маршрутизация приходит
+    из is_health_domain()/health_schema_configured(), как у chunks/
+    relations выше. Здесь проверяется РЕЗУЛЬТАТ этой же маршрутизации для
+    knowledge_notes, не новая логика."""
+    monkeypatch.setattr(
+        atomizer, "atomize_or_empty",
+        lambda text, *, domain: [AtomizedAtom(slug="Иванов, уролог", type="PERSON",
+                                              text="Приём у уролога Иванова.", links=())],
+    )
+
+    source = ingest_text(session, domain="health", text="Консультация уролога Иванова.",
+                         knowledge_user_id=user.id, vault_root=str(tmp_path))
+    session.flush()
+
+    assert session.query(KnowledgeNote).filter(
+        KnowledgeNote.slug == "Иванов, уролог").count() == 0
+    with health_schema.health_session(user.id) as hs:
+        notes = hs.scalars(
+            select(HealthKnowledgeNote).where(HealthKnowledgeNote.slug == "Иванов, уролог")
+        ).all()
+        assert len(notes) == 1
+        assert notes[0].source_ids == [str(source.id)]
+
+    file_text = (tmp_path / "entities" / "Иванов, уролог.md").read_text(encoding="utf-8")
+    assert "Приём у уролога Иванова." in file_text
 
 
 # ── worker.py — process_job() health-ветка ────────────────────────────────

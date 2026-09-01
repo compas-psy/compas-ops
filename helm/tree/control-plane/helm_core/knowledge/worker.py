@@ -30,6 +30,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .atomizer import atomize_and_store
 from .audio import strip_timestamps, transcribe_audio
 from .batch_intake import finalize_batch_if_terminal, sync_item_from_job
 from .chat_intake import voice_ready_menu_text
@@ -302,6 +303,16 @@ def process_job(session: Session, job: KnowledgeIngestJob) -> None:
                         from_id=note_id_for(original_filename=source.original_filename,
                                             source_id=source.id),
                         source_id=source.id, text=result.text)
+
+        # ADR-019: L2 semantic atomizer, аддитивно поверх store_relations()
+        # выше (fail-open, см. atomizer.py). vault_root восстанавливается из
+        # source_path ("<vault_root>/sources/<sha256>.md") — тот же корень,
+        # что был передан register_file_for_ingest(), не жёстко зашитый
+        # DEFAULT_VAULT_ROOT (тесты регистрируют файл с vault_root=tmp_path).
+        vault_root = str(Path(source.source_path).parent.parent)
+        atomize_and_store(session, domain=source.domain, knowledge_user_id=tenant_id,
+                          source_id=source.id, source_sha256=source.sha256, text=result.text,
+                          vault_root=vault_root)
 
         chunks = split_chunks(result.text)
         # ADR-025: та же fail-open политика, что ingest_text() — сбой

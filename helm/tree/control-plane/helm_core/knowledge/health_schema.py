@@ -27,7 +27,9 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..config import get_settings
-from ..models import HealthKnowledgeChunk, HealthKnowledgeRelation, HealthKnowledgeSourcePrivate
+from ..models import (
+    HealthKnowledgeChunk, HealthKnowledgeNote, HealthKnowledgeRelation, HealthKnowledgeSourcePrivate,
+)
 
 
 @lru_cache
@@ -147,3 +149,35 @@ def write_relations(*, source_id: uuid.UUID, knowledge_user_id: uuid.UUID, from_
                 relation_type=relation_type, evidence_type=evidence_type, source_id=source_id,
             ))
     return len(relations)
+
+
+def write_notes(*, knowledge_user_id: uuid.UUID, source_id: uuid.UUID, source_sha256: str,
+                slug: str, note_type: str, domain: str, file_path: str) -> bool:
+    """ADR-019: L2 semantic-atomizer заметка для health, тот же принцип
+    маршрутизации, что `write_relations()`. Возвращает `True`, если
+    заметка создана впервые — вызывающий код (`atomizer.py`) решает по
+    этому флагу, писать .md-файл с нуля или дописывать существующий
+    (заметка уже существовала — тот же slug пришёл из другого source).
+
+    Идемпотентно на повторный вызов с тем же `(knowledge_user_id, slug)`:
+    `source_id`/`source_sha256` добавляются в списки заметки, не
+    создают вторую строку — `UniqueConstraint(knowledge_user_id, slug)`
+    иначе упал бы уже на втором документе про ту же сущность."""
+    with health_session(knowledge_user_id) as session:
+        existing = session.scalar(
+            select(HealthKnowledgeNote).where(
+                HealthKnowledgeNote.knowledge_user_id == knowledge_user_id,
+                HealthKnowledgeNote.slug == slug,
+            )
+        )
+        if existing is None:
+            session.add(HealthKnowledgeNote(
+                knowledge_user_id=knowledge_user_id, slug=slug, type=note_type, domain=domain,
+                file_path=file_path, source_ids=[str(source_id)], source_sha256=[source_sha256],
+            ))
+            return True
+        if str(source_id) not in (existing.source_ids or []):
+            existing.source_ids = [*(existing.source_ids or []), str(source_id)]
+        if source_sha256 not in (existing.source_sha256 or []):
+            existing.source_sha256 = [*(existing.source_sha256 or []), source_sha256]
+        return False

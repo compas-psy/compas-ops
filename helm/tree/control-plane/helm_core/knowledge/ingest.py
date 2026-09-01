@@ -33,6 +33,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models import KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus, KnowledgeSource, KnowledgeStatus
+from .atomizer import atomize_and_store
 from .embeddings import embed_texts_or_none
 from .health_schema import health_schema_configured, is_health_domain, write_chunks, write_original_filename
 from .quotas import check_and_record_ingest, check_queue_depth, record_entry_formed
@@ -76,7 +77,7 @@ def _public_original_filename(*, domain: str, original_filename: str | None,
 def ingest_text(session: Session, *, domain: str, text: str,
                 original_filename: str | None = None,
                 sensitivity: str = "internal", trust: str = "extracted",
-                vault_root: str = DEFAULT_VAULT_ROOT,
+                vault_root: str | None = None,
                 knowledge_user_id: uuid.UUID | None = None) -> KnowledgeSource:
     """Сохранить текст как source + лексически проиндексированные чанки.
 
@@ -88,6 +89,15 @@ def ingest_text(session: Session, *, domain: str, text: str,
     `knowledge_user_id=None` — существующие call sites (P8.6.2 Dedicated
     Knowledge Bot ещё не существует): разрешается в SYSTEM_OWNER.
     """
+    # `None` + резолв здесь, не литеральный default в сигнатуре — тот же
+    # приём, что уже применён в memory.py/offboarding.py: default-значение
+    # именованного параметра вычисляется ОДИН РАЗ при определении функции,
+    # подмена `ingest.DEFAULT_VAULT_ROOT` тестовой фикстурой
+    # (`_never_touch_the_real_vault`) на уже связанный default не подействует.
+    # Раньше это было безобидно (ingest_text() ничего не писал на диск), но
+    # ADR-019 (atomize_and_store() ниже) пишет .md-файлы атомов — без этой
+    # правки тесты без явного vault_root писали бы в настоящий Vault.
+    vault_root = vault_root or DEFAULT_VAULT_ROOT
     knowledge_user_id = bind_knowledge_user(session, knowledge_user_id)
 
     sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -127,6 +137,13 @@ def ingest_text(session: Session, *, domain: str, text: str,
                     from_id=note_id_for(original_filename=original_filename, source_id=source.id),
                     source_id=source.id, text=text)
 
+    # ADR-019: L2 semantic atomizer — поверх уже сделанного store_relations()
+    # выше, аддитивно (fail-open: недоступность атомизатора не мешает
+    # созданию source/chunks/слоя-1-relations, см. atomizer.py).
+    atomize_and_store(session, domain=domain, knowledge_user_id=knowledge_user_id,
+                      source_id=source.id, source_sha256=sha256, text=text,
+                      vault_root=vault_root)
+
     chunks = split_chunks(text)
     # ADR-025: недоступность embed-сервиса не должна мешать созданию
     # source/чанков — embed_texts_or_none() откатывается на None на чанк,
@@ -165,7 +182,7 @@ def register_file_for_ingest(session: Session, *, domain: str, raw_path: Path,
                              mime_type: str | None = None,
                              sensitivity: str = "internal", trust: str = "extracted",
                              channel: str | None = None, recipient: str | None = None,
-                             vault_root: str = DEFAULT_VAULT_ROOT,
+                             vault_root: str | None = None,
                              knowledge_user_id: uuid.UUID | None = None) -> RegisterFileResult:
     """Зарегистрировать файл, уже лежащий на диске, для асинхронного парсинга.
 
@@ -178,6 +195,8 @@ def register_file_for_ingest(session: Session, *, domain: str, raw_path: Path,
     `knowledge_user_id=None` — существующие call sites (P8.6.2 Dedicated
     Knowledge Bot ещё не существует): разрешается в SYSTEM_OWNER.
     """
+    # См. ingest_text() выше — тот же приём и та же причина.
+    vault_root = vault_root or DEFAULT_VAULT_ROOT
     knowledge_user_id = bind_knowledge_user(session, knowledge_user_id)
 
     data = raw_path.read_bytes()

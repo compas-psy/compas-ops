@@ -149,6 +149,32 @@ CREATE TABLE IF NOT EXISTS health.knowledge_relations (
 CREATE INDEX IF NOT EXISTS ix_health_knowledge_relations_from
   ON health.knowledge_relations (from_id);
 
+-- ADR-019: L2 semantic-atomizer заметки для health — тот же принцип, что
+-- knowledge_relations выше: slug/type могут прямо называть тему заметки
+-- ("аутоиммунный гастрит"), не более "особый" случай, чем relations,
+-- просто ещё одна таблица под той же маршрутизацией (atomizer.py не
+-- знает про health вообще, ветвится на is_health_domain()/
+-- health_schema_configured(), как и все остальные call site'ы).
+CREATE TABLE IF NOT EXISTS health.knowledge_notes (
+  id uuid PRIMARY KEY,
+  knowledge_user_id uuid,
+  slug varchar(128) NOT NULL,
+  type varchar(32) NOT NULL,
+  domain varchar(32) NOT NULL,
+  file_path text NOT NULL,
+  source_ids jsonb,
+  source_sha256 jsonb,
+  sensitivity varchar(32) NOT NULL DEFAULT 'internal',
+  trust varchar(32) NOT NULL DEFAULT 'extracted',
+  confidence numeric(4,3),
+  status varchar(16) NOT NULL DEFAULT 'active',
+  supersedes jsonb,
+  contradicts jsonb,
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL,
+  CONSTRAINT uq_health_knowledge_notes_user_slug UNIQUE (knowledge_user_id, slug)
+);
+
 RESET ROLE;
 SQL
 
@@ -174,6 +200,13 @@ DROP POLICY IF EXISTS knowledge_tenant_isolation ON health.knowledge_relations;
 CREATE POLICY knowledge_tenant_isolation ON health.knowledge_relations
   USING (knowledge_user_id = NULLIF(current_setting('app.current_knowledge_user_id', true), '')::uuid)
   WITH CHECK (knowledge_user_id = NULLIF(current_setting('app.current_knowledge_user_id', true), '')::uuid);
+
+ALTER TABLE health.knowledge_notes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE health.knowledge_notes FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS knowledge_tenant_isolation ON health.knowledge_notes;
+CREATE POLICY knowledge_tenant_isolation ON health.knowledge_notes
+  USING (knowledge_user_id = NULLIF(current_setting('app.current_knowledge_user_id', true), '')::uuid)
+  WITH CHECK (knowledge_user_id = NULLIF(current_setting('app.current_knowledge_user_id', true), '')::uuid);
 SQL
 
 echo "== проверка: helm_health не видит public, не суперпользователь =="
@@ -193,5 +226,7 @@ sudo docker exec -i helm-postgres-1 psql -U helm -d helm -tAc \
   "select has_table_privilege('helm_app', 'health.knowledge_chunks', 'SELECT')"
 sudo docker exec -i helm-postgres-1 psql -U helm -d helm -tAc \
   "select has_table_privilege('helm_app', 'health.knowledge_relations', 'SELECT')"
+sudo docker exec -i helm-postgres-1 psql -U helm -d helm -tAc \
+  "select has_table_privilege('helm_app', 'health.knowledge_notes', 'SELECT')"
 
 echo "SETUP DONE"

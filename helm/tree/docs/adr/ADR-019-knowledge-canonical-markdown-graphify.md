@@ -1,8 +1,9 @@
 # ADR-019. Knowledge canonical Markdown/Postgres; Graphify derived
 
-**Дата:** 01.09.2026 · **Статус:** 🟡 решение принято, код не написан —
-фазы 1-7 ниже, ни один шаг ещё не выполнен · **Тема §34:** ADR-019
-"Knowledge canonical Markdown/Postgres; Graphify derived"
+**Дата:** 01.09.2026 · **Статус:** 🟡 фаза 1-2 (semantic atomizer,
+аддитивно в ingest) сделана и покрыта тестами, живой деплой и фазы 3-7
+не начаты · **Тема §34:** ADR-019 "Knowledge canonical Markdown/Postgres;
+Graphify derived"
 
 ## Область решения
 
@@ -204,20 +205,64 @@ RAW/SOURCE/chunks/FTS/pgvector/embeddings (ADR-025) остаются нижни�
 
 ## Что сделано
 
-Код не менялся этим ADR — только решение и правки двух документов
-(`docs/adr/README.md`, `docs/KNOWLEDGE_MODELS.md`) в этом же коммите.
-Фундамент, на который решение опирается, уже существует и не требует
-изменений:
+Фаза 1-2 (плана выше) реализована и покрыта тестами в этом же заходе:
 
-- `KnowledgeNote`/`KnowledgeRelation` (`models/tables.py:446-501`) —
-  схема уже поддерживает L2-заметки и типизированные связи, включая
-  `trust="extracted"`/`confidence` для автоматически выведенного
-  знания.
-- `relations.py::store_relations()` — уже вызывается из обоих
-  ingest-путей (`ingest_text()`/`process_job()`), уже детерминированно
-  извлекает wikilinks/frontmatter relations; для новой архитектуры не
-  меняется, нужен только новый производитель текста с wikilinks
-  (атомизатор, шаг 3-4 плана).
-- health-изоляция (ADR-005/P12, `health.knowledge_relations`,
-  `setup-health-role.sh`) — уже готова принять relations для
-  health-домена без изменений в схеме.
+- `helm_core/knowledge/atomizer.py` — semantic atomizer, домено-
+  агностичен по конструкции (ни одной ветки `if domain == "health"`):
+  один вызов Ollama (`gemma2:2b`, временный выбор — та же модель, что
+  уже поднята для Z2, не отдельный замер, см. докстринг файла) на L1
+  SOURCE текст, `format: "json"`, строгий парсинг ответа с той же
+  дисциплиной "нет обязательного поля — запись пропускается целиком",
+  что уже применена в `relations.py::extract_frontmatter_relations()`.
+  Fail-open (`atomize_or_empty()`): недоступность Ollama не мешает
+  созданию source/chunks/слоя-1-relations, L2-слой просто пропускается.
+- Контролируемый словарь типов сужен ПРИ РЕАЛИЗАЦИИ относительно текста
+  выше — находка, не пересмотр архитектуры: `DOCUMENT` убран (это уже
+  L1 SOURCE, отдельная сущность), `DATE` убран (атрибут события/факта,
+  не отдельный узел графа — в Obsidian не заводят заметку на каждую
+  дату).
+- Merge по `slug`: атом с уже существующим `(knowledge_user_id, slug)`
+  дополняет заметку (`source_ids`/файл на диске растут), не дублирует
+  строку — иначе одна и та же сущность («Иванов»), упомянутая в двух
+  разных документах, упала бы на `UniqueConstraint`.
+- Найденное вместе с реализацией: `health.knowledge_relations` уже
+  существовала (ADR-005/P12), но L2-заметки для health попадали бы в
+  `public.knowledge_notes` без изменений — прямая утечка "health
+  entities/topics" в обход того самого решения P12. Добавлен
+  симметричный `health.knowledge_notes` (`models/health_tables.py::
+  HealthKnowledgeNote`, `health_schema.py::write_notes()`,
+  `scripts/setup-health-role.sh`) — тот же RLS-предикат, та же
+  маршрутизация `is_health_domain()`/`health_schema_configured()`, не
+  новая ветка логики в `atomizer.py`.
+- `relations.py::store_relations()` не менялся вообще — атомизатор
+  вызывает его на текст каждого атома (с `[[wikilink]]`, если модель
+  указала `links`), как и предполагалось.
+- Wiring: `ingest_text()`/`worker.py::process_job()` вызывают
+  `atomize_and_store()` сразу после уже существующего вызова
+  `store_relations()` для сырого текста источника — аддитивно, тот и
+  этот вызов не меняют друг друга.
+- Побочный фикс, обязательный для корректности тестов: `vault_root` в
+  `ingest_text()`/`register_file_for_ingest()` был литеральным default
+  (`= DEFAULT_VAULT_ROOT`), связанным при определении функции — тестовая
+  фикстура `_never_touch_the_real_vault` на него не действовала (латентно,
+  до этого ADR ingest.py ничего не писал на диск). Приведено к паттерну
+  `memory.py`/`offboarding.py` (`None` + резолв внутри функции).
+- Тесты: `tests/test_knowledge_atomizer.py` — доменно-агностичный
+  сквозной путь ПРОВЕРЕН НЕ НА HEALTH (`personal`/`ventures`/
+  `simpas/company` как равноправные примеры, health — не единственный и
+  не первый), плюс parsing/fail-open/merge/wiring. Health-маршрутизация
+  добавлена в `tests/test_knowledge_health_isolation.py`, рядом с уже
+  существующими проверками для chunks/relations, не отдельным файлом —
+  это ровно тот файл, чья задача проверять именно маршрутизацию. 596/596
+  тестов зелёных.
+
+Фундамент, на который решение опиралось и который не потребовал
+изменений: `KnowledgeNote`/`KnowledgeRelation` (`models/
+tables.py:446-501`) — схема уже поддерживала L2-заметки и типизированные
+связи, включая `trust="extracted"`/`confidence` для автоматически
+выведенного знания.
+
+Не сделано в этом заходе (следующие шаги плана): живой деплой на сервер,
+backfill существующего 90-source корпуса (фаза 3-5), multi-domain
+fixtures на реальных данных (фаза 6), Knowledge Router в `probe()`
+(отдельная задача, фаза 6-7).

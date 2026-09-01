@@ -32,10 +32,10 @@ from decimal import Decimal
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import ForeignKey, Index, Integer, MetaData, Numeric, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from .base import NAMING_CONVENTION, ts_column, utcnow
+from .base import NAMING_CONVENTION, KnowledgeStatus, ts_column, utcnow
 from .tables import KNOWLEDGE_EMBED_DIM
 
 
@@ -128,3 +128,37 @@ class HealthKnowledgeRelation(HealthBase):
     created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
 
     __table_args__ = (Index("ix_health_knowledge_relations_from", "from_id"),)
+
+
+class HealthKnowledgeNote(HealthBase):
+    """Зеркало `KnowledgeNote` (`tables.py`, §14.1/§14.3, ADR-019) — L2
+    semantic-atomizer заметки для health: `slug`/`type` могут прямо
+    называть тему заметки («аутоиммунный гастрит», «Иванов, уролог»), то
+    самое "health entities/topics", которому решение владельца при
+    разборе P12 запрещает попадать в `public`. Не более "особый" случай,
+    чем `HealthKnowledgeRelation` — та же маршрутизация (`atomizer.py`
+    домено-агностичен, ветвится только на уже существующих
+    `is_health_domain()`/`health_schema_configured()`)."""
+
+    __tablename__ = "knowledge_notes"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    knowledge_user_id: Mapped[uuid.UUID | None] = mapped_column()
+    slug: Mapped[str] = mapped_column(String(128), nullable=False)
+    type: Mapped[str] = mapped_column(String(32), nullable=False)
+    domain: Mapped[str] = mapped_column(String(32), nullable=False)
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    source_ids: Mapped[list | None] = mapped_column(JSONB)
+    source_sha256: Mapped[list | None] = mapped_column(JSONB)
+    sensitivity: Mapped[str] = mapped_column(String(32), default="internal", nullable=False)
+    trust: Mapped[str] = mapped_column(String(32), default="extracted", nullable=False)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    status: Mapped[str] = mapped_column(String(16), default=KnowledgeStatus.ACTIVE, nullable=False)
+    supersedes: Mapped[list | None] = mapped_column(JSONB)
+    contradicts: Mapped[list | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("knowledge_user_id", "slug", name="uq_health_knowledge_notes_user_slug"),
+    )
