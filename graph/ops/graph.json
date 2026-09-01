@@ -1,8 +1,8 @@
 {
  "generated_by": "tools/graphify.py",
- "corpus_hash": "d108de26df09cc46ef69af0b6fcb1af744e0a3ed1856a3a477461a0de2020eac",
- "node_count": 527,
- "edge_count": 2035,
+ "corpus_hash": "d30932773cb491b1e1adf051f3ff6eea5ca71065a34be551f4071f48b95f7740",
+ "node_count": 553,
+ "edge_count": 2160,
  "nodes": [
   {
    "id": "file:.github/workflows/board.yml",
@@ -2171,10 +2171,208 @@
    "title": "Решения по архитектуре (ADR)"
   },
   {
+   "id": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "type": "file",
+   "path": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "title": "ARCHITECTURE — обзор системы HELM"
+  },
+  {
+   "id": "adr:002",
+   "type": "adr",
+   "value": "002",
+   "label": "ADR-002"
+  },
+  {
+   "id": "adr:007",
+   "type": "adr",
+   "value": "007",
+   "label": "ADR-007"
+  },
+  {
+   "id": "file:helm/tree/docs/handoff/BACKUP_RESTORE.md",
+   "type": "file",
+   "path": "helm/tree/docs/handoff/BACKUP_RESTORE.md",
+   "title": "BACKUP_RESTORE — что бэкапится, как проверяется, как восстановить"
+  },
+  {
+   "id": "file:helm/tree/docs/handoff/COSTS.md",
+   "type": "file",
+   "path": "helm/tree/docs/handoff/COSTS.md",
+   "title": "COSTS — сколько тратится на платные модели и как это ограничено"
+  },
+  {
+   "id": "file:helm/tree/docs/handoff/D-LIST.md",
+   "type": "file",
+   "path": "helm/tree/docs/handoff/D-LIST.md",
+   "title": "D-LIST — указатель по D-кодам спеки"
+  },
+  {
+   "id": "file:helm/tree/docs/handoff/GIT_MIGRATION.md",
+   "type": "file",
+   "path": "helm/tree/docs/handoff/GIT_MIGRATION.md",
+   "title": "GIT_MIGRATION — переезд с GitHub на Forgejo как primary"
+  },
+  {
+   "id": "spec_section:18.3",
+   "type": "spec_section",
+   "value": "18.3",
+   "label": "§18.3"
+  },
+  {
+   "id": "spec_section:18.6",
+   "type": "spec_section",
+   "value": "18.6",
+   "label": "§18.6"
+  },
+  {
+   "id": "file:helm/tree/docs/handoff/HANDOFF.md",
+   "type": "file",
+   "path": "helm/tree/docs/handoff/HANDOFF.md",
+   "title": "HANDOFF — точка входа для нового инженера/агента на HELM"
+  },
+  {
+   "id": "file:helm/tree/docs/handoff/KNOWLEDGE_ADMIN.md",
+   "type": "file",
+   "path": "helm/tree/docs/handoff/KNOWLEDGE_ADMIN.md",
+   "title": "KNOWLEDGE_ADMIN — инженерный обзор administration-слоя"
+  },
+  {
+   "id": "file:helm/tree/docs/handoff/KNOWLEDGE_MIGRATION_V3.5.md",
+   "type": "file",
+   "path": "helm/tree/docs/handoff/KNOWLEDGE_MIGRATION_V3.5.md",
+   "title": "KNOWLEDGE_MIGRATION_V3.5 — версии такой не существует в реальной истории"
+  },
+  {
+   "id": "file:helm/tree/docs/handoff/MCP.md",
+   "type": "file",
+   "path": "helm/tree/docs/handoff/MCP.md",
+   "title": "MCP — не реализовано, честно зафиксировано"
+  },
+  {
+   "id": "file:helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "type": "file",
+   "path": "helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "title": "MODEL_ROUTING — какая модель что делает и почему"
+  },
+  {
+   "id": "file:helm/tree/docs/handoff/OPERATIONS.md",
+   "type": "file",
+   "path": "helm/tree/docs/handoff/OPERATIONS.md",
+   "title": "OPERATIONS — повседневная эксплуатация"
+  },
+  {
+   "id": "file:helm/tree/docs/handoff/PANEL.md",
+   "type": "file",
+   "path": "helm/tree/docs/handoff/PANEL.md",
+   "title": "PANEL — обзор веб-пульта"
+  },
+  {
+   "id": "file:helm/tree/docs/handoff/PANEL_AUTH_RECOVERY.md",
+   "type": "file",
+   "path": "helm/tree/docs/handoff/PANEL_AUTH_RECOVERY.md",
+   "title": "PANEL_AUTH_RECOVERY — восстановление доступа к Panel при утере passkey"
+  },
+  {
+   "id": "file:helm/tree/docs/handoff/ROUTINES.md",
+   "type": "file",
+   "path": "helm/tree/docs/handoff/ROUTINES.md",
+   "title": "ROUTINES — регулярные фоновые задачи на сервере HELM"
+  },
+  {
+   "id": "spec_section:26.1",
+   "type": "spec_section",
+   "value": "26.1",
+   "label": "§26.1"
+  },
+  {
    "id": "file:helm/tree/docs/handoff/SECRETS_MAP.md",
    "type": "file",
    "path": "helm/tree/docs/handoff/SECRETS_MAP.md",
    "title": "SECRETS_MAP — где живёт что (без значений)"
+  },
+  {
+   "id": "file:helm/tree/docs/handoff/SIGNALAI_MIGRATION.md",
+   "type": "file",
+   "path": "helm/tree/docs/handoff/SIGNALAI_MIGRATION.md",
+   "title": "SIGNALAI_MIGRATION — не начато, спека прямо запрещает начинать раньше"
+  },
+  {
+   "id": "file:helm/tree/docs/handoff/TEST_REPORT.md",
+   "type": "file",
+   "path": "helm/tree/docs/handoff/TEST_REPORT.md",
+   "title": "TEST_REPORT — состояние тестов на 31.08.2026"
+  },
+  {
+   "id": "file:helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "type": "file",
+   "path": "helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "title": "TROUBLESHOOTING — реальные классы багов, найденные живьём"
+  },
+  {
+   "id": "finding:260829-33",
+   "type": "finding",
+   "value": "260829-33",
+   "label": "F-260829-33"
+  },
+  {
+   "id": "finding:260829-06",
+   "type": "finding",
+   "value": "260829-06",
+   "label": "F-260829-06"
+  },
+  {
+   "id": "finding:260829-14",
+   "type": "finding",
+   "value": "260829-14",
+   "label": "F-260829-14"
+  },
+  {
+   "id": "finding:260829-20",
+   "type": "finding",
+   "value": "260829-20",
+   "label": "F-260829-20"
+  },
+  {
+   "id": "finding:260829-17",
+   "type": "finding",
+   "value": "260829-17",
+   "label": "F-260829-17"
+  },
+  {
+   "id": "finding:260829-28",
+   "type": "finding",
+   "value": "260829-28",
+   "label": "F-260829-28"
+  },
+  {
+   "id": "finding:260829-29",
+   "type": "finding",
+   "value": "260829-29",
+   "label": "F-260829-29"
+  },
+  {
+   "id": "finding:260829-08",
+   "type": "finding",
+   "value": "260829-08",
+   "label": "F-260829-08"
+  },
+  {
+   "id": "finding:260829-31",
+   "type": "finding",
+   "value": "260829-31",
+   "label": "F-260829-31"
+  },
+  {
+   "id": "finding:260829-02",
+   "type": "finding",
+   "value": "260829-02",
+   "label": "F-260829-02"
+  },
+  {
+   "id": "file:helm/tree/docs/handoff/TRUST_LEDGER.md",
+   "type": "file",
+   "path": "helm/tree/docs/handoff/TRUST_LEDGER.md",
+   "title": "TRUST_LEDGER — где хранится история доверия к действиям"
   },
   {
    "id": "file:helm/tree/guardian/.pytest_cache/README.md",
@@ -2243,18 +2441,6 @@
    "title": "Миграционный лог Forgejo (ТЗ §18.3)"
   },
   {
-   "id": "spec_section:18.3",
-   "type": "spec_section",
-   "value": "18.3",
-   "label": "§18.3"
-  },
-  {
-   "id": "spec_section:18.6",
-   "type": "spec_section",
-   "value": "18.6",
-   "label": "§18.6"
-  },
-  {
    "id": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
    "type": "file",
    "path": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
@@ -2277,12 +2463,6 @@
    "type": "spec_section",
    "value": "14.0",
    "label": "§14.0"
-  },
-  {
-   "id": "spec_section:26.1",
-   "type": "spec_section",
-   "value": "26.1",
-   "label": "§26.1"
   },
   {
    "id": "file:helm/tree/implementation-state/V3.7-DELTA.md",
@@ -2333,18 +2513,6 @@
    "title": "WORKPLAN — HELM v3.4"
   },
   {
-   "id": "finding:260829-33",
-   "type": "finding",
-   "value": "260829-33",
-   "label": "F-260829-33"
-  },
-  {
-   "id": "finding:260829-02",
-   "type": "finding",
-   "value": "260829-02",
-   "label": "F-260829-02"
-  },
-  {
    "id": "finding:260830-01",
    "type": "finding",
    "value": "260830-01",
@@ -2361,18 +2529,6 @@
    "type": "spec_section",
    "value": "17.2",
    "label": "§17.2"
-  },
-  {
-   "id": "finding:260829-20",
-   "type": "finding",
-   "value": "260829-20",
-   "label": "F-260829-20"
-  },
-  {
-   "id": "finding:260829-17",
-   "type": "finding",
-   "value": "260829-17",
-   "label": "F-260829-17"
   },
   {
    "id": "finding:260829-18",
@@ -13809,6 +13965,726 @@
    "line": 71
   },
   {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "adr:003",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 13
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "adr:001",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 14
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "adr:025",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 16
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "adr:002",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 18
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "adr:006",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 19
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "adr:011",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 26
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "adr:001",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 28
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "adr:012",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 32
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "spec_section:10.2",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 33
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "adr:001",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 36
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "adr:004",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 36
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "adr:013",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 44
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "spec_section:9.3",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 45
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "spec_section:10.4",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 47
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "spec_section:14.14",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 55
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "adr:020",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 61
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "adr:019",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 63
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "spec_section:14.3",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 66
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "adr:030",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 71
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "adr:011",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 89
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "adr:007",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 99
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "adr:002",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 100
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ARCHITECTURE.md",
+   "to": "adr:006",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ARCHITECTURE.md",
+   "line": 102
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/BACKUP_RESTORE.md",
+   "to": "adr:006",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/BACKUP_RESTORE.md",
+   "line": 33
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/COSTS.md",
+   "to": "spec_section:14.14",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/COSTS.md",
+   "line": 36
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/COSTS.md",
+   "to": "adr:011",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/COSTS.md",
+   "line": 48
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/D-LIST.md",
+   "to": "adr:026",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/D-LIST.md",
+   "line": 18
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/D-LIST.md",
+   "to": "spec_section:14.6",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/D-LIST.md",
+   "line": 18
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/D-LIST.md",
+   "to": "adr:022",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/D-LIST.md",
+   "line": 19
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/D-LIST.md",
+   "to": "adr:026",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/D-LIST.md",
+   "line": 19
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/D-LIST.md",
+   "to": "adr:022",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/D-LIST.md",
+   "line": 20
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/D-LIST.md",
+   "to": "adr:024",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/D-LIST.md",
+   "line": 20
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/D-LIST.md",
+   "to": "spec_section:14.7",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/D-LIST.md",
+   "line": 20
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/D-LIST.md",
+   "to": "adr:101",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/D-LIST.md",
+   "line": 21
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/D-LIST.md",
+   "to": "spec_section:4.1",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/D-LIST.md",
+   "line": 21
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/D-LIST.md",
+   "to": "adr:010",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/D-LIST.md",
+   "line": 23
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/GIT_MIGRATION.md",
+   "to": "adr:006",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/GIT_MIGRATION.md",
+   "line": 3
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/GIT_MIGRATION.md",
+   "to": "spec_section:18.3",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/GIT_MIGRATION.md",
+   "line": 5
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/GIT_MIGRATION.md",
+   "to": "spec_section:18.3",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/GIT_MIGRATION.md",
+   "line": 41
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/GIT_MIGRATION.md",
+   "to": "spec_section:18.6",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/GIT_MIGRATION.md",
+   "line": 48
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/GIT_MIGRATION.md",
+   "to": "spec_section:18.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/GIT_MIGRATION.md",
+   "line": 56
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/GIT_MIGRATION.md",
+   "to": "spec_section:18.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/GIT_MIGRATION.md",
+   "line": 60
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/GIT_MIGRATION.md",
+   "to": "spec_section:18.3",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/GIT_MIGRATION.md",
+   "line": 78
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/GIT_MIGRATION.md",
+   "to": "adr:006",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/GIT_MIGRATION.md",
+   "line": 82
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/KNOWLEDGE_ADMIN.md",
+   "to": "adr:023",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/KNOWLEDGE_ADMIN.md",
+   "line": 6
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/KNOWLEDGE_ADMIN.md",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/KNOWLEDGE_ADMIN.md",
+   "line": 10
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/KNOWLEDGE_ADMIN.md",
+   "to": "adr:030",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/KNOWLEDGE_ADMIN.md",
+   "line": 41
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/KNOWLEDGE_ADMIN.md",
+   "to": "adr:023",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/KNOWLEDGE_ADMIN.md",
+   "line": 43
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/KNOWLEDGE_ADMIN.md",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/KNOWLEDGE_ADMIN.md",
+   "line": 47
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/MCP.md",
+   "to": "adr:002",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/MCP.md",
+   "line": 30
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/MCP.md",
+   "to": "adr:007",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/MCP.md",
+   "line": 30
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "to": "adr:003",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "line": 9
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "to": "spec_section:15.3",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "line": 19
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "to": "spec_section:15.3",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "line": 29
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "to": "adr:025",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "line": 58
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "to": "adr:021",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "line": 59
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "to": "adr:021",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "line": 60
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "to": "spec_section:14.14",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "line": 63
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "to": "adr:020",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "line": 71
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "to": "adr:003",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/MODEL_ROUTING.md",
+   "line": 78
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/OPERATIONS.md",
+   "to": "spec_section:5.4",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/OPERATIONS.md",
+   "line": 7
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/OPERATIONS.md",
+   "to": "adr:030",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/OPERATIONS.md",
+   "line": 40
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/OPERATIONS.md",
+   "to": "adr:011",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/OPERATIONS.md",
+   "line": 56
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/OPERATIONS.md",
+   "to": "spec_section:30.10",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/OPERATIONS.md",
+   "line": 56
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/OPERATIONS.md",
+   "to": "spec_section:25.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/OPERATIONS.md",
+   "line": 60
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/PANEL.md",
+   "to": "adr:015",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/PANEL.md",
+   "line": 3
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/PANEL.md",
+   "to": "adr:016",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/PANEL.md",
+   "line": 4
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/PANEL.md",
+   "to": "spec_section:10.5.1",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/PANEL.md",
+   "line": 24
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/PANEL.md",
+   "to": "spec_section:10.5.1",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/PANEL.md",
+   "line": 37
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/PANEL.md",
+   "to": "adr:020",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/PANEL.md",
+   "line": 45
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/PANEL.md",
+   "to": "adr:010",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/PANEL.md",
+   "line": 54
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/PANEL.md",
+   "to": "spec_section:14.15",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/PANEL.md",
+   "line": 57
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/PANEL.md",
+   "to": "adr:023",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/PANEL.md",
+   "line": 58
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/PANEL.md",
+   "to": "roadmap_item:6.7",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/PANEL.md",
+   "line": 60
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/PANEL.md",
+   "to": "adr:011",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/PANEL.md",
+   "line": 62
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/PANEL.md",
+   "to": "adr:016",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/PANEL.md",
+   "line": 65
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/PANEL.md",
+   "to": "adr:023",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/PANEL.md",
+   "line": 70
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/PANEL.md",
+   "to": "adr:008",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/PANEL.md",
+   "line": 72
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/PANEL_AUTH_RECOVERY.md",
+   "to": "spec_section:10.5.8.2",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/PANEL_AUTH_RECOVERY.md",
+   "line": 3
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/PANEL_AUTH_RECOVERY.md",
+   "to": "adr:016",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/PANEL_AUTH_RECOVERY.md",
+   "line": 4
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/PANEL_AUTH_RECOVERY.md",
+   "to": "spec_section:10.5.8.2",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/PANEL_AUTH_RECOVERY.md",
+   "line": 31
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/PANEL_AUTH_RECOVERY.md",
+   "to": "adr:016",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/PANEL_AUTH_RECOVERY.md",
+   "line": 44
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/PANEL_AUTH_RECOVERY.md",
+   "to": "roadmap_item:6.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/PANEL_AUTH_RECOVERY.md",
+   "line": 57
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ROUTINES.md",
+   "to": "adr:101",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ROUTINES.md",
+   "line": 10
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ROUTINES.md",
+   "to": "adr:011",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ROUTINES.md",
+   "line": 23
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ROUTINES.md",
+   "to": "spec_section:26.1",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ROUTINES.md",
+   "line": 24
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ROUTINES.md",
+   "to": "adr:101",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ROUTINES.md",
+   "line": 33
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ROUTINES.md",
+   "to": "adr:101",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ROUTINES.md",
+   "line": 36
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ROUTINES.md",
+   "to": "spec_section:4.1",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ROUTINES.md",
+   "line": 38
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/ROUTINES.md",
+   "to": "adr:011",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/ROUTINES.md",
+   "line": 53
+  },
+  {
    "from": "file:helm/tree/docs/handoff/SECRETS_MAP.md",
    "to": "spec_section:5.4",
    "relation_type": "relates_to",
@@ -13839,6 +14715,270 @@
    "evidence_type": "explicit_link",
    "file": "helm/tree/docs/handoff/SECRETS_MAP.md",
    "line": 47
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/SIGNALAI_MIGRATION.md",
+   "to": "adr:007",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/SIGNALAI_MIGRATION.md",
+   "line": 32
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TEST_REPORT.md",
+   "to": "adr:020",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TEST_REPORT.md",
+   "line": 21
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TEST_REPORT.md",
+   "to": "roadmap_item:6.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TEST_REPORT.md",
+   "line": 23
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TEST_REPORT.md",
+   "to": "adr:027",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TEST_REPORT.md",
+   "line": 26
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TEST_REPORT.md",
+   "to": "adr:029",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TEST_REPORT.md",
+   "line": 27
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TEST_REPORT.md",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TEST_REPORT.md",
+   "line": 30
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TEST_REPORT.md",
+   "to": "adr:016",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TEST_REPORT.md",
+   "line": 31
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TEST_REPORT.md",
+   "to": "adr:026",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TEST_REPORT.md",
+   "line": 32
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TEST_REPORT.md",
+   "to": "adr:031",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TEST_REPORT.md",
+   "line": 36
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TEST_REPORT.md",
+   "to": "spec_section:30.2",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TEST_REPORT.md",
+   "line": 36
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TEST_REPORT.md",
+   "to": "adr:030",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TEST_REPORT.md",
+   "line": 37
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TEST_REPORT.md",
+   "to": "spec_section:14.15",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TEST_REPORT.md",
+   "line": 37
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TEST_REPORT.md",
+   "to": "adr:021",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TEST_REPORT.md",
+   "line": 50
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TEST_REPORT.md",
+   "to": "roadmap_item:5.7",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TEST_REPORT.md",
+   "line": 54
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "to": "finding:260831-02",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "line": 23
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "to": "finding:260831-05",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "line": 24
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "to": "finding:260831-07",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "line": 36
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "to": "finding:260829-33",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "line": 57
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "to": "finding:260829-06",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "line": 89
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "to": "finding:260829-14",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "line": 105
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "to": "finding:260829-20",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "line": 112
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "to": "finding:260829-21",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "line": 114
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "to": "finding:260829-17",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "line": 116
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "to": "finding:260829-19",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "line": 119
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "to": "finding:260829-10",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "line": 125
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "to": "finding:260829-28",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "line": 136
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "to": "finding:260829-29",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "line": 137
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "to": "finding:260829-08",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "line": 139
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "to": "finding:260829-31",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "line": 146
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "to": "finding:260829-02",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "line": 153
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "to": "adr:013",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TROUBLESHOOTING.md",
+   "line": 154
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TRUST_LEDGER.md",
+   "to": "adr:010",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TRUST_LEDGER.md",
+   "line": 3
+  },
+  {
+   "from": "file:helm/tree/docs/handoff/TRUST_LEDGER.md",
+   "to": "adr:010",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/handoff/TRUST_LEDGER.md",
+   "line": 52
   },
   {
    "from": "file:helm/tree/guardian/cleanup.sh",
@@ -14650,11 +15790,27 @@
   },
   {
    "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "to": "adr:002",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "line": 193
+  },
+  {
+   "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "to": "adr:101",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
+   "line": 199
+  },
+  {
+   "from": "file:helm/tree/implementation-state/ROADMAP-TO-DONE.md",
    "to": "roadmap_item:6.6",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/ROADMAP-TO-DONE.md",
-   "line": 241
+   "line": 251
   },
   {
    "from": "file:helm/tree/implementation-state/V3.4-DELTA.md",

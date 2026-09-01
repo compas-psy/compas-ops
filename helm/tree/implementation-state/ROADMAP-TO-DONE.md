@@ -182,16 +182,26 @@ ADR было не из чего. `019` (Graphify) остаётся сознат�
 своей отдельной причине (см. выше). Подробности и точные цитаты — в
 самих ADR и `docs/adr/README.md`.
 
-**§35 требует 23 документа передачи — есть 4.** Недостают: HANDOFF,
-ARCHITECTURE, OPERATIONS, SECRETS_MAP (без значений секретов),
-BACKUP_RESTORE, MODEL_ROUTING, MCP, GIT_MIGRATION, PANEL,
-PANEL_AUTH_RECOVERY, SIGNALAI_MIGRATION, ROUTINES, TRUST_LEDGER, COSTS,
-TROUBLESHOOTING, KNOWLEDGE_ADMIN, KNOWLEDGE_MIGRATION_V3.5, TEST_REPORT,
-D-LIST.
+**§35 требует 23 документа передачи.** Было 4, недоставало 19 — все 19
+написаны 31.08.2026, каталог `docs/handoff/`. Писались уже ПОСЛЕ
+множества живых выкатов этой сессии — фактическое состояние сервера
+(версии, статусы служб, реальные баги, конфигурация LiteLLM/секретов)
+бралось из живого опыта, не предположений.
 
-Писать их имеет смысл **после** выката: половина обязана содержать
-фактическое состояние сервера (версии, статусы служб, дата последнего
-бэкапа, базовая линия по памяти и диску), а не предположения.
+Пять из 19 — честные находки, не полноценные "документы решения":
+`MCP.md` и `SIGNALAI_MIGRATION.md` фиксируют, что решения действительно
+нет (тот же честный случай, что ADR-002/007); `KNOWLEDGE_MIGRATION_V3.5.
+md` фиксирует, что версии v3.5 не существует нигде в реальной истории
+репозитория (дельты идут v3.4→v3.7→v3.8, разрыв не объяснён); `D-LIST.
+md` — указатель по разбросанным D-кодам спеки (D0,D1,D2,D4,D5,D6
+найдены, D3/D7+ — нет); `ROUTINES.md` помечен оговоркой о возможном
+двойном прочтении названия (нынешние systemd-юниты vs будущая "P27
+Autonomous routines" из ADR-101, у которой в коде нет ни строки).
+Остальные 14 — полноценные рабочие документы (`ARCHITECTURE.md`,
+`OPERATIONS.md`, `SECRETS_MAP.md`, `BACKUP_RESTORE.md`, `MODEL_ROUTING.
+md`, `TROUBLESHOOTING.md`, `TEST_REPORT.md`, `GIT_MIGRATION.md`,
+`PANEL.md`, `PANEL_AUTH_RECOVERY.md`, `KNOWLEDGE_ADMIN.md`,
+`TRUST_LEDGER.md`, `COSTS.md`, `HANDOFF.md`).
 
 ---
 
