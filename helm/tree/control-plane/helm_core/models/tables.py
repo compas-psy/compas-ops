@@ -374,8 +374,18 @@ class KnowledgeSource(Base):
     #: content-existence side channel"); глобальная уникальность отдала бы
     #: User B готовый source User A просто по совпадению байт.
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: Хэш-производное имя (`{vault_root}/raw/{domain}/{sha256}.<ext>`,
+    #: см. `ingest.py`/`chat_intake.py`) — не содержит оригинального имени
+    #: файла, поэтому остаётся здесь даже для `health` (ADR-005/P12):
+    #: сам путь не идентифицирует документ, идентифицирует только
+    #: `original_filename` ниже.
     raw_path: Mapped[str] = mapped_column(Text, nullable=False)
     source_path: Mapped[str | None] = mapped_column(Text)
+    #: NULL для домена `health` (ADR-005/P12) — единственное реально
+    #: чувствительное поле этой таблицы: само имя файла уже медицинская
+    #: информация («Консультация уролога.pdf»), не только его
+    #: содержимое. Настоящее значение живёт в `health.knowledge_source_
+    #: private.original_filename`, доступной только роли `helm_health`.
     original_filename: Mapped[str | None] = mapped_column(String(255))
     mime_type: Mapped[str | None] = mapped_column(String(128))
     #: markitdown | docling | gigaam | manual — чем получен source_path.

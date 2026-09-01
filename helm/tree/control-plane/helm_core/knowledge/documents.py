@@ -35,9 +35,15 @@ from typing import Literal
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from .health_schema import (
+    health_schema_configured, health_session, is_health_domain, read_original_filename,
+)
 from .recall import build_or_tsquery
 from .tenancy import bind_knowledge_user
-from ..models import KnowledgeChunk, KnowledgeSource, KnowledgeStatus
+from ..models import (
+    HealthKnowledgeChunk, HealthKnowledgeSourcePrivate, KnowledgeChunk, KnowledgeSource,
+    KnowledgeStatus,
+)
 
 #: Больше — и «список кандидатов» перестаёт быть списком, который можно
 #: прочитать глазами в чате.
@@ -60,12 +66,81 @@ class SourceCandidate:
     created_at: str
 
 
+def _display_filename(source: KnowledgeSource) -> str | None:
+    """ADR-005/P12: `source.original_filename` — `None` для health, если
+    health-схема настроена (см. `ingest.py::_public_original_filename()`).
+    Вызывающий код здесь — `find_sources()`/`read_original()`, оба уже за
+    passkey-гейтом ЭТОГО ЖЕ владельца (`api/panel.py`) — то же законное
+    same-user disclosure, что и `worker.py::_notify_owner_of_result()`,
+    не раскрытие постороннему helm_app/chief."""
+    if is_health_domain(source.domain) and health_schema_configured():
+        return read_original_filename(source_id=source.id, knowledge_user_id=source.knowledge_user_id)
+    return source.original_filename
+
+
 def _as_candidate(source: KnowledgeSource) -> SourceCandidate:
     return SourceCandidate(
-        source_id=str(source.id), original_filename=source.original_filename,
+        source_id=str(source.id), original_filename=_display_filename(source),
         domain=source.domain, status=source.status, sensitivity=source.sensitivity,
         sha256=source.sha256, created_at=source.created_at.isoformat(),
     )
+
+
+def _health_candidates_by_name(session: Session, *, tenant_id: uuid.UUID, pattern: str,
+                               limit: int) -> list[KnowledgeSource]:
+    """`public.knowledge_sources.original_filename` — `None` для health,
+    ILIKE в `find_sources()` его не видит вовсе. Без этой ветки владелец
+    не смог бы найти `source_id` собственного health-документа по имени,
+    чтобы затем скачать его через `read_original()` (тот же passkey-гейт,
+    что и у этого поиска) — регрессия, которую вносит сама ADR-005/P12
+    маршрутизация, не отдельная функция."""
+    if not health_schema_configured() or limit <= 0:
+        return []
+    with health_session(tenant_id) as hsession:
+        ids = hsession.scalars(
+            select(HealthKnowledgeSourcePrivate.source_id)
+            .where(HealthKnowledgeSourcePrivate.knowledge_user_id == tenant_id,
+                  HealthKnowledgeSourcePrivate.original_filename.ilike(pattern))
+            .order_by(HealthKnowledgeSourcePrivate.created_at.desc())
+            .limit(limit)
+        ).all()
+    if not ids:
+        return []
+    sources = session.scalars(
+        select(KnowledgeSource).where(KnowledgeSource.id.in_(ids),
+                                      KnowledgeSource.knowledge_user_id == tenant_id)
+    ).all()
+    by_id = {s.id: s for s in sources}
+    return [by_id[i] for i in ids if i in by_id]
+
+
+def _health_candidates_by_content(session: Session, *, tenant_id: uuid.UUID, query: str,
+                                  limit: int) -> list[SourceCandidate]:
+    """Тот же fallback, что `_health_candidates_by_name()`, но для
+    контент-ветки `find_sources()` — чанки health-домена живут в
+    `health.knowledge_chunks`, обычный join на `public.knowledge_chunks`
+    их не находит."""
+    if not health_schema_configured() or limit <= 0:
+        return []
+    tsquery = build_or_tsquery(query)
+    rank = func.max(func.ts_rank(HealthKnowledgeChunk.tsv, tsquery, 2)).label("rank")
+    with health_session(tenant_id) as hsession:
+        rows = hsession.execute(
+            select(HealthKnowledgeChunk.source_id, rank)
+            .where(HealthKnowledgeChunk.knowledge_user_id == tenant_id,
+                  HealthKnowledgeChunk.tsv.op("@@")(tsquery))
+            .group_by(HealthKnowledgeChunk.source_id)
+            .order_by(rank.desc()).limit(limit)
+        ).all()
+    source_ids = [sid for sid, _ in rows]
+    if not source_ids:
+        return []
+    sources = session.scalars(
+        select(KnowledgeSource).where(KnowledgeSource.id.in_(source_ids),
+                                      KnowledgeSource.knowledge_user_id == tenant_id)
+    ).all()
+    by_id = {s.id: s for s in sources}
+    return [_as_candidate(by_id[sid]) for sid in source_ids if sid in by_id]
 
 
 def find_sources(session: Session, *, query: str, knowledge_user_id: uuid.UUID | None = None,
@@ -86,12 +161,14 @@ def find_sources(session: Session, *, query: str, knowledge_user_id: uuid.UUID |
             .where(KnowledgeSource.knowledge_user_id == tenant_id))
 
     pattern = f"%{query.strip()}%"
-    by_name = session.scalars(
+    by_name = list(session.scalars(
         base.where(KnowledgeSource.original_filename.ilike(pattern))
         .order_by(KnowledgeSource.created_at.desc()).limit(limit)
-    ).all()
+    ).all())
+    by_name += _health_candidates_by_name(session, tenant_id=tenant_id, pattern=pattern,
+                                          limit=limit - len(by_name))
     if by_name:
-        return [_as_candidate(s) for s in by_name]
+        return [_as_candidate(s) for s in by_name[:limit]]
 
     tsquery = build_or_tsquery(query)
     rank = func.max(func.ts_rank(KnowledgeChunk.tsv, tsquery, 2)).label("rank")
@@ -104,7 +181,10 @@ def find_sources(session: Session, *, query: str, knowledge_user_id: uuid.UUID |
         .order_by(rank.desc())
         .limit(limit)
     ).all()
-    return [_as_candidate(source) for source, _ in rows]
+    candidates = [_as_candidate(source) for source, _ in rows]
+    candidates += _health_candidates_by_content(session, tenant_id=tenant_id, query=query,
+                                                limit=limit - len(candidates))
+    return candidates
 
 
 @dataclass
@@ -161,7 +241,7 @@ def read_original(session: Session, source_id: uuid.UUID, *,
             "файл на диске не совпадает с записанной контрольной суммой")
 
     return OriginalBytes(
-        filename=source.original_filename or f"{source.sha256[:12]}.bin",
+        filename=_display_filename(source) or f"{source.sha256[:12]}.bin",
         media_type=source.mime_type or "application/octet-stream",
         data=data, sha256=digest,
         review_only=source.status in (KnowledgeStatus.ARCHIVED, KnowledgeStatus.SUPERSEDED),

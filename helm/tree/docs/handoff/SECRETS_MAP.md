@@ -45,6 +45,7 @@
 | `hermes_api_server_key` | helm-core (`HermesBridge`), `hermes-control` плагин | Тот же принцип совпадения в двух местах, для API Hermes напрямую |
 | `panel_auth_cookie_secret` | helm-core (Panel auth) | Подпись auth-cookie Panel |
 | `knowledge_telegram_bot_token` / `knowledge_telegram_webhook_secret` | helm-core (Dedicated Knowledge Bot, ADR-029) | Пустой файл = вебхук fail-closed отклоняет всё — ожидаемое состояние до заведения бота через BotFather, не поломка |
+| `health_database_url` | helm-core, воркер | Строка подключения роли `helm_health` к той же БД `helm` (`search_path=health`), ADR-005/P12. Файл ОБЯЗАН существовать (пустым) уже на момент раскатки `docker-compose.yml` — Docker `secrets: {file: ...}` требует физического файла для старта контейнера, не только для чтения значения. Пустое содержимое = health-путь выключен (fail-open) — ожидаемое состояние до прогона `scripts/setup-health-role.sh`, не поломка. Пароль генерируется этим скриптом на сервере (тот же приём, что `restic_password`) — после его прогона нужен `docker compose restart helm-core helm-knowledge-worker`, секрет читается один раз при старте процесса |
 | `n8n_database_password` / `n8n_encryption_key` | n8n | Отдельная БД n8n + шифрование хранимых n8n credentials |
 | `forgejo_database_password` | forgejo | Отдельная БД Forgejo |
 | `n8n_api_key` | `scripts/n8n-workflows.py` (не docker-compose secret — читается напрямую скриптом с хоста) | Экспорт/импорт workflow'ов n8n через API |

@@ -42,7 +42,7 @@
 | 002 | n8n adapter boundary | не написан — **действительно не решено**, не только не задокументировано: n8n развёрнут (127.0.0.1-only), но ни одного коннектора не заведено, `helm_core` его вообще не импортирует. Писать ADR не из чего |
 | 003 | LiteLLM routing ownership | ✅ `ADR-003-litellm-routing-ownership.md` — статическая часть; динамическая эскалация по типу вопроса отложена, см. документ |
 | 004 | Hermes state/Kanban non-canonical | ✅ `ADR-004-hermes-state-non-canonical.md` — синтез из нескольких мест, не одна прямая цитата, см. оговорку в документе |
-| 005 | Health isolation | ✅ `ADR-005-health-isolation.md` — частично: логическое исключение сделано, схема/роль Postgres отложена отдельной задачей |
+| 005 | Health isolation | ✅ `ADR-005-health-isolation.md` — generic public envelope + security-scope private payload schema, реализовано в коде/тестах (P12); живой прогон `scripts/setup-health-role.sh` на сервере ещё не выполнен |
 | 006 | Forgejo primary / GitHub mirror+CI | ✅ `ADR-006-forgejo-primary-github-mirror.md` — план и целевая архитектура решены, сама миграция репозиториев (шаги 2-11) не выполнена |
 | 007 | SignalAI single-writer migration | не написан — **действительно не решено**: Milestone D не начата по требованию самой спеки (раньше нельзя), архитектуры single-writer не существует ни в каком виде |
 | 008 | Skills promotion | ✅ `ADR-008-skills-promotion.md` — гейт (policy YAML) решён, исполнитель не зарегистрирован, `skills/` пуст |

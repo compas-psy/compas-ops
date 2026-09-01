@@ -118,6 +118,12 @@ services:
       postgres: {condition: service_healthy}
     environment:
       HELM_DATABASE_URL_FILE: /run/secrets/helm_database_url
+      # ADR-005/P12: пусто, пока scripts/setup-health-role.sh не прогнан
+      # на сервере — секрета ещё нет, health-путь остаётся выключен
+      # (fail-open, см. knowledge/health_schema.py). Файл конфигурации, а
+      # не отдельный docker-compose override: включение — не редеплой
+      # кода, а появление файла на диске.
+      HELM_HEALTH_DATABASE_URL_FILE: /run/secrets/health_database_url
       HELM_POLICY_PATH: /opt/helm/config/policies/actions.yaml
       HELM_OWNER_ID_FILE: /run/secrets/telegram_owner_id
       # id владельца в MAX — другое число, чем Telegram-id (§10.1 п.2):
@@ -166,7 +172,8 @@ services:
               panel_auth_cookie_secret, telegram_bot_token,
               max_webhook_secret, max_bot_token, max_owner_id,
               hermes_api_server_key,
-              knowledge_telegram_bot_token, knowledge_telegram_webhook_secret]
+              knowledge_telegram_bot_token, knowledge_telegram_webhook_secret,
+              health_database_url]
     # docker compose (не swarm) монтирует secrets bind-mount'ом с теми же
     # правами, что и на хосте (0600 root:root, §6.3) — не сбрасывает их на
     # 0444, как это делал бы Swarm. Контейнер работает под UID 10001, не
@@ -231,8 +238,9 @@ services:
       postgres: {condition: service_healthy}
     environment:
       HELM_DATABASE_URL_FILE: /run/secrets/helm_database_url
+      HELM_HEALTH_DATABASE_URL_FILE: /run/secrets/health_database_url
       TZ: Europe/Moscow
-    secrets: [helm_database_url]
+    secrets: [helm_database_url, health_database_url]
     # 10001 — helm-secrets, для чтения helm_database_url (тот же паттерн,
     # что у helm-core, F-260829-09). 1001 — ДОБАВЛЕНО живым тестом
     # 29.08.2026: GID хостового пользователя helm, владельца
@@ -482,6 +490,13 @@ secrets:
   # отклоняет всё — это ожидаемое состояние, не поломка.
   knowledge_telegram_bot_token:      {file: /etc/helm/secrets/knowledge_telegram_bot_token}
   knowledge_telegram_webhook_secret: {file: /etc/helm/secrets/knowledge_telegram_webhook_secret}
+  # ADR-005/P12: файл ОБЯЗАН существовать (пусть даже пустым) ДО этого
+  # деплоя — Docker secrets типа `file:` требуют физического файла для
+  # самого запуска контейнера, не только для чтения значения. Пустой
+  # файл = health-путь выключен (fail-open, helm_core/config.py); реальное
+  # содержимое появляется прогоном scripts/setup-health-role.sh, который
+  # уже проверяет "файл существует, но пуст" отдельно (idempotent-режим).
+  health_database_url: {file: /etc/helm/secrets/health_database_url}
 
 volumes:
   pgdata:        {name: helm_pgdata}

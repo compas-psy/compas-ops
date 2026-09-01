@@ -21,7 +21,7 @@ SECRETS_DIR = Path("/run/secrets")
 #: Docker secret — переменной с суффиксом _FILE, содержащей путь к файлу,
 #: а не сам секрет напрямую (обычная практика Docker secrets, как
 #: POSTGRES_PASSWORD_FILE у официального образа Postgres).
-_FILE_BACKED_FIELDS = ("database_url", "owner_id", "max_owner_id")
+_FILE_BACKED_FIELDS = ("database_url", "owner_id", "max_owner_id", "health_database_url")
 
 
 def _resolve_file_env_vars(prefix: str) -> None:
@@ -69,6 +69,15 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://helm@/helm?host=/var/run/postgresql"
     policy_path: str = "/opt/helm/config/policies/actions.yaml"
+
+    #: ADR-005/P12 — отдельная роль `helm_health`, отдельная схема
+    #: `health`, та же база `helm`. Пусто по умолчанию: `scripts/setup-
+    #: health-role.sh` — ручной, идемпотентный шаг (тот же класс, что уже
+    #: есть у `compose/post-migration.sql`), до его прогона на сервере
+    #: `knowledge/health_schema.py` держит health-путь выключенным
+    #: (fail-open на прежнее поведение — domain=health в `public`,
+    #: отфильтрован в probe()), а не падает.
+    health_database_url: str = ""
 
     #: Telegram id владельца. Единственная identity, чьи решения принимаются.
     owner_id: str = ""

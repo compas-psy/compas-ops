@@ -40,13 +40,17 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .embeddings import embed_texts_or_none
+from .health_schema import health_schema_configured, health_session
 from .recall import (
     MemoryHit, build_or_tsquery, compose_memory_answer, is_future_reminder,
     is_historical_query, search_memories,
 )
 from .rephrase import rephrase_or_none
 from .tenancy import bind_knowledge_user
-from ..models import KnowledgeAnswerRun, KnowledgeChunk, KnowledgeDomain, KnowledgeSource, KnowledgeStatus
+from ..models import (
+    HealthKnowledgeChunk, HealthKnowledgeSourcePrivate, KnowledgeAnswerRun, KnowledgeChunk,
+    KnowledgeDomain, KnowledgeSource, KnowledgeStatus,
+)
 from ..models.base import utcnow
 
 #: §14.13 требует «calibrated threshold» — реального golden-набора
@@ -177,6 +181,55 @@ def _vector_search(session: Session, *, query_embedding: list[float], domain: st
     ]
 
 
+def _health_lexical_search(*, query: str, knowledge_user_id: uuid.UUID) -> list[Evidence]:
+    """Тот же лексический поиск, что `_lexical_search`, на health-
+    соединении (ADR-005/P12) — `health.knowledge_chunks` физически не
+    видна `helm_app`, обычная сессия здесь не годится вообще. Вызывается
+    только когда `domain == KnowledgeDomain.HEALTH` явно — "reviewer
+    temporary explicit scope", см. docstring `_lexical_search`."""
+    tsquery = build_or_tsquery(query)
+    rank = func.ts_rank(HealthKnowledgeChunk.tsv, tsquery, 2).label("rank")
+    with health_session(knowledge_user_id) as session:
+        stmt = (
+            select(HealthKnowledgeChunk, HealthKnowledgeSourcePrivate.original_filename, rank)
+            .outerjoin(HealthKnowledgeSourcePrivate,
+                      HealthKnowledgeChunk.source_id == HealthKnowledgeSourcePrivate.source_id)
+            .where(HealthKnowledgeChunk.tsv.op("@@")(tsquery))
+            .where(HealthKnowledgeChunk.knowledge_user_id == knowledge_user_id)
+            .order_by(rank.desc())
+            .limit(MAX_EVIDENCE)
+        )
+        rows = session.execute(stmt).all()
+        return [
+            Evidence(chunk_id=str(chunk.id), source_id=str(chunk.source_id), chunk_text=chunk.text,
+                    original_filename=filename, rank=float(r))
+            for chunk, filename, r in rows
+        ]
+
+
+def _health_vector_search(*, query_embedding: list[float], knowledge_user_id: uuid.UUID,
+                          exclude_chunk_ids: set[str]) -> list[Evidence]:
+    """Health-эквивалент `_vector_search()` — см. её docstring."""
+    similarity = (1 - HealthKnowledgeChunk.embedding.cosine_distance(query_embedding)).label("similarity")
+    with health_session(knowledge_user_id) as session:
+        stmt = (
+            select(HealthKnowledgeChunk, HealthKnowledgeSourcePrivate.original_filename, similarity)
+            .outerjoin(HealthKnowledgeSourcePrivate,
+                      HealthKnowledgeChunk.source_id == HealthKnowledgeSourcePrivate.source_id)
+            .where(HealthKnowledgeChunk.embedding.isnot(None))
+            .where(HealthKnowledgeChunk.knowledge_user_id == knowledge_user_id)
+            .order_by(similarity.desc())
+            .limit(MAX_EVIDENCE)
+        )
+        rows = session.execute(stmt).all()
+        return [
+            Evidence(chunk_id=str(chunk.id), source_id=str(chunk.source_id), chunk_text=chunk.text,
+                    original_filename=filename, rank=float(sim))
+            for chunk, filename, sim in rows
+            if str(chunk.id) not in exclude_chunk_ids and float(sim) >= MIN_COSINE_SIMILARITY
+        ]
+
+
 def _compose_answer(evidence: list[Evidence]) -> tuple[str, str]:
     """Детерминированный composer (§14.12) — без LLM."""
     if len(evidence) == 1:
@@ -245,8 +298,17 @@ def probe(session: Session, *, query: str, domain: str | None = None,
         return ProbeResult(outcome="LOCAL_ANSWER", mode=mode, answer_text=answer_text,
                            memory=memory_hits)
 
-    evidence = _lexical_search(session, query=query, domain=domain,
-                               knowledge_user_id=knowledge_user_id)
+    # ADR-005/P12: явный domain=health, после того как scripts/setup-
+    # health-role.sh прогнан — chunk'и физически живут в health.
+    # knowledge_chunks, обычная сессия/таблица их больше не видит вовсе.
+    # Без настроенной схемы — прежнее поведение (health ещё в public).
+    use_health_schema = domain == KnowledgeDomain.HEALTH and health_schema_configured()
+
+    if use_health_schema:
+        evidence = _health_lexical_search(query=query, knowledge_user_id=knowledge_user_id)
+    else:
+        evidence = _lexical_search(session, query=query, domain=domain,
+                                   knowledge_user_id=knowledge_user_id)
     evidence = [e for e in evidence if e.rank >= MIN_RANK_SCORE]
 
     # ADR-025: pgvector дополняет лексику местами, до MAX_EVIDENCE — не
@@ -261,10 +323,16 @@ def probe(session: Session, *, query: str, domain: str | None = None,
         query_embedding = embed_texts_or_none([query])[0]
         if query_embedding is not None:
             exclude_ids = {e.chunk_id for e in evidence}
-            vector_hits = _vector_search(
-                session, query_embedding=query_embedding, domain=domain,
-                knowledge_user_id=knowledge_user_id, exclude_chunk_ids=exclude_ids,
-            )
+            if use_health_schema:
+                vector_hits = _health_vector_search(
+                    query_embedding=query_embedding, knowledge_user_id=knowledge_user_id,
+                    exclude_chunk_ids=exclude_ids,
+                )
+            else:
+                vector_hits = _vector_search(
+                    session, query_embedding=query_embedding, domain=domain,
+                    knowledge_user_id=knowledge_user_id, exclude_chunk_ids=exclude_ids,
+                )
             evidence = (evidence + vector_hits)[:MAX_EVIDENCE]
 
     # §14.13 quality gate: без evidence выше порога — сразу эскалация, а

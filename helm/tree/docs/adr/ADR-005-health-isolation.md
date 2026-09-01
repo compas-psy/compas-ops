@@ -1,79 +1,214 @@
-# ADR-005. Health isolation
+# ADR-005. Health isolation: generic public source envelope + security-scope private payload schemas
 
-**Дата:** 31.08.2026 · **Статус:** частично реализовано — логическое
-разделение сделано и живьём подтверждено, схема/роль Postgres на уровне
-БД сознательно отложена отдельной задачей, не входит в этот заход.
+**Дата:** 31.08.2026 (логическое разделение) / 01.09.2026 (физическая
+Postgres-изоляция) · **Статус:** реализовано в коде и покрыто тестами;
+живой прогон `scripts/setup-health-role.sh` на боевом сервере (создание
+пароля роли `helm_health`, таблиц `health.*`) ещё не выполнен — это
+последний шаг, не архитектурная неопределённость. До его прогона
+health-путь работает в fail-open режиме (см. «Деградация» ниже),
+поведение не меняется относительно предыдущего состояния этого ADR.
 
 ## Контекст
 
-§14.15 требует для домена `health` отдельную схему/роль Postgres —
-изоляцию сильнее, чем просто колонку в общей таблице. Milestone C
-("домены", P9-P12) в целом не начата (`ROADMAP-TO-DONE.md`), но
-логический механизм исключения health-контента из общего поиска был
-нужен уже сейчас — как только появился первый реальный health-документ
-(4 медицинских PDF, см. `docs/KNOWLEDGE_MODELS.md`/E13-разведку 31.08.2026),
-он не должен был всплывать в ответе на обычный вопрос.
+§14.15/§4.5/§6.5 требуют для домена `health` отдельную схему/роль
+Postgres — изоляцию сильнее, чем колонка в общей таблице. Первый заход
+(31.08.2026) дал только логическое исключение: `KnowledgeDomain.HEALTH`
+жёстко исключён из общего (без явного домена) поиска (`probe.py`), но
+health-строки физически лежат в тех же таблицах `public.*`, что и любой
+другой домен того же пользователя. Это было зафиксировано здесь же как
+сознательный, явно не выданный за полный, пропуск.
+
+Разбор задачи P12 («Postgres-схема/роль для health», ROADMAP-TO-DONE.md
+Блок 3) обнаружил реальную архитектурную развилку: `public.knowledge_
+sources`/`public.knowledge_ingest_jobs` — общий конверт и общая очередь
+для ВСЕХ доменов, с хардкодной FK-связью (`knowledge_ingest_jobs.
+source_id → knowledge_sources.id`) и общей fair-queue/retry-логикой
+воркера (`worker.py`). Наивное «переехать health целиком в отдельную
+схему» сломало бы эту связь или потребовало бы дублировать весь
+queue/retry-контур ради одного домена — оба варианта хуже, чем
+изоляция, которую они должны обеспечивать.
 
 ## Решение
 
-**Логическая изоляция сейчас, физическая — отдельной задачей, честно
-не выдаётся за завершённую.**
+**Generic public source envelope + security-scope private payload
+schemas.** Единый конверт (`public.knowledge_sources`) и единая очередь
+(`public.knowledge_ingest_jobs`) остаются общими для всех доменов —
+никакого второго retry/fair-queue/backpressure контура специально для
+health. Для `security_scope=health` конверт хранит ТОЛЬКО нейтральные,
+не идентифицирующие документ поля (id, `knowledge_user_id`, `domain`,
+статусы, `sha256`, `raw_path`/`mime_type`/`parser` — хэш-производное имя
+файла и технические метаданные, см. ниже почему они не чувствительны).
+Всё, что физически идентифицирует ЧЕЛОВЕКА и его состояние — имя файла,
+текст, чанки, relations — уходит в отдельную схему `health`, отдельную
+Postgres-роль `helm_health`, недоступную `helm_app`/chief вообще:
 
-### Что сделано
+```
+upload → public source envelope → public ingest job
+       → worker видит security_scope=health
+       → переключается на health-scoped соединение (роль helm_health)
+       → читает/пишет health private metadata + chunks + relations
+       → конверт получает только нейтральный статус READY/FAILED
+```
 
-`KnowledgeDomain.HEALTH` и `KnowledgeSensitivity.HEALTH` (`models/base.py`)
-— `probe.py::_lexical_search()` и `_vector_search()` жёстко исключают
-`health` и `simpas/zapiski` из обычного (без явного домена) поиска:
+### Почему `raw_path`/`mime_type`/`parser` остаются в public
 
-> «health — chief не получает raw health RAG на общий вопрос, только на
-> явный health-scope... simpas/zapiski — клиентский контент, спека прямо
-> требует "not indexed into general namespaces"» (`probe.py`)
+Наивное прочтение спеки — перенести и их тоже. Проверка `chat_intake.py`
+показала, что `raw_path` строится как `{vault_root}/raw/{domain}/
+{sha256}.<ext>` — хэш-производное имя, не содержащее оригинального имени
+файла и не идентифицирующее документ само по себе. `mime_type`/`parser`
+— общие технические категории (`application/pdf`/`markitdown`), тоже не
+идентифицирующие. Единственное реально чувствительное поле source —
+`original_filename`: само имя вроде «Консультация уролога.pdf» или
+«ВИЧ-анализ.pdf» уже медицинская информация, не только содержимое файла.
+Перенос `raw_path`/`mime_type`/`parser` в sidecar не добавил бы защиты,
+только развёл бы поля без причины (CLAUDE.md §2) — и, что важнее для
+работоспособности пайплайна, `sha256`/`raw_path` нужны СИНХРОННОМУ
+дедуп-пути `register_file_for_ingest()` ДО того, как health-сессия вообще
+создаётся; переносить их значило бы городить курицу-яйцо там, где его
+нет и не должно быть.
 
-`chat_intake.py`/`batch_intake.py` принудительно проставляют
-`sensitivity=client_restricted` для `simpas/zapiski` при выборе домена —
-не полагаются на то, что владелец сам не забудет отметить чувствительность.
+### Схема `health`
 
-Живым аудитом 29.08.2026 найден и исправлен реальный баг: `_lexical_search`
-изначально исключал только `health`, не `simpas/zapiski`, из общего
-поиска — несогласованность исправлена, оба домена исключаются одинаково.
+Три таблицы, отдельная `DeclarativeBase` (`HealthBase`,
+`models/health_tables.py`) — вне `migrations/env.py::target_metadata`,
+потому что Alembic подключается ролью `helm_app`, у которой на схему
+`health` нет вообще никаких прав, включая CREATE:
 
-### Что сознательно НЕ сделано
+- `health.knowledge_source_private` — sidecar одной строки на health-
+  source: `source_id` (тот же UUID, что конверт, БЕЗ `ForeignKey` на
+  `public.knowledge_sources` — см. ниже почему), `knowledge_user_id`,
+  `original_filename`, `parse_error` (полный диагностический текст
+  парсера, см. «Санитизация ошибок»), `created_at`.
+- `health.knowledge_chunks` — зеркало `public.knowledge_chunks` (текст,
+  `tsv`, `embedding`), FK на `knowledge_source_private.source_id`
+  (внутри своей же схемы — не открывает ничего наружу).
+- `health.knowledge_relations` — зеркало `public.knowledge_relations`.
+  Добавлена сверх исходно обсуждавшегося списка: `to_id`/`from_id`
+  wikilink-связей могут прямо называть тему заметки («аутоиммунный
+  гастрит») — то самое "health entities/topics", которому это решение
+  запрещает попадать в `public`.
 
-`V3.4-DELTA.md` фиксирует это явно, дословно — стоит процитировать,
-потому что это ровно формулировка, которую и должен нести ADR:
+Обе последние — с `FORCE ROW LEVEL SECURITY`, тот же tenant-предикат,
+что ADR-030 (`knowledge_user_id = current_setting('app.current_
+knowledge_user_id')`) — RLS защищает МЕЖДУ пользователями health-домена,
+отдельно от того, что сама схема защищает от `helm_app`.
 
-> «§14.15 требует для `health` "separate schema/user" — этот заход даёт
-> только логическое разделение (колонка `domain`), НЕ отдельную схему/
-> роль Postgres. Это сознательное упрощение первого прохода, не
-> случайный пропуск — фиксируется здесь явно, чтобы не выдать частичное
-> решение за полное. Отдельная схема/роль для health — самостоятельная
-> задача, не блокирует остальной P8.5.»
+### Почему `source_id` в sidecar — без FK на конверт
 
-`WORKPLAN.md` — та же мысль короче: «Отдельная схема/роль Postgres для
-`health` (§14.15) — тоже отложено, сейчас только логическая колонка
-`domain`».
+Конверт (`register_file_for_ingest()`/`ingest_text()`, сессия
+`helm_app`) и sidecar (та же функция, синхронно следом, но НА ОТДЕЛЬНОМ
+соединении ролью `helm_health`) пишутся в ДВУХ РАЗНЫХ транзакциях на
+двух разных соединениях. Postgres не видит незакоммиченную строку одной
+транзакции при проверке FK из другой — реальная FK через границу схем
+здесь была бы гонкой, не гарантией. Ссылочная целостность конверт↔sidecar
+проверяется кодом (`knowledge/health_schema.py`), не базой — тот же
+класс допущения, что уже есть у `KnowledgeRelation.to_id` (может
+указывать на заметку, которой ещё нет).
 
-Изоляция МЕЖДУ пользователями (ADR-030, PostgreSQL RLS по
-`knowledge_user_id`) НЕ даёт `health` дополнительной защиты сверх той,
-что есть у любого другого домена того же пользователя — health-данные
-одного человека физически лежат в тех же таблицах/схеме, что и его
-остальные домены, разделены только запросным исключением выше.
+### Postgres-роль `helm_health`
 
-### Открытый пробел, найденный отдельным аудитом
+Схема и роль заведены `compose/init/01-databases.sql` при первом бутстрапе
+кластера (`GRANT USAGE`, `REVOKE ALL ON SCHEMA public FROM helm_health`),
+но без пароля и без таблиц. `scripts/setup-health-role.sh` (написан,
+идемпотентен, ещё не прогнан на живом сервере) достраивает: генерирует
+пароль ролью `openssl rand -hex 32` целиком на сервере (тот же приём,
+что `restic_password`/`setup_backup.sh` — значение никогда не проходит
+через агента, CLAUDE.md §5.4), создаёт три таблицы ОТ ИМЕНИ `helm_health`
+(`SET ROLE` перед `CREATE TABLE` — в Postgres владелец объекта обходит
+любой `REVOKE` НА этот объект, поэтому «helm_app не видит health»
+работает, только если `helm_app` никогда не становится владельцем этих
+таблиц), включает RLS, и заканчивается verification-блоком: `helm_health`
+не суперпользователь и не BYPASSRLS, `helm_app` не имеет `USAGE` на схему
+`health` и не имеет `SELECT` ни на одну из трёх таблиц.
 
-`WORKPLAN.md` (аудит 29.08.2026): `probe(domain=...)` реально работает и
-протестирован на уровне Python, но НИ ОДИН живой канал (ни `/hooks/max`,
-ни `helm-control`) не вызывает его с явным доменом — только `query` без
-скоупа. Значит контент, загруженный в `health`, успешно ingest'ится, но
-сегодня НЕ находится обычным вопросом в чате ни бесплатным Probe
-(намеренно исключён), ни платным Hermes (не видит базу знаний вообще).
-Предложенный, но не реализованный выход — явный синтаксис вида
-`health: <вопрос>`.
+### Деградация (fail-open)
 
-## Не в объёме этого захода
+`settings.health_database_url` пусто по умолчанию. Пока `setup-health-
+role.sh` не прогнан на конкретном сервере, `health_schema_configured()`
+возвращает `False` везде, и весь код в `ingest.py`/`worker.py`/
+`probe.py`/`documents.py` откатывается на ТО ЖЕ поведение, что было до
+этого ADR — health в `public`, отфильтрован в `probe()` по домену, как
+раньше. Включение — не редеплой кода, а появление заполненного секрета
+на диске плюс `docker compose restart helm-core helm-knowledge-worker`
+(секрет читается один раз при старте процесса, см. `config.py::
+_resolve_file_env_vars`). Docker Compose (`compose/docker-compose.yml`)
+уже объявляет `health_database_url` как required secret у обоих
+контейнеров — порядок деплоя (пустой плейсхолдер-файл до раскатки
+compose, реальный пароль — после прогона скрипта) описан в шапке самого
+`setup-health-role.sh`.
 
-- Отдельная схема/роль Postgres для `health` (§14.15 буквально) —
-  самостоятельная задача.
-- Явный вход в health-scope из чата (`health: <вопрос>` или аналог).
-- Гейт безопасности сверх текущего domain-based исключения (шифрование
-  на уровне колонки, аудит-лог обращений к health-контенту и т.п.).
+### Санитизация ошибок
+
+Провал парсера health-документа может процитировать содержимое в тексте
+исключения (`"страница 3: обнаружен B12"`). `worker.py::process_job()`
+записывает такой текст ТОЛЬКО в `health.knowledge_source_private.
+parse_error`; `public.knowledge_ingest_jobs.error` получает исключительно
+код `HEALTH_PARSE_FAILED`.
+
+### Явный health-scope в поиске и владелец-facing чтении
+
+`probe(domain="health")` (уже существовавший, но ранее бивший только по
+`public`) теперь при настроенной схеме ходит в `health.knowledge_chunks`
+через отдельное health-соединение (`_health_lexical_search`/
+`_health_vector_search`, `probe.py`) — общий поиск без явного домена
+по-прежнему не находит health вообще, как и было. `documents.py::
+find_sources()`/`read_original()` (панель владельца, за passkey-гейтом,
+`api/panel.py`) читают реальное имя файла из sidecar — то же законное
+same-user disclosure, что уже применялось к уведомлению воркера
+(`_notify_owner_of_result()`), не раскрытие постороннему `helm_app`.
+
+## Проверено
+
+Полный набор тестов (`tests/test_knowledge_health_isolation.py`,
+583/583 зелёных вместе с остальным набором) — но по honest-scope: роль
+там одна и та же (`helm_rls`) для `public` и `health`, потому что вторая
+настоящая Postgres-роль требует ручного `CREATEROLE`-шага, не
+автоматизируется тестовым прогоном (`tests/README.md`). Что тесты
+реально проверяют: RLS-тенантность (`helm_rls` не BYPASSRLS — политики
+применяются по-настоящему), и корректность маршрутизации приложения —
+`original_filename`/чанки/relations физически лежат в правильной
+таблице, `public` получает `None`/пусто, `probe(domain="health")`
+находит то, чего общий поиск не находит.
+
+Acceptance-критерии владельца (сформулированы при разборе P12):
+
+1. health-документ проходит через существующую общую очередь — ✅, тот
+   же `KnowledgeIngestJob`, без изменений в его схеме.
+2. reboot/retry продолжает работать — ✅, очередь не менялась.
+3. `helm_app` SELECT по `public` не раскрывает filename/title/path/text
+   health-source — ✅ на уровне данных (`original_filename` — `None`),
+   Postgres-REVOKE самой роли — не проверено тестами (см. выше),
+   проверяется verification-блоком `setup-health-role.sh` при живом
+   прогоне.
+4. попытка `helm_app` читать health private tables → permission denied —
+   не проверено тестами по той же причине; проверяется тем же
+   verification-блоком.
+5. general RAG не находит health chunk — ✅ (`test_probe_general_query_
+   does_not_find_health_chunk_once_moved_to_sidecar`).
+6. health profile находит его — ✅ (`test_probe_health_domain_finds_
+   chunk_only_in_health_schema`).
+7. public logs/task_events не содержат sensitive filename/content — ✅
+   (`test_process_job_health_domain_sanitizes_error_keeps_diagnostic_
+   private`).
+8. backup/restore сохраняет связь `public.source_id` ↔ health private
+   metadata — не проверено отдельно: `source_id` совпадает по значению
+   (не по FK, см. выше), обе схемы живут в одной базе `helm`, значит
+   в одном and том же `pg_dump`/restic-снапшоте — та же гарантия
+   консистентности, что и у любых двух таблиц одной базы; отдельный
+   restore-тест для health не заводился (нет отдельного backup-контура,
+   см. `docs/handoff/BACKUP_RESTORE.md`).
+
+## Не в объёме этого ADR
+
+- Живой прогон `scripts/setup-health-role.sh` на боевом сервере и живая
+  проверка acceptance #3/#4/#8 против настоящей второй роли — следующий
+  шаг, не архитектурное решение.
+- Перенос уже существующих 4 живых health-документов (их
+  `original_filename` сегодня всё ещё в `public`, заведены до этого
+  ADR) — отдельная одноразовая data-миграция.
+- Явный синтаксис входа в health-scope из чата (`health: <вопрос>`) —
+  тот же нерешённый пробел, что был зафиксирован в предыдущей версии
+  этого документа; `probe(domain="health")` работает и протестирован,
+  но ни один живой канал не вызывает его с явным доменом.
+- Шифрование на уровне колонки, аудит-лог обращений к health-контенту —
+  не запрашивались, не добавлены (CLAUDE.md §2).

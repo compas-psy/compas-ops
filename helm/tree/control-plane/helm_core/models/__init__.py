@@ -15,11 +15,15 @@ from .tables import (
     PanelEnrollmentToken, PanelSession, PanelStepUpChallenge, Routine, Task, TaskEvent,
     WebauthnCredential,
 )
+from .health_tables import (
+    HealthBase, HealthKnowledgeChunk, HealthKnowledgeRelation, HealthKnowledgeSourcePrivate,
+)
 
 __all__ = [
     "ActionTrust", "Approval", "ApprovalStatus", "Artifact", "Base",
     "BATCH_ITEM_TERMINAL_STATUSES", "BATCH_TERMINAL_STATUSES",
     "BudgetDaily", "Channel", "ChannelEvent", "Decision",
+    "HealthBase", "HealthKnowledgeChunk", "HealthKnowledgeRelation", "HealthKnowledgeSourcePrivate",
     "KnowledgeAnswerMode", "KnowledgeAnswerRun", "KnowledgeBatchItem",
     "KnowledgeBatchItemStatus", "KnowledgeBatchStatus", "KnowledgeChannelIdentity",
     "KnowledgeChunk", "KnowledgeCustomDomain", "KnowledgeDomain",

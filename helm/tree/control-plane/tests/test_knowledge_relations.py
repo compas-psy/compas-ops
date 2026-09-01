@@ -190,7 +190,7 @@ def test_store_relations_writes_rows_with_full_provenance(session):
     bind_knowledge_user(session, user.id)
     source_id = _make_source(session, user.id, sha256_seed="provenance-test")
 
-    count = store_relations(session, knowledge_user_id=user.id, from_id="Заметка А",
+    count = store_relations(session, domain="general", knowledge_user_id=user.id, from_id="Заметка А",
                             source_id=source_id, text="Смотри [[Заметка Б]].")
 
     assert count == 1
@@ -216,9 +216,9 @@ def test_store_relations_is_idempotent_on_reingest_same_source(session):
     bind_knowledge_user(session, user.id)
     source_id = _make_source(session, user.id, sha256_seed="idempotent-test")
 
-    store_relations(session, knowledge_user_id=user.id, from_id="A",
+    store_relations(session, domain="general", knowledge_user_id=user.id, from_id="A",
                     source_id=source_id, text="[[B]] [[C]]")
-    store_relations(session, knowledge_user_id=user.id, from_id="A",
+    store_relations(session, domain="general", knowledge_user_id=user.id, from_id="A",
                     source_id=source_id, text="[[B]]")  # повторный разбор, C ушла
 
     rows = session.query(KnowledgeRelation).filter(KnowledgeRelation.source_id == source_id).all()
@@ -234,7 +234,7 @@ def test_store_relations_no_relations_in_text_writes_nothing(session):
     session.flush()
     bind_knowledge_user(session, user.id)
 
-    count = store_relations(session, knowledge_user_id=user.id, from_id="A",
+    count = store_relations(session, domain="general", knowledge_user_id=user.id, from_id="A",
                             source_id=uuid.uuid4(), text="Обычный текст.")
     assert count == 0
     assert session.query(KnowledgeRelation).count() == 0

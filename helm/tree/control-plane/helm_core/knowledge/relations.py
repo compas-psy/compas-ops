@@ -35,6 +35,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from .health_schema import health_schema_configured, is_health_domain, write_relations
 from ..models import KnowledgeRelation
 
 _WIKILINK = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]*)?\]\]")
@@ -134,13 +135,26 @@ def note_id_for(*, original_filename: str | None, source_id: uuid.UUID) -> str:
     return str(source_id)
 
 
-def store_relations(session: Session, *, knowledge_user_id: uuid.UUID | None,
+def store_relations(session: Session, *, domain: str, knowledge_user_id: uuid.UUID | None,
                     from_id: str, source_id: uuid.UUID, text: str) -> int:
     """Извлечь и записать relations слоя 1 для одной заметки. Идемпотентно
     на повторный ingest того же source: старые relations с тем же
     (knowledge_user_id, from_id, source_id) удаляются перед вставкой, чтобы
-    повторный разбор (например, после фикса парсера) не копил дубли."""
+    повторный разбор (например, после фикса парсера) не копил дубли.
+
+    ADR-005/P12: `to_id`/`from_id` могут прямо называть тему заметки
+    («аутоиммунный гастрит») — для `health`, если health-схема настроена,
+    запись уходит в `health.knowledge_relations` вместо `public.
+    knowledge_relations` (решение владельца при разборе P12: "health
+    entities/topics" не должны быть видны через `public`). Без
+    настроенной схемы — прежнее поведение (fail-open, как и у
+    `ingest.py::_public_original_filename()`)."""
     relations = extract_relations(text)
+
+    if is_health_domain(domain) and health_schema_configured():
+        write_relations(source_id=source_id, knowledge_user_id=knowledge_user_id, from_id=from_id,
+                        relations=[(r.to_id, r.relation_type, r.evidence_type) for r in relations])
+        return len(relations)
 
     session.query(KnowledgeRelation).filter(
         KnowledgeRelation.knowledge_user_id == knowledge_user_id,

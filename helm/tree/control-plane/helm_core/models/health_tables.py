@@ -1,0 +1,130 @@
+"""Схема `health` — sidecar с чувствительными полями health-источников,
+физически отдельная роль БД (ТЗ §4.5, §6.5, ADR-005).
+
+Модель — "generic public envelope + security-scope private payload",
+не полное зеркало `KnowledgeSource` в отдельной схеме (решение
+владельца при разборе P12, см. ADR-005): `public.knowledge_sources`
+остаётся ЕДИНОЙ таблицей-конвертом для всех доменов, включая health —
+через неё же работает единая очередь `knowledge_ingest_jobs` и вся
+fair-queue/retry-логика `worker.py`, без дублирования. Для health-строк
+в конверте НЕТ ни `original_filename`, ни `raw_path`, ни `mime_type`,
+ни `parser` — эти поля физически чувствительны (имя файла вроде
+«Консультация уролога.pdf» — уже медицинская информация, не только
+содержимое) и живут ЗДЕСЬ, в `health.knowledge_source_private`,
+доступной только роли `helm_health`. `sha256` остаётся в конверте
+(нужен для дедупа синхронным путём `register_file_for_ingest()`,
+который решает "уже видели этот файл" ДО того, как health-сессия
+вообще создана) — открытый хэш не раскрывает ни имя, ни содержимое
+файла.
+
+Собственный `DeclarativeBase`, не `Base` из `base.py`: `migrations/
+env.py::target_metadata = Base.metadata`, и `helm_app` (которым Alembic
+подключается) не имеет CREATE на схему `health` — этими двумя
+таблицами управляет `scripts/setup-health-role.sh` (ручной, идемпотентный
+шаг, тот же класс исключения, что уже есть у `compose/post-migration.
+sql`), не `alembic upgrade head`.
+"""
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from decimal import Decimal
+
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import ForeignKey, Index, Integer, MetaData, Numeric, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from .base import NAMING_CONVENTION, ts_column, utcnow
+from .tables import KNOWLEDGE_EMBED_DIM
+
+
+class HealthBase(DeclarativeBase):
+    metadata = MetaData(naming_convention=NAMING_CONVENTION, schema="health")
+
+
+class HealthKnowledgeSourcePrivate(HealthBase):
+    """Единственное реально чувствительное поле health-source — имя
+    файла (`original_filename`, само по себе медицинская информация,
+    напр. «Консультация уролога.pdf»). `raw_path` (хэш-производное имя,
+    `{sha256}.<ext>`), `mime_type`, `parser` НЕ переехали сюда — они не
+    идентифицируют документ и остаются в `public.knowledge_sources`, как
+    у любого другого домена (см. докстринг колонки `raw_path` в
+    `tables.py::KnowledgeSource`) — переносить их значило бы плодить
+    sidecar-поля без причины (CLAUDE.md §2).
+
+    `source_id` — тот же UUID, что и строка-конверт в `public.
+    knowledge_sources`, но БЕЗ `ForeignKey` туда — намеренно, не
+    пропуск: FK через границу схем потребовал бы, чтобы обе строки были
+    видны друг другу в момент вставки, а конверт (`register_file_for_
+    ingest()`, сессия `helm_app`) и sidecar (эта таблица, сессия
+    `helm_health`) пишутся в ДВУХ РАЗНЫХ транзакциях на двух разных
+    соединениях — незакоммиченная строка одной транзакции не видна для
+    FK-проверки в другой. Ссылочная целостность здесь проверяется
+    кодом (`health_schema.py`), не базой."""
+
+    __tablename__ = "knowledge_source_private"
+
+    source_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    knowledge_user_id: Mapped[uuid.UUID | None] = mapped_column()
+    original_filename: Mapped[str | None] = mapped_column(String(255))
+    #: Полный диагностический текст ошибки разбора — публичный
+    #: `KnowledgeIngestJob.error` получает только санитизированный код
+    #: (`HEALTH_PARSE_FAILED`), не текст, который мог бы процитировать
+    #: содержимое документа в сообщении исключения парсера.
+    parse_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_health_knowledge_source_private_user", "knowledge_user_id"),
+    )
+
+
+class HealthKnowledgeChunk(HealthBase):
+    """Зеркало `KnowledgeChunk` — текст и embedding чанка, доступны
+    только `helm_health`. `source_id` ссылается на `HealthKnowledge
+    SourcePrivate.source_id`, не напрямую на конверт: обе таблицы в
+    одной схеме, владеет ими одна роль, FK в пределах своей схемы не
+    открывает ничего наружу."""
+
+    __tablename__ = "knowledge_chunks"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    knowledge_user_id: Mapped[uuid.UUID | None] = mapped_column()
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("health.knowledge_source_private.source_id"), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    tsv: Mapped[str | None] = mapped_column(TSVECTOR)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(KNOWLEDGE_EMBED_DIM))
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("source_id", "ordinal", name="uq_health_knowledge_chunks_source_ordinal"),
+        Index("ix_health_knowledge_chunks_tsv", "tsv", postgresql_using="gin"),
+        Index("ix_health_knowledge_chunks_user", "knowledge_user_id"),
+    )
+
+
+class HealthKnowledgeRelation(HealthBase):
+    """Зеркало `KnowledgeRelation` (`tables.py`) — та же §14.4-семантика,
+    но для health: `to_id`/`from_id` могут прямо называть тему заметки
+    («аутоиммунный гастрит»), это ровно то "health entities/topics",
+    которому решение владельца при разборе P12 запрещает попадать в
+    `public`. `source_id` — FK на `HealthKnowledgeSourcePrivate`, не на
+    конверт (та же причина, что у `HealthKnowledgeChunk`)."""
+
+    __tablename__ = "knowledge_relations"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    knowledge_user_id: Mapped[uuid.UUID | None] = mapped_column()
+    from_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    to_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    relation_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    evidence_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    source_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("health.knowledge_source_private.source_id"))
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (Index("ix_health_knowledge_relations_from", "from_id"),)

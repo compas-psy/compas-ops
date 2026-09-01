@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 
 from ..models import KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus, KnowledgeSource, KnowledgeStatus
 from .embeddings import embed_texts_or_none
+from .health_schema import health_schema_configured, is_health_domain, write_chunks, write_original_filename
 from .quotas import check_and_record_ingest, check_queue_depth, record_entry_formed
 from .relations import note_id_for, store_relations
 from .tenancy import bind_knowledge_user
@@ -54,6 +55,22 @@ def split_chunks(text: str) -> list[str]:
     распарсенных файлов (тот же контракт разбиения, что и у ingest_text())."""
     parts = [p.strip() for p in _PARAGRAPH_SPLIT.split(text) if p.strip()]
     return parts or [text.strip()]
+
+
+def _public_original_filename(*, domain: str, original_filename: str | None,
+                              source_id: uuid.UUID, knowledge_user_id: uuid.UUID) -> str | None:
+    """ADR-005/P12: для `health`, если health-схема настроена, реальное
+    имя файла уходит в `health.knowledge_source_private` (единственное
+    чувствительное поле, см. докстринг `HealthKnowledgeSourcePrivate`),
+    а в `public.knowledge_sources` остаётся `None`. Если health-схема ещё
+    не настроена (`scripts/setup-health-role.sh` не прогнан на этом
+    сервере) — деградация на прежнее поведение: имя остаётся в `public`
+    как у любого другого домена, не падаем и не теряем данные."""
+    if not is_health_domain(domain) or not health_schema_configured():
+        return original_filename
+    write_original_filename(source_id=source_id, knowledge_user_id=knowledge_user_id,
+                            original_filename=original_filename)
+    return None
 
 
 def ingest_text(session: Session, *, domain: str, text: str,
@@ -91,12 +108,22 @@ def ingest_text(session: Session, *, domain: str, text: str,
         sensitivity=sensitivity, trust=trust, status=KnowledgeStatus.ACTIVE,
     )
     session.add(source)
-    session.flush()
+    session.flush()  # source.id нужен ДО вызова ниже — sidecar ссылается на него по значению, не по FK.
+
+    # ADR-005/P12: та же маршрутизация, что у register_file_for_ingest().
+    source.original_filename = _public_original_filename(
+        domain=domain, original_filename=original_filename,
+        source_id=source.id, knowledge_user_id=knowledge_user_id)
+
     record_entry_formed(session, knowledge_user_id=knowledge_user_id, sources=1)
 
     # P8.5.6 слой 1 (E13, решение владельца 31.08.2026): [[wikilink]] +
     # явный YAML relations: — детерминированно, до любого Graphify.
-    store_relations(session, knowledge_user_id=knowledge_user_id,
+    # ADR-005/P12: note_id_for() получает исходный original_filename (не
+    # `source.original_filename`, уже перезаписанный выше на None для
+    # health) — from_id для wikilink-резолва нужен независимо от того,
+    # куда физически уехала сама запись relation.
+    store_relations(session, domain=domain, knowledge_user_id=knowledge_user_id,
                     from_id=note_id_for(original_filename=original_filename, source_id=source.id),
                     source_id=source.id, text=text)
 
@@ -105,16 +132,22 @@ def ingest_text(session: Session, *, domain: str, text: str,
     # source/чанков — embed_texts_or_none() откатывается на None на чанк,
     # лексический поиск (tsv) по нему продолжает работать как раньше.
     embeddings = embed_texts_or_none(chunks)
-    for ordinal, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
-        session.add(KnowledgeChunk(
-            knowledge_user_id=knowledge_user_id, source_id=source.id, ordinal=ordinal,
-            text=chunk_text,
-            # to_tsvector на стороне БД, не Python: русская конфигурация
-            # словаря живёт в Postgres, дублировать её логику в приложении
-            # означало бы гарантированное расхождение при следующем апдейте.
-            tsv=func.to_tsvector("russian", chunk_text),
-            embedding=embedding,
-        ))
+    if is_health_domain(domain) and health_schema_configured():
+        # ADR-005/P12: текст чанка — самое чувствительное поле source'а,
+        # уходит в health.knowledge_chunks вместо public.knowledge_chunks.
+        write_chunks(source_id=source.id, knowledge_user_id=knowledge_user_id,
+                    chunks=chunks, embeddings=embeddings)
+    else:
+        for ordinal, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
+            session.add(KnowledgeChunk(
+                knowledge_user_id=knowledge_user_id, source_id=source.id, ordinal=ordinal,
+                text=chunk_text,
+                # to_tsvector на стороне БД, не Python: русская конфигурация
+                # словаря живёт в Postgres, дублировать её логику в приложении
+                # означало бы гарантированное расхождение при следующем апдейте.
+                tsv=func.to_tsvector("russian", chunk_text),
+                embedding=embedding,
+            ))
     return source
 
 
@@ -174,7 +207,14 @@ def register_file_for_ingest(session: Session, *, domain: str, raw_path: Path,
         sensitivity=sensitivity, trust=trust, status=KnowledgeStatus.ACTIVE,
     )
     session.add(source)
-    session.flush()
+    session.flush()  # source.id нужен ДО вызова ниже — sidecar ссылается на него по значению, не по FK.
+
+    # ADR-005/P12: для health реальное имя файла уезжает в health-схему,
+    # public.knowledge_sources.original_filename перезаписывается на None.
+    source.original_filename = _public_original_filename(
+        domain=domain, original_filename=original_filename,
+        source_id=source.id, knowledge_user_id=knowledge_user_id)
+
     record_entry_formed(session, knowledge_user_id=knowledge_user_id, sources=1)
 
     job = KnowledgeIngestJob(knowledge_user_id=knowledge_user_id, source_id=source.id,

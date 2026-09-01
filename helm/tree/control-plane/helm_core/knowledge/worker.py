@@ -34,6 +34,10 @@ from .audio import strip_timestamps, transcribe_audio
 from .batch_intake import finalize_batch_if_terminal, sync_item_from_job
 from .chat_intake import voice_ready_menu_text
 from .embeddings import embed_texts_or_none
+from .health_schema import (
+    health_schema_configured, is_health_domain, read_original_filename, record_parse_error,
+    write_chunks,
+)
 from .ingest import split_chunks
 from .memory import try_remember
 from .parsers import parse_file
@@ -290,7 +294,11 @@ def process_job(session: Session, job: KnowledgeIngestJob) -> None:
         # явный YAML relations: в ИСХОДНОМ тексте (result.text), до того как
         # HELM допишет свой собственный frontmatter поверх него — тот же
         # текст, который видел бы Obsidian, открой владелец raw-файл.
-        store_relations(session, knowledge_user_id=tenant_id,
+        # ADR-005/P12: source.original_filename уже None для health (см.
+        # register_file_for_ingest()) — note_id_for() откатывается на
+        # source.id, что и требуется: from_id внутри health.knowledge_
+        # relations не обязан совпадать с публичным именем файла.
+        store_relations(session, domain=source.domain, knowledge_user_id=tenant_id,
                         from_id=note_id_for(original_filename=source.original_filename,
                                             source_id=source.id),
                         source_id=source.id, text=result.text)
@@ -300,18 +308,33 @@ def process_job(session: Session, job: KnowledgeIngestJob) -> None:
         # embed-сервиса не должен превращать job в FAILED, чанк просто
         # остаётся без embedding до бэкафилла.
         embeddings = embed_texts_or_none(chunks)
-        for ordinal, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
-            session.add(KnowledgeChunk(
-                knowledge_user_id=tenant_id, source_id=source.id, ordinal=ordinal,
-                text=chunk_text,
-                tsv=func.to_tsvector("russian", chunk_text),
-                embedding=embedding,
-            ))
-            chunk_count += 1
+        if is_health_domain(source.domain) and health_schema_configured():
+            chunk_count = write_chunks(source_id=source.id, knowledge_user_id=tenant_id,
+                                       chunks=chunks, embeddings=embeddings)
+        else:
+            for ordinal, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
+                session.add(KnowledgeChunk(
+                    knowledge_user_id=tenant_id, source_id=source.id, ordinal=ordinal,
+                    text=chunk_text,
+                    tsv=func.to_tsvector("russian", chunk_text),
+                    embedding=embedding,
+                ))
+                chunk_count += 1
         job.status = KnowledgeIngestStatus.DONE
     except Exception as exc:
         job.status = KnowledgeIngestStatus.FAILED
-        job.error = f"{type(exc).__name__}: {exc}"
+        error_detail = f"{type(exc).__name__}: {exc}"
+        if is_health_domain(source.domain) and health_schema_configured():
+            # Решение владельца при разборе P12, acceptance #7: полный
+            # диагностический текст (может процитировать содержимое
+            # документа через сообщение исключения парсера) — только в
+            # health-sidecar. public.knowledge_ingest_jobs.error получает
+            # исключительно санитизированный код.
+            record_parse_error(source_id=source.id, knowledge_user_id=tenant_id,
+                              message=error_detail)
+            job.error = "HEALTH_PARSE_FAILED"
+        else:
+            job.error = error_detail
         logger.warning("knowledge ingest job %s failed: %s", job.id, job.error)
     finally:
         # P8.5.7, "3 шага": получен -> сохранён/разбор запущен -> разбор
@@ -343,7 +366,16 @@ def _notify_owner_of_result(session: Session, job: KnowledgeIngestJob,
     результат разбора — это уведомление, не часть основной гарантии job'а."""
     if not job.channel or not job.recipient:
         return
-    filename = source.original_filename or "без имени"
+    # ADR-005/P12: source.original_filename — None для health (см.
+    # register_file_for_ingest()). Уведомление уходит ТОЛЬКО владельцу
+    # этого же source (channel/recipient взяты из его же job'а) — это то
+    # самое законное "same-user disclosure", не утечка чужому chief/
+    # helm_app, которым health-схема физически недоступна.
+    if is_health_domain(source.domain) and health_schema_configured():
+        filename = read_original_filename(source_id=source.id,
+                                          knowledge_user_id=source.knowledge_user_id) or "без имени"
+    else:
+        filename = source.original_filename or "без имени"
     if job.status == KnowledgeIngestStatus.DONE:
         text = f"Разбор «{filename}» завершён — сохранено фрагментов: {chunk_count}."
     elif job.status == KnowledgeIngestStatus.NEEDS_REVIEW:
