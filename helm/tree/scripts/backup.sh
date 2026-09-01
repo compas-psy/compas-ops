@@ -21,6 +21,21 @@ SECRETS_DIR=/etc/helm/secrets
 export RESTIC_REPOSITORY="rclone:yandex:helm-backup"
 export RESTIC_PASSWORD_FILE="$SECRETS_DIR/restic_password"
 
+# НАЙДЕНО 01.09.2026: два живых прогона подряд упали на одном и том же —
+# webdav.yandex.ru отвечал "500 Internal Server Error" и "timeout
+# awaiting response headers" на 2-3 чанка (разные хэши каждый раз, не
+# один и тот же повреждённый объект), restic сдавался после ~15 минут
+# повторов. Квота (1TB+ свободно), лок репозитория и сама доступность
+# rclone:yandex — проверены, не причина: это Yandex WebDAV, не отвечающий
+# вовремя под нагрузкой на отдельные запросы. restic вызывает `rclone
+# serve restic` как бэкенд — RCLONE_* переменные окружения читает сам
+# бинарь rclone независимо от способа запуска. Дефолты (timeout 5m,
+# low-level-retries 10) недостаточны для этого конкретного WebDAV —
+# даём больше времени на ответ и больше попыток на отдельный запрос.
+export RCLONE_TIMEOUT=10m
+export RCLONE_CONTIMEOUT=2m
+export RCLONE_LOW_LEVEL_RETRIES=20
+
 WORKDIR=$(mktemp -d /var/lib/helm-guardian/backup-XXXXXX)
 trap 'rm -rf "$WORKDIR"' EXIT
 
