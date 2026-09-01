@@ -64,16 +64,16 @@
 | 024 | Scalable dynamic Knowledge taxonomy | ✅ `ADR-024-dynamic-domain-registry.md` — узкий срез, только реестр доменов, topics/aliases ждут Graphify |
 | 025 | Global-within-user hybrid retrieval | ✅ `ADR-025-hybrid-retrieval.md` — модель выбрана по живому замеру (MiniLM-L12-v2, 384-dim), hybrid retrieval выкачен и подтверждён живьём 31.08.2026 |
 | 026 | Safe ZIP batch ingest + exactly-once completion | ✅ `ADR-026-zip-batch-ingest.md` |
-| 027 | Micro-Memory «Запомни» fast path | не написан |
-| 028 | Knowledge tenant model: SYSTEM_OWNER vs KNOWLEDGE_USER | не написан |
+| 027 | Micro-Memory «Запомни» fast path | ✅ `ADR-027-micro-memory-fast-path.md` |
+| 028 | Knowledge tenant model: SYSTEM_OWNER vs KNOWLEDGE_USER | ✅ `ADR-028-knowledge-tenant-model.md` |
 | 029 | Dedicated Knowledge Telegram Bot + invite/principal verification | ✅ `ADR-029-dedicated-knowledge-telegram-bot.md` |
-| 030 | Tenant isolation: user key + RLS + no cross-user dedup | не написан |
-| 031 | Per-user fair queue/quotas/style isolation | не написан |
+| 030 | Tenant isolation: user key + RLS + no cross-user dedup | ✅ `ADR-030-tenant-isolation-rls.md` |
+| 031 | Per-user fair queue/quotas/style isolation | ✅ `ADR-031-per-user-fair-queue-quotas-style.md` |
 
-**Написано 9 из 31.** Важная оговорка: «не написан» не значит «решение не
-принято». Половина этих решений уже реализована в коде и обоснована в
-`V3.8-DELTA.md` и `WORKPLAN.md` — не хватает именно отдельного документа
-в формате ADR. Список §35 требует их до передачи.
+**Написано 13 из 31.** Важная оговорка: «не написан» не значит «решение
+не принято». Часть оставшихся решений уже реализована в коде и
+обоснована в `V3.8-DELTA.md` и `WORKPLAN.md` — не хватает именно
+отдельного документа в формате ADR. Список §35 требует их до передачи.
 
 ## Наши собственные решения (100+)
 
