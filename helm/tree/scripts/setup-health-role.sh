@@ -32,8 +32,21 @@ set -euo pipefail
 SECRETS_DIR=/etc/helm/secrets
 SECRET_FILE="$SECRETS_DIR/health_database_url"
 
+# НАЙДЕНО 01.09.2026: search_path=health (без public) ломает pgvector —
+# сам тип `vector` и оператор `<=>` определены в public (см. коммент у
+# HealthKnowledgeChunk.embedding), а `unknown`-параметр эмбеддинга
+# резолвится в него ТОЛЬКО если public виден в search_path текущего
+# соединения. Без этого: "operator does not exist: public.vector <=>
+# unknown" — health-часть векторного поиска падает целиком на любом
+# запросе, где лексика не набрала полный колчан сама.
+#
+# Пароль генерируется один раз (идемпотентно) и НИКОГДА не проходит
+# через агента — но DSN-строку (в т.ч. этот search_path) нужно уметь
+# чинить и на уже существующем секрете, поэтому пароль читается из
+# файла, а не только генерируется заново.
 if [ -s "$SECRET_FILE" ]; then
-  echo "health_database_url уже существует — пароль не трогаем, только сверяем схему/таблицы"
+  echo "health_database_url уже существует — пароль не трогаем, читаю его из файла для перезаписи DSN"
+  PGPASS=$(sudo sed -n 's#.*://helm_health:\([^@]*\)@.*#\1#p' "$SECRET_FILE")
 else
   echo "== генерирую пароль helm_health на сервере =="
   # openssl rand -hex — только [0-9a-f], гарантированно без кавычек и
@@ -45,13 +58,13 @@ else
     <<SQL >/dev/null
 ALTER ROLE helm_health LOGIN PASSWORD '$PGPASS';
 SQL
-  printf 'postgresql+psycopg://helm_health:%s@postgres/helm?options=-csearch_path%%3Dhealth' "$PGPASS" \
-    | sudo tee "$SECRET_FILE" >/dev/null
-  sudo chown root:helm-secrets "$SECRET_FILE"
-  sudo chmod 640 "$SECRET_FILE"
-  unset PGPASS
-  echo "health_database_url создан (значение нигде не печаталось)"
 fi
+printf 'postgresql+psycopg://helm_health:%s@postgres/helm?options=-csearch_path%%3Dhealth%%2Cpublic' "$PGPASS" \
+  | sudo tee "$SECRET_FILE" >/dev/null
+sudo chown root:helm-secrets "$SECRET_FILE"
+sudo chmod 640 "$SECRET_FILE"
+unset PGPASS
+echo "health_database_url записан (значение нигде не печаталось)"
 
 # Миграция public не нужна вообще: original_filename в public.
 # knowledge_sources и так nullable, raw_path/mime_type/parser для health
