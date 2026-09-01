@@ -130,17 +130,16 @@ def _lexical_search(session: Session, *, query: str, domain: str | None,
         .order_by(rank.desc())
         .limit(MAX_EVIDENCE)
     )
-    # §14.15: health и simpas/zapiski не входят в обычный поиск по
-    # умолчанию. health — chief не получает raw health RAG на общий
-    # вопрос, только на явный health-scope (reviewer temporary explicit
-    # scope — отдельный механизм, не эта функция). simpas/zapiski —
-    # клиентский контент, спека прямо требует "not indexed into general
-    # namespaces" (P8.5.7, chat_intake.py форсирует client_restricted при
-    # ingest) — общий вопрос не должен случайно процитировать заметку о
-    # клиенте, только явный domain="simpas/zapiski".
+    # Решение владельца 01.09.2026: все домены, включая health, отвечают
+    # в общем бесплатном поиске — второй мозг не имеет смысла, если
+    # владелец обязан помнить явный синтаксис домена для собственных же
+    # данных. Единственное оставшееся исключение — simpas/zapiski,
+    # клиентский контент чужих людей: спека прямо требует "not indexed
+    # into general namespaces" (P8.5.7, chat_intake.py форсирует
+    # client_restricted при ingest) — это защита приватности КЛИЕНТА, не
+    # организационное неудобство, поэтому не отменяется вместе с health.
     stmt = (stmt.where(KnowledgeSource.domain == domain) if domain is not None
-           else stmt.where(KnowledgeSource.domain.notin_(
-               [KnowledgeDomain.HEALTH, KnowledgeDomain.SIMPAS_ZAPISKI])))
+           else stmt.where(KnowledgeSource.domain != KnowledgeDomain.SIMPAS_ZAPISKI))
 
     rows = session.execute(stmt).all()
     return [
@@ -166,11 +165,11 @@ def _vector_search(session: Session, *, query_embedding: list[float], domain: st
         .order_by(similarity.desc())
         .limit(MAX_EVIDENCE)
     )
-    # §14.15 — то же исключение health/simpas-zapiski из общего поиска,
-    # что уже применяет _lexical_search (см. её комментарий).
+    # То же исключение simpas/zapiski, что уже применяет _lexical_search
+    # (см. её комментарий) — health в общем поиске участвует наравне со
+    # всеми остальными доменами.
     stmt = (stmt.where(KnowledgeSource.domain == domain) if domain is not None
-           else stmt.where(KnowledgeSource.domain.notin_(
-               [KnowledgeDomain.HEALTH, KnowledgeDomain.SIMPAS_ZAPISKI])))
+           else stmt.where(KnowledgeSource.domain != KnowledgeDomain.SIMPAS_ZAPISKI))
 
     rows = session.execute(stmt).all()
     return [
@@ -185,8 +184,8 @@ def _health_lexical_search(*, query: str, knowledge_user_id: uuid.UUID) -> list[
     """Тот же лексический поиск, что `_lexical_search`, на health-
     соединении (ADR-005/P12) — `health.knowledge_chunks` физически не
     видна `helm_app`, обычная сессия здесь не годится вообще. Вызывается
-    только когда `domain == KnowledgeDomain.HEALTH` явно — "reviewer
-    temporary explicit scope", см. docstring `_lexical_search`."""
+    и на общий вопрос (`domain=None`), и на явный `domain="health"` —
+    решение владельца 01.09.2026, health больше не исключение."""
     tsquery = build_or_tsquery(query)
     rank = func.ts_rank(HealthKnowledgeChunk.tsv, tsquery, 2).label("rank")
     with health_session(knowledge_user_id) as session:
@@ -298,18 +297,27 @@ def probe(session: Session, *, query: str, domain: str | None = None,
         return ProbeResult(outcome="LOCAL_ANSWER", mode=mode, answer_text=answer_text,
                            memory=memory_hits)
 
-    # ADR-005/P12: явный domain=health, после того как scripts/setup-
-    # health-role.sh прогнан — chunk'и физически живут в health.
-    # knowledge_chunks, обычная сессия/таблица их больше не видит вовсе.
-    # Без настроенной схемы — прежнее поведение (health ещё в public).
-    use_health_schema = domain == KnowledgeDomain.HEALTH and health_schema_configured()
+    # ADR-005/P12 + решение владельца 01.09.2026: health участвует в
+    # общем бесплатном поиске наравне со всеми доменами — единственное,
+    # что решает явный domain="health", это ГДЕ физически лежат чанки
+    # (после scripts/setup-health-role.sh — в health.knowledge_chunks,
+    # обычная сессия их больше не видит), не ДОПУСК к ним. Поэтому общий
+    # вопрос (domain=None) при настроенной схеме обязан заглянуть в обе
+    # схемы и объединить находки, а явный domain="health" — только в
+    # health-схему (там же лежит вся история, дублировать public не
+    # нужно). Без настроенной схемы health ещё физически в public —
+    # public-путь его и так находит (см. _lexical_search).
+    search_health = domain in (None, KnowledgeDomain.HEALTH) and health_schema_configured()
+    search_public = domain != KnowledgeDomain.HEALTH or not health_schema_configured()
 
-    if use_health_schema:
-        evidence = _health_lexical_search(query=query, knowledge_user_id=knowledge_user_id)
-    else:
-        evidence = _lexical_search(session, query=query, domain=domain,
-                                   knowledge_user_id=knowledge_user_id)
-    evidence = [e for e in evidence if e.rank >= MIN_RANK_SCORE]
+    lexical_hits: list[Evidence] = []
+    if search_public:
+        lexical_hits += _lexical_search(session, query=query, domain=domain,
+                                        knowledge_user_id=knowledge_user_id)
+    if search_health:
+        lexical_hits += _health_lexical_search(query=query, knowledge_user_id=knowledge_user_id)
+    evidence = sorted((e for e in lexical_hits if e.rank >= MIN_RANK_SCORE),
+                      key=lambda e: e.rank, reverse=True)[:MAX_EVIDENCE]
 
     # ADR-025: pgvector дополняет лексику местами, до MAX_EVIDENCE — не
     # запрашивается вовсе, если лексика уже набрала полный колчан
@@ -323,15 +331,16 @@ def probe(session: Session, *, query: str, domain: str | None = None,
         query_embedding = embed_texts_or_none([query])[0]
         if query_embedding is not None:
             exclude_ids = {e.chunk_id for e in evidence}
-            if use_health_schema:
-                vector_hits = _health_vector_search(
-                    query_embedding=query_embedding, knowledge_user_id=knowledge_user_id,
-                    exclude_chunk_ids=exclude_ids,
-                )
-            else:
-                vector_hits = _vector_search(
+            vector_hits: list[Evidence] = []
+            if search_public:
+                vector_hits += _vector_search(
                     session, query_embedding=query_embedding, domain=domain,
                     knowledge_user_id=knowledge_user_id, exclude_chunk_ids=exclude_ids,
+                )
+            if search_health:
+                vector_hits += _health_vector_search(
+                    query_embedding=query_embedding, knowledge_user_id=knowledge_user_id,
+                    exclude_chunk_ids=exclude_ids,
                 )
             evidence = (evidence + vector_hits)[:MAX_EVIDENCE]
 

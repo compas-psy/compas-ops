@@ -100,22 +100,26 @@ def test_multiple_matches_produce_z1_structured_list(session):
     assert "Найдено" in result.answer_text
 
 
-# ── §14.15 ACL: health не входит в общий поиск по умолчанию ──────────────
+# ── health: решение владельца 01.09.2026 — не исключение из общего поиска ──
 
-def test_health_domain_excluded_from_general_query(session):
+def test_health_domain_reachable_from_general_query(session):
+    """Решение владельца 01.09.2026: «все домены должны относиться к
+    бесплатному второму мозгу» — health отвечает наравне со всеми
+    остальными доменами и без явного domain=health. Предыдущая версия
+    этого теста требовала обратного (§14.15 «chief не получает raw
+    health RAG на общий вопрос») — решение владельца отменяет это
+    прочтение спеки прямо, не тихо."""
     ingest_text(session, domain="health", text="Анализ крови показал дефицит железа.")
     session.flush()
 
     result = probe(session, query="что там с анализом крови")
 
-    assert result.outcome == "NEEDS_REASONING", (
-        "health не должен попадать в обычный поиск без явного domain (§14.15)"
-    )
+    assert result.outcome == "LOCAL_ANSWER"
 
 
 def test_health_domain_reachable_with_explicit_scope(session):
-    """Явный health-scope (domain='health') — доступ есть, это другой путь,
-    не общий поиск, требующий отдельного reviewer-разрешения по спеке."""
+    """Явный health-scope (domain='health') по-прежнему работает — теперь
+    просто не единственный путь к health-контенту."""
     ingest_text(session, domain="health", text="Анализ крови показал дефицит железа.")
     session.flush()
 
@@ -126,7 +130,9 @@ def test_health_domain_reachable_with_explicit_scope(session):
 
 def test_zapiski_domain_excluded_from_general_query(session):
     """§14.15: 'ЗАПИСКИ client content: NEVER AUTO-INGEST ... not indexed
-    into general namespaces' — тот же паттерн исключения, что у health."""
+    into general namespaces' — защита приватности КЛИЕНТА, единственное
+    оставшееся исключение из общего поиска (health им больше не является,
+    решение владельца 01.09.2026)."""
     ingest_text(session, domain="simpas/zapiski", text="Клиент рассказал про тревогу на работе.")
     session.flush()
 

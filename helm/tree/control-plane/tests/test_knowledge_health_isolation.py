@@ -315,17 +315,30 @@ def test_probe_health_domain_finds_chunk_only_in_health_schema(session, health_c
     assert result.outcome == "LOCAL_ANSWER"
 
 
-def test_probe_general_query_does_not_find_health_chunk_once_moved_to_sidecar(
+def test_probe_general_query_finds_health_chunk_after_move_to_sidecar(
         session, health_configured, user):
-    """Общий поиск и так исключает domain=health (§14.15) — здесь
-    дополнительно проверяется, что после переезда чанков в health-схему
-    общий запрос по-прежнему не находит их (не только потому, что домен
-    отфильтрован, но и потому, что их физически нет в public)."""
+    """Решение владельца 01.09.2026: health отвечает и в общем поиске
+    (domain=None), не только через явный domain="health" — даже после
+    того, как чанки физически переехали в health-схему, probe() обязан
+    заглянуть туда и на обычный вопрос без домена."""
     ingest_text(session, domain="health", text="Анализ крови показал дефицит железа.",
                knowledge_user_id=user.id)
     session.flush()
 
     result = probe(session, query="что там с анализом крови", knowledge_user_id=user.id)
+
+    assert result.outcome == "LOCAL_ANSWER"
+
+
+def test_probe_general_query_still_excludes_zapiski_client_content(
+        session, health_configured, user):
+    """Единственное оставшееся исключение из общего поиска — защита
+    приватности КЛИЕНТА (simpas/zapiski), не health."""
+    ingest_text(session, domain="simpas/zapiski", text="Клиент рассказал про тревогу на работе.",
+               knowledge_user_id=user.id)
+    session.flush()
+
+    result = probe(session, query="что там про тревогу на работе", knowledge_user_id=user.id)
 
     assert result.outcome == "NEEDS_REASONING"
 
