@@ -121,7 +121,7 @@ jobs:
       - name: Доставить актуальный backup.sh
         if: inputs.action == 'backup' || inputs.action == 'deploy' || inputs.action == 'restore-test'
         run: |
-          scp -i ~/.ssh/id_deploy scripts/backup.sh scripts/restore_test.sh \
+          scp -i ~/.ssh/id_deploy helm/tree/scripts/backup.sh helm/tree/scripts/restore_test.sh \
             "$VPS_USER@$VPS_HOST:/tmp/"
           ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
             sudo mv /tmp/backup.sh /opt/helm/scripts/backup.sh
