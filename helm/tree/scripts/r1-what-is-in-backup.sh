@@ -37,9 +37,18 @@ echo "############ 2. ЕСТЬ ЛИ ТАМ ФАЙЛЫ VAULT ############"
 # Пути внутри снапшота — абсолютные, поэтому спрашиваем прямо про каталог.
 echo "--- /opt/helm-knowledge ---"
 R ls latest /opt/helm-knowledge 2>&1 | head -20
-echo "--- сколько всего под /opt/helm-knowledge ---"
-R ls -r latest /opt/helm-knowledge 2>&1 | grep -c '^/opt/helm-knowledge/' \
-  || echo "0 (или каталога в снапшоте нет)"
+echo "--- рекурсивно: сколько файлов под sources/ и raw/ ---"
+# ВНИМАНИЕ: у `restic ls` короткий -r это --repo, а не «рекурсивно».
+# Первый заход этой разведки написал `ls -r latest ...` и получил ноль —
+# ноль от неверного флага, а не от пустого каталога. Полное имя флага.
+R ls latest --recursive /opt/helm-knowledge 2>&1 \
+  | awk '/^\/opt\/helm-knowledge\/sources\/./ {s++}
+         /^\/opt\/helm-knowledge\/raw\/./      {r++}
+         END {printf "  sources/: %d, raw/: %d\n", s, r}'
+
+echo "--- размер самых крупных файлов снапшота ---"
+R ls latest --long --recursive 2>&1 \
+  | awk '$1 ~ /^-/ {print $4, $NF}' | sort -rn | head -8
 
 echo
 echo "############ 3. СКОЛЬКО ЭТО ПО ОБЪЁМУ ############"
