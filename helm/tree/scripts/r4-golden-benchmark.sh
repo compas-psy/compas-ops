@@ -36,6 +36,11 @@ BASE_DIR=/opt/helm-state/benchmarks/r4
 sudo mkdir -p "$BASE_DIR"
 sudo chown "$(id -u):$(id -g)" "$BASE_DIR"
 
+# Кандидаты, чей канонический golden benchmark не дал валидный
+# result.json — job должен закончиться красным, а не молча зелёным
+# (см. фикс run_id/run_candidate() ниже).
+CANDIDATE_FAILURES=""
+
 GIT_SHA=$(sudo cat /opt/helm/DEPLOYED_SHA 2>/dev/null || echo "unknown")
 echo "выкачено: $GIT_SHA"
 
@@ -145,6 +150,30 @@ check_postgres_query() {
   [ "$(echo "$out" | tr -d '[:space:]')" = "1" ] && echo "OK" || echo "FAIL $out"
 }
 
+# НАЙДЕНО живым прогоном 02.09.2026: смоук через probe() с этим текстом
+# НИКОГДА не проверял Z2 честно — probe.py:397 зовёт rephrase_or_none()
+# только при mode=="Z0" (ровно одна evidence-запись); решение владельца
+# 01.09.2026 сделало общий поиск глобальным по корпусу (probe.py:125-142,
+# health включён), и этот вопрос против реального корпуса предсказуемо
+# цепляет несколько посторонних совпадений → mode=Z1 → рефраз не
+# вызывается вообще, независимо от здоровья Ollama. Прямой вызов
+# rephrase() в обход retrieval — единственная честная проверка.
+z2_rephrase_smoke() {
+  sudo docker compose exec -T helm-core python3 <<'PY'
+from helm_core.knowledge.rephrase import rephrase, RephraseUnavailable
+try:
+    text = rephrase(
+        "что такое схема?",
+        "Схема — это устойчивый паттерн мышления и поведения, сформированный в детстве.",
+        system_prompt=None,
+    )
+    print("Z2_DIRECT: OK")
+    print("answer_text:", repr(text))
+except RephraseUnavailable as exc:
+    print("Z2_DIRECT: FAIL", repr(str(exc)))
+PY
+}
+
 behavioral_health_check() {
   local label="$1"
   echo "-- $label: контейнеры --"
@@ -165,22 +194,7 @@ echo "############ ЗДОРОВЬЕ ДО БЕНЧМАРКА (поведенче�
 behavioral_health_check "ДО"
 echo
 echo "############ Z2 REPHRASE SMOKE ДО БЕНЧМАРКА ############"
-sudo docker compose exec -T helm-core python3 <<'PY'
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
-from helm_core.config import get_settings
-from helm_core.knowledge.ingest import ingest_text
-from helm_core.knowledge.probe import probe
-engine = create_engine(get_settings().database_url)
-with Session(engine) as s:
-    ingest_text(s, domain="psychology",
-               text="Схема — это устойчивый паттерн мышления и поведения, сформированный в детстве.",
-               original_filename="r4-z2-smoke-before.txt")
-    s.flush()
-    result = probe(s, query="что такое схема?")
-    print("outcome:", result.outcome, "| mode:", result.mode)
-    s.rollback()
-PY
+z2_rephrase_smoke
 
 #: ollama pull/exec на каждый кандидат уходит в лог LiteLLM/OpenRouter-
 #: активности как «до/после» окно (владелец п.7) — точных счётчиков
@@ -218,10 +232,18 @@ run_golden_canonical() {
   fi
 
   echo "-- golden benchmark (keep_alive=$keep_alive, каноническая ревизия) --"
+  # НАЙДЕНО живым прогоном 196 (два кандидата подряд, детерминированно):
+  # --run-id здесь раньше передавал ${fp_hash:0:16} — производную от
+  # fp_hash, вычисленного ВЫШЕ БЕЗ --run-id (по умолчанию run_id=""). Раз
+  # run_id сам входит в compute_fingerprint(), эти два вызова считали
+  # fingerprint с разными входами и НИКОГДА не могли совпасть — validate
+  # проваливался на каждом кандидате безусловно, не изредка. run_id
+  # должен быть тем же, что использован для fp_hash/run_dir/expect —
+  # то есть тоже отсутствовать (пусто), а не выводиться из его же хэша.
   sudo docker compose exec -T helm-core \
     python3 -m helm_core.knowledge.semantic_benchmark golden \
     --model "$model" --keep-alive "$keep_alive" --stability-repeats 3 \
-    --git-sha "$GIT_SHA" --model-digest "$digest" --run-id "${fp_hash:0:16}" \
+    --git-sha "$GIT_SHA" --model-digest "$digest" \
     > "$tmp_out" 2> "$run_dir/stderr.log"
   local rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -299,7 +321,15 @@ run_candidate() {
   cold0=$(grep -A1 "keep_alive=0" "$ka_out" | grep "прогон 1:" | grep -oP '\d+\.\d+(?=с)')
   warm0=$(grep -A6 "keep_alive=5m" "$ka_out" | grep "прогон 5:" | grep -oP '\d+\.\d+(?=с)')
 
-  run_golden_canonical "$model" "$digest" "0"
+  # НАЙДЕНО живым прогоном 196: возврат run_golden_canonical() раньше
+  # никак не проверялся — реальный провал валидации (см. фикс run_id
+  # выше) молча тонул, а run_candidate() продолжал как ни в чём не
+  # бывало до конца (resources/health/Z2), из-за чего job зелёный, хотя
+  # кандидат без валидного result.json НЕ участвует в select_winner().
+  if ! run_golden_canonical "$model" "$digest" "0"; then
+    echo "::error::$model: канонический golden benchmark не создал валидный result.json"
+    CANDIDATE_FAILURES="$CANDIDATE_FAILURES $model"
+  fi
 
   t_total_end=$(date +%s.%N)
   local total_seconds
@@ -383,22 +413,7 @@ json.dump(d, open(p, 'w'), indent=2)
 "
   behavioral_health_check "ПОСЛЕ $model"
   echo "=== Z2 rephrase smoke после кандидата ==="
-  sudo docker compose exec -T helm-core python3 <<PY
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
-from helm_core.config import get_settings
-from helm_core.knowledge.ingest import ingest_text
-from helm_core.knowledge.probe import probe
-engine = create_engine(get_settings().database_url)
-with Session(engine) as s:
-    ingest_text(s, domain="psychology",
-               text="Схема — это устойчивый паттерн мышления и поведения, сформированный в детстве.",
-               original_filename="r4-z2-smoke-after-$safe.txt")
-    s.flush()
-    result = probe(s, query="что такое схема?")
-    print("outcome:", result.outcome, "| mode:", result.mode)
-    s.rollback()
-PY
+  z2_rephrase_smoke
 }
 
 echo
@@ -441,23 +456,14 @@ echo
 echo "############ ЗДОРОВЬЕ ПОСЛЕ ВОССТАНОВЛЕНИЯ (то состояние, в котором сервер остаётся) ############"
 behavioral_health_check "ПОСЛЕ ВОССТАНОВЛЕНИЯ"
 echo "############ Z2 REPHRASE SMOKE ПОСЛЕ ВОССТАНОВЛЕНИЯ ############"
-sudo docker compose exec -T helm-core python3 <<'PY'
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
-from helm_core.config import get_settings
-from helm_core.knowledge.ingest import ingest_text
-from helm_core.knowledge.probe import probe
-engine = create_engine(get_settings().database_url)
-with Session(engine) as s:
-    ingest_text(s, domain="psychology",
-               text="Схема — это устойчивый паттерн мышления и поведения, сформированный в детстве.",
-               original_filename="r4-z2-smoke-final.txt")
-    s.flush()
-    result = probe(s, query="что такое схема?")
-    print("outcome:", result.outcome, "| mode:", result.mode)
-    s.rollback()
-PY
+z2_rephrase_smoke
 
 echo
 echo "############ R4 GOLDEN BENCHMARK DONE (состояние ollama уже восстановлено выше) ############"
+if [ -n "$CANDIDATE_FAILURES" ]; then
+  echo "::error::кандидаты без валидного result.json:$CANDIDATE_FAILURES"
+fi
 sudo find "$BASE_DIR" -maxdepth 2 -type f -newer /opt/helm/DEPLOYED_SHA 2>/dev/null | sort
+if [ -n "$CANDIDATE_FAILURES" ]; then
+  exit 1
+fi

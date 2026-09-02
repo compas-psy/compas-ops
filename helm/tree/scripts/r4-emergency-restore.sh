@@ -62,14 +62,20 @@ fi
 echo "  ollama снова отвечает."
 
 echo
-echo "############ 2. УДАЛИТЬ МОДЕЛИ, КОТОРЫХ НЕ БЫЛО ДО R4 (только qwen2.5:7b) ############"
-current_models=$(sudo docker compose exec -T ollama ollama list)
+echo "############ 2. УДАЛИТЬ ВСЕ МОДЕЛИ, КРОМЕ gemma2:2b (единственная preexisting) ############"
+# НАЙДЕНО живым прогоном 196: жёстко зашитое "только qwen2.5:7b" не
+# учло qwen2.5:3b, оставленную ДРУГИМ прерванным прогоном — leftover
+# копится от разных инцидентов, не только от одного известного. gemma2:2b
+# — единственная модель, которая реально была на сервере до R4; удаляем
+# всё остальное общим циклом, а не по жёстко перечисленным именам.
+current_models=$(sudo docker compose exec -T ollama ollama list | tail -n +2 | awk '{print $1}')
 echo "$current_models"
-if echo "$current_models" | awk '$1=="qwen2.5:7b" {found=1} END{exit !found}'; then
-  sudo docker compose exec -T ollama ollama rm qwen2.5:7b
-else
-  echo "  (уже нет — ок)"
-fi
+for m in $current_models; do
+  if [ "$m" != "gemma2:2b" ]; then
+    echo "  rm $m"
+    sudo docker compose exec -T ollama ollama rm "$m"
+  fi
+done
 
 echo
 echo "############ 3. ВЕРНУТЬ gemma2:2b (была до R4, боевая для Z2) ############"
