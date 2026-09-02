@@ -200,3 +200,31 @@ def test_extraction_never_leaves_the_machine() -> None:
 
     assert urls == [module.OLLAMA_URL], f"извлекатель знает посторонние адреса: {urls}"
     assert module.OLLAMA_URL.startswith("http://ollama:")
+
+
+def test_call_ollama_requests_deterministic_generation(monkeypatch) -> None:
+    """R4 п.4: «temperature=0, fixed seed where supported» — иначе
+    reprocess (§14.20) того же источника менял бы граф без причины, а
+    сравнение кандидатов в бенчмарке мерило бы шум, а не разницу моделей."""
+    import helm_core.knowledge.semantic_extract as module
+
+    captured = {}
+
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def read(self):
+            return json.dumps({"response": "{}"}).encode()
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data.decode())
+        return _FakeResponse()
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+    module._call_ollama("окно", model="gemma2:2b")
+    assert captured["body"]["options"]["temperature"] == 0
+    assert captured["body"]["options"]["seed"] == module.DETERMINISTIC_SEED

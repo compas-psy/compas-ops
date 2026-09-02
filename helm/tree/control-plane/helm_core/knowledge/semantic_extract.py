@@ -43,6 +43,12 @@ OLLAMA_URL = "http://ollama:11434/api/generate"
 DEFAULT_MODEL = "gemma2:2b"
 REQUEST_TIMEOUT = 120
 
+#: R4 п.4: «Production extraction deterministic насколько позволяет backend:
+#: temperature=0, fixed seed where supported». Без этого один и тот же
+#: источник дал бы разный граф при каждом reprocess (§14.20), а сравнение
+#: кандидатов в бенчмарке было бы шумом, а не сигналом.
+DETERMINISTIC_SEED = 0
+
 #: Потолок на ОКНО, а не на источник. Упёрлись — окно делится и
 #: перезапускается (§14.4.1); молча отбросить остаток нельзя, и именно
 #: это делал `data[:MAX_ATOMS_PER_CALL]` в semantic-v1.
@@ -218,6 +224,7 @@ def _call_ollama(prompt: str, *, model: str, keep_alive: str | None = None) -> s
         "stream": False,
         "keep_alive": keep_alive if keep_alive is not None else get_settings().knowledge_semantic_keep_alive,
         "format": RESPONSE_SCHEMA,
+        "options": {"temperature": 0, "seed": DETERMINISTIC_SEED},
     }
     request = urllib.request.Request(
         OLLAMA_URL, data=json.dumps(body).encode("utf-8"), method="POST",
