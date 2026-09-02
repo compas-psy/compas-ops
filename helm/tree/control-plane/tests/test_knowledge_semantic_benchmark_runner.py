@@ -151,6 +151,29 @@ def test_first_pass_vs_repaired_success_are_not_conflated(monkeypatch):
     assert report.runs[0].repair_attempts == 1
 
 
+def test_cli_golden_prints_valid_json_report(monkeypatch, capsys):
+    """CLI — то, что реально дёрнет живой скрипт через `docker compose
+    exec`. Проверяется на подделанном `_call_ollama`, чтобы не зависеть
+    от Ollama локально; сам живой прогон живёт в scripts/, не здесь."""
+    import helm_core.knowledge.semantic_benchmark as module
+    import helm_core.knowledge.semantic_extract as extract_module
+
+    def fake_call_ollama(prompt, *, model, keep_alive=None):
+        return json.dumps({"entities": [], "atoms": [], "edges": []})
+
+    monkeypatch.setattr(extract_module, "_call_ollama", fake_call_ollama)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["semantic_benchmark", "golden", "--model", "fake-model",
+         "--case", "no_knowledge", "--stability-repeats", "1"],
+    )
+    module.main()
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["model"] == "fake-model"
+    assert printed["schema_stats"]["cases_total"] == 1
+    assert printed["metrics"]["cases_scored"] == 1
+
+
 def test_shadow_benchmark_domain_breakdown_and_failure_counts():
     samples = [
         ShadowWindowSample(source_id="s1", domain="health", window_ordinal=0, text="текст 1"),

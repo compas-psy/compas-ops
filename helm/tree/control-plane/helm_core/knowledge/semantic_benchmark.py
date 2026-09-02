@@ -20,7 +20,10 @@ Golden-прогон (`run_golden_benchmark`) и shadow-прогон (`run_shadow
 
 from __future__ import annotations
 
+import argparse
+import dataclasses
 import hashlib
+import json
 import logging
 import statistics
 import time
@@ -319,3 +322,44 @@ def run_shadow_benchmark(samples: list[ShadowWindowSample], *, model: str,
             atoms_count=len(extraction.atoms), edges_count=len(extraction.edges),
             rejected_count=len(extraction.rejected)))
     return ShadowBenchmarkReport(model=model, keep_alive=keep_alive, results=results)
+
+
+def golden_report_to_dict(report: GoldenBenchmarkReport) -> dict:
+    """Сериализация для CLI/отчёта. `dataclasses.asdict` не подхватывает
+    @property (p50/p95) — их считаем явно."""
+    data = dataclasses.asdict(report)
+    data["p50_latency"] = report.p50_latency
+    data["p95_latency"] = report.p95_latency
+    return data
+
+
+def _cli_golden(args: argparse.Namespace) -> None:
+    cases = GOLDEN_CASES
+    if args.case:
+        cases = tuple(c for c in GOLDEN_CASES if c.case_id in set(args.case))
+        missing = set(args.case) - {c.case_id for c in cases}
+        if missing:
+            raise SystemExit(f"неизвестные case_id: {sorted(missing)}")
+    report = run_golden_benchmark(model=args.model, keep_alive=args.keep_alive,
+                                  stability_repeats=args.stability_repeats, cases=cases)
+    print(json.dumps(golden_report_to_dict(report), ensure_ascii=False, indent=2))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="mode", required=True)
+
+    golden = sub.add_parser("golden", help="Golden fixture benchmark одного кандидата")
+    golden.add_argument("--model", required=True)
+    golden.add_argument("--keep-alive", default=None)
+    golden.add_argument("--stability-repeats", type=int, default=3)
+    golden.add_argument("--case", action="append", default=None,
+                        help="Ограничить прогон конкретными case_id (можно несколько раз)")
+
+    args = parser.parse_args()
+    if args.mode == "golden":
+        _cli_golden(args)
+
+
+if __name__ == "__main__":
+    main()
