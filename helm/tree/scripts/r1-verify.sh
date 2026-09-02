@@ -74,4 +74,35 @@ for d in /opt/helm-knowledge-private /opt/helm-knowledge/raw/health /opt/helm-kn
 done
 
 echo
+echo "############ 6. ФАЙЛЫ НА НОВЫХ ПУТЯХ ЦЕЛЫ ############"
+# Ровно то, что делает documents.py::read_original() перед выдачей: файл
+# на пути из БД существует и его sha256 совпадает с записанной. Если
+# перенос разошёлся с колонкой, владелец увидит "у этой записи нет
+# исходного файла" — сообщение, по которому причину не восстановить.
+missing=0; mismatch=0; ok=0
+while IFS='|' read -r sha raw; do
+  [ -n "$sha" ] || continue
+  if ! sudo test -f "$raw"; then
+    missing=$((missing + 1)); echo "  НЕТ ФАЙЛА: $raw"
+  elif [ "$(sudo sha256sum "$raw" | cut -d' ' -f1)" != "$sha" ]; then
+    mismatch=$((mismatch + 1)); echo "  ХЭШ РАЗОШЁЛСЯ: $raw"
+  else
+    ok=$((ok + 1))
+  fi
+done < <(psql -tAc "select sha256, raw_path from knowledge_sources where domain = 'health'")
+echo "  целых $ok, отсутствует $missing, хэш разошёлся $mismatch"
+echo "--- пути ещё указывающие в общее дерево (ожидается 0) ---"
+psql -tAc "
+select count(*) from knowledge_sources
+where domain = 'health'
+  and (raw_path like '/opt/helm-knowledge/%' or source_path like '/opt/helm-knowledge/%')"
+
+echo
+echo "############ 7. ТОЧКА ВОЗВРАТА ############"
+# backup.sh трогает этот файл ТОЛЬКО после успешного снапшота — это
+# единственная отметка, по которой видно, снялась ли она на самом деле.
+stat -c 'последний успешный бэкап: %y' /var/lib/helm-guardian/last-backup 2>/dev/null \
+  || echo "отметки об успешном бэкапе нет"
+
+echo
 echo "############ ГОТОВО ############"
