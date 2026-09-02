@@ -386,7 +386,11 @@ jobs:
               [ "$age" -le "$2" ]
             }
             ok=1
-            fresh /var/lib/helm-guardian/last-backup 48 || ok=0
+            # Сутки, а не двое: бэкап ежедневный, и «вчерашний успех при
+            # сегодняшнем провале» — ровно то состояние, в котором
+            # необратимое действие делать нельзя. Restore-тест
+            # еженедельный (§26.4), отсюда 168 часов.
+            fresh /var/lib/helm-guardian/last-backup 24 || ok=0
             fresh /var/lib/helm-guardian/last-restore-test 168 || ok=0
             [ "$ok" = 1 ]
           ' || {

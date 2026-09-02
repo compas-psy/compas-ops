@@ -65,9 +65,6 @@ echo "############ 4. ТОЧКА ВОЗВРАТА ЧИТАЕТСЯ ############"
 # возврата, которую не проверили, — обещание, а не страховка.
 sudo /opt/helm/scripts/local-rescue-checkpoint.sh verify
 
-echo
-echo "--- состав точки возврата ---"
-sudo ls -lh "$(sudo ls -1d /opt/helm-rescue-checkpoints/*/ | sort | tail -1)"
 
 echo
 echo "--- отметки страховок ---"
