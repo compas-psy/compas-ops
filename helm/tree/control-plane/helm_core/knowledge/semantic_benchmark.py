@@ -333,6 +333,34 @@ def golden_report_to_dict(report: GoldenBenchmarkReport) -> dict:
     return data
 
 
+def golden_report_from_dict(data: dict) -> GoldenBenchmarkReport:
+    """Обратное к `golden_report_to_dict` — разбор JSON, напечатанного
+    живым CLI на сервере, вне сервера (выбор winner по уже полученным
+    данным не должен требовать ещё одного обращения к Ollama, п.10:
+    сравнение кандидатов не зависит от того, что сервер ответит в
+    следующий раз чуть иначе)."""
+    def _score_from_dict(s: dict | None) -> CaseScore | None:
+        if s is None:
+            return None
+        return CaseScore(**{**s, "categories": tuple(s["categories"])})
+
+    runs = [
+        CaseRun(case_id=r["case_id"], categories=tuple(r["categories"]), outcome=r["outcome"],
+                latency_seconds=r["latency_seconds"], repair_attempts=r["repair_attempts"],
+                score=_score_from_dict(r["score"]), error=r["error"])
+        for r in data["runs"]
+    ]
+    return GoldenBenchmarkReport(
+        model=data["model"], keep_alive=data["keep_alive"], runs=runs,
+        schema_stats=SchemaStats(**{k: v for k, v in data["schema_stats"].items()
+                                    if k in SchemaStats.__dataclass_fields__}),
+        stability=[StabilityResult(**s) for s in data["stability"]],
+        metrics=AggregateMetrics(**{k: v for k, v in data["metrics"].items()
+                                    if k in AggregateMetrics.__dataclass_fields__}),
+        latencies_seconds=data["latencies_seconds"],
+    )
+
+
 def _cli_golden(args: argparse.Namespace) -> None:
     cases = GOLDEN_CASES
     if args.case:

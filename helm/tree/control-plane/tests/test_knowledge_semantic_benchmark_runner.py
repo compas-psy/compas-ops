@@ -174,6 +174,24 @@ def test_cli_golden_prints_valid_json_report(monkeypatch, capsys):
     assert printed["metrics"]["cases_scored"] == 1
 
 
+def test_golden_report_json_round_trip_survives_a_full_run():
+    """`golden_report_from_dict` разбирает то, что сервер напечатал через
+    CLI, ВНЕ сервера — выбор winner не должен требовать ещё одного
+    обращения к Ollama. Прогон на всех фикстурах, не на одной — чтобы
+    поймать поле, забытое в сериализации именно на непустом отчёте."""
+    from helm_core.knowledge.semantic_benchmark import (
+        golden_report_from_dict, golden_report_to_dict,
+    )
+
+    def fake_extract(text, *, domain, heading_path=(), model, keep_alive=None):
+        case = next(c for c in GOLDEN_CASES if c.text == text)
+        return _perfect_extraction(case)
+
+    report = run_golden_benchmark(model="fake", extract_fn=fake_extract, stability_repeats=2)
+    restored = golden_report_from_dict(json.loads(json.dumps(golden_report_to_dict(report))))
+    assert restored == report
+
+
 def test_shadow_benchmark_domain_breakdown_and_failure_counts():
     samples = [
         ShadowWindowSample(source_id="s1", domain="health", window_ordinal=0, text="текст 1"),
