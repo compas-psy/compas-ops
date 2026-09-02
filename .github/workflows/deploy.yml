@@ -15,6 +15,37 @@ name: Выкат на сервер
 # По умолчанию действие — `verify`, то есть только чтение. Выкатить
 # что-либо можно лишь явно выбрав действие: случайный запуск ничего не
 # меняет.
+#
+# ── Политика выката (решение владельца 02.09.2026) ───────────────────
+#
+# Две страховки с разными задачами, и путать их нельзя:
+#
+#   ЛОКАЛЬНАЯ точка возврата (scripts/local-rescue-checkpoint.sh)
+#     защищает от ОШИБКИ ВЫКАТА. Снимается на самом VPS за десятки
+#     секунд, ни от какого стороннего сервиса не зависит.
+#     ОБЯЗАТЕЛЬНА перед каждым `deploy`; не снялась — выката нет.
+#
+#   OFFSITE restic (scripts/backup.sh)
+#     защищает от ПОТЕРИ МАШИНЫ. Зависит от стороннего хранилища,
+#     которое 02.09.2026 трижды подряд отдало 500, съев по двадцать
+#     минут. Из критического пути `deploy` ВЫНЕСЕН: запускается
+#     отдельным `action=backup` и ночным cron.
+#     ОБЯЗАТЕЛЕН перед любым необратимым действием.
+#
+# Соответственно два класса действий:
+#
+#   SAFE/аддитивное (`deploy`, `migrate`) — добавляет и меняет код,
+#     ничего не удаляет безвозвратно. Гейт: локальная точка возврата.
+#
+#   НЕОБРАТИМОЕ (`destructive`, `rollback`) — удаление данных, purge
+#     файлов, downgrade схемы. Гейт закрыт по умолчанию: нужен свежий
+#     успешный offsite-бэкап И пройденный тест восстановления, либо
+#     подтверждённый владельцем снапшот провайдера в `provider_snapshot`.
+#     Локальной точки возврата здесь НЕДОСТАТОЧНО: она лежит на том же
+#     диске, что и данные, которые удаляются.
+#
+# `recon` — read-only по контракту. Скрипты с именем `destructive-*.sh`
+# он выполнять отказывается, для них есть `destructive` с гейтом.
 
 on:
   workflow_dispatch:
@@ -27,10 +58,12 @@ on:
         options:
           - keyscan       # напечатать ключи сервера для VPS_KNOWN_HOSTS
           - verify        # только посмотреть состояние, ничего не менять
-          - backup        # снять точку возврата
-          - deploy        # код + панель + пересборка контейнеров
+          - backup        # offsite: зашифрованный restic в удалённое хранилище
+          - checkpoint    # локальная точка возврата на самом VPS
+          - deploy        # SAFE: код + панель + пересборка (только аддитивное)
           - migrate       # alembic upgrade head (после deploy)
-          - recon         # разовая read-only/функциональная разведка (см. script)
+          - recon         # разовая read-only разведка (см. script)
+          - destructive   # необратимое действие через гейт (см. script)
           - restore-test  # backup.sh + restore_test.sh
           - rollback      # alembic downgrade до указанной ревизии
       revision:
@@ -38,7 +71,11 @@ on:
         required: false
         default: ''
       script:
-        description: 'Имя файла в scripts/ для action=recon'
+        description: 'Имя файла в scripts/ для action=recon или action=destructive'
+        required: false
+        default: ''
+      provider_snapshot:
+        description: 'Подтверждённый снапшот VPS/провайдера (id или дата) — единственная замена offsite-бэкапу для необратимых действий'
         required: false
         default: ''
 
@@ -118,58 +155,64 @@ jobs:
             stat -c %y /var/lib/helm-guardian/last-backup 2>/dev/null || echo "нет отметки"
           '
 
-      # ── backup: точка возврата перед всем остальным ──────────────────
-      # Доставляем актуальный backup.sh/restore_test.sh ДО самого бэкапа —
-      # не через общий "Доставка файлов"/"Разложить и пересобрать" (тот
-      # идёт ПОСЛЕ точки возврата и пересобирает/рестартит helm-core,
-      # чего быть до бэкапа не должно), а отдельным лёгким scp, который
-      # не трогает работающие контейнеры.
-      - name: Доставить актуальный backup.sh
-        if: inputs.action == 'backup' || inputs.action == 'deploy' || inputs.action == 'restore-test'
+      # ── страховки: локальная точка возврата и offsite-бэкап ─────────
+      # Доставляем актуальные скрипты ДО того, как они понадобятся — не
+      # общим шагом "Доставка файлов"/"Разложить и пересобрать" (тот идёт
+      # ПОСЛЕ точки возврата и пересобирает helm-core, чего до точки
+      # возврата быть не должно), а отдельным лёгким scp, который не
+      # трогает работающие контейнеры.
+      - name: Доставить скрипты страховок
+        if: contains(fromJSON('["backup","checkpoint","deploy","migrate","restore-test","destructive","rollback"]'), inputs.action)
         run: |
-          scp -i ~/.ssh/id_deploy helm/tree/scripts/backup.sh helm/tree/scripts/restore_test.sh \
+          scp -i ~/.ssh/id_deploy \
+            helm/tree/scripts/backup.sh \
+            helm/tree/scripts/restore_test.sh \
+            helm/tree/scripts/local-rescue-checkpoint.sh \
             "$VPS_USER@$VPS_HOST:/tmp/"
           ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
-            sudo mv /tmp/backup.sh /opt/helm/scripts/backup.sh
-            sudo mv /tmp/restore_test.sh /opt/helm/scripts/restore_test.sh
-            sudo chown root:root /opt/helm/scripts/backup.sh /opt/helm/scripts/restore_test.sh
-            sudo chmod 755 /opt/helm/scripts/backup.sh /opt/helm/scripts/restore_test.sh
+            set -e
+            for f in backup.sh restore_test.sh local-rescue-checkpoint.sh; do
+              sudo mv "/tmp/$f" "/opt/helm/scripts/$f"
+              sudo chown root:root "/opt/helm/scripts/$f"
+              sudo chmod 755 "/opt/helm/scripts/$f"
+            done
           '
 
-      - name: Точка возврата
-        id: backup_step
-        if: inputs.action == 'backup' || inputs.action == 'deploy'
-        # НАЙДЕНО 01.09.2026: backup.sh молчит в stdout, пока restic
-        # молча читает/чанкует/заливает через rclone на Яндекс Диск — за
-        # это время нет вообще никакого трафика через SSH-соединение.
-        # Первая попытка оборвалась через ~4.5 минуты "Broken pipe" —
-        # похоже на idle-таймаут NAT/файрвола на пути раннер→сервер
-        # (типичный дефолт 300 секунд совпадает по времени), не на
-        # реальное зависание restic. ServerAlive* держит TCP живым на
-        # уровне протокола SSH независимо от того, молчит удалённая
-        # команда — тот же класс проблемы, что уже чинили в F-260831-07
-        # (SFTP-зависание `scp -r`), но здесь решение не смена протокола,
-        # а keepalive. После этого фикса два прогона подряд реально
-        # проработали ~15 минут (не оборвались) и упёрлись уже в другое —
-        # сам webdav.yandex.ru отвечал 500/timeout на отдельные чанки
-        # (RCLONE_TIMEOUT/RCLONE_LOW_LEVEL_RETRIES в backup.sh).
+      - name: Локальная точка возврата
+        if: inputs.action == 'deploy' || inputs.action == 'migrate' || inputs.action == 'checkpoint'
+        # Гейт SAFE-выката, fail-closed: шаг упал — дальше не едет ничего.
+        # Снимается на самом VPS (pg_dumpall с ролями, /opt/helm-knowledge,
+        # /opt/helm-knowledge-private, конфигурация, манифест + SHA256),
+        # проверяет себя сразу после записи и не зависит ни от одного
+        # стороннего сервиса. Защищает от ошибки выката — не от потери
+        # машины: она лежит на том же диске.
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=12 \
+            -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
+            'sudo /opt/helm/scripts/local-rescue-checkpoint.sh create'
+
+      - name: Offsite-бэкап
+        if: inputs.action == 'backup'
+        # ВЫНЕСЕН ИЗ ПУТИ ВЫКАТА 02.09.2026 (решение владельца). Здесь
+        # только явный action=backup и ночной cron; deploy на него больше
+        # не завязан и не падает из-за чужого хранилища.
         #
-        # continue-on-error ТОЛЬКО для deploy (решение владельца
-        # 01.09.2026): раз бэкап зависит от стороннего Yandex WebDAV,
-        # его нестабильность не должна держать заложником готовый и
-        # протестированный код — в репозитории уже 32+ снапшота,
-        # ежедневный cron продолжает пытаться сам по себе. Явный
-        # action=backup по-прежнему падает как раньше: если владелец
-        # запускает бэкап САМ, он должен узнать, что тот не прошёл.
-        continue-on-error: ${{ inputs.action == 'deploy' }}
+        # НАЙДЕНО 01.09.2026: backup.sh молчит в stdout, пока restic
+        # читает/чанкует/заливает через rclone на Яндекс Диск — за это
+        # время через SSH-соединение нет никакого трафика. Первая попытка
+        # оборвалась через ~4.5 минуты "Broken pipe" — idle-таймаут
+        # NAT/файрвола на пути раннер→сервер (типичные 300 секунд
+        # совпадают), не зависание restic. ServerAlive* держит TCP живым
+        # на уровне SSH, пока удалённая команда молчит.
+        #
+        # НАЙДЕНО 02.09.2026: после этого фикса три прогона подряд по
+        # ~20 минут упёрлись уже в сам webdav.yandex.ru — 500 и таймауты
+        # на отдельных чанках, "Fatal: unable to save snapshot". Хранилище
+        # нестабильно, и это открытый вопрос H-260902-01, а не то, что
+        # обходится continue-on-error.
         run: |
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=12 \
             -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" 'sudo /opt/helm/scripts/backup.sh'
-
-      - name: Бэкап не прошёл — деплой продолжается без свежей точки возврата
-        if: inputs.action == 'deploy' && steps.backup_step.outcome == 'failure'
-        run: |
-          echo "::warning::Бэкап перед деплоем не прошёл (см. шаг 'Точка возврата' выше) — деплой продолжается на последнем существующем снапшоте, не на свежем."
 
       # ── deploy: код, панель, конфигурация, пересборка ────────────────
       - uses: actions/setup-node@v4
@@ -300,6 +343,12 @@ jobs:
             echo "::error::Для recon нужно указать script (имя файла в scripts/)"
             exit 1
           fi
+          case "${{ inputs.script }}" in
+            destructive-*)
+              echo "::error::${{ inputs.script }} — необратимый скрипт. recon read-only по контракту; запускайте через action=destructive, он проходит гейт."
+              exit 1
+              ;;
+          esac
           scp -i ~/.ssh/id_deploy "helm/tree/scripts/${{ inputs.script }}" \
               "$VPS_USER@$VPS_HOST:/tmp/recon.sh"
           ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
@@ -309,9 +358,59 @@ jobs:
             exit $rc
           '
 
+      # ── необратимое: гейт закрыт по умолчанию ───────────────────────
+      - name: Гейт необратимого действия
+        if: inputs.action == 'destructive' || inputs.action == 'rollback'
+        # Fail closed. Локальной точки возврата здесь НЕДОСТАТОЧНО: она
+        # лежит на том же диске, что и данные, которые удаляются. Нужен
+        # либо свежий offsite-бэкап С пройденным тестом восстановления
+        # (§26.3: бэкап без свежего restore-теста здоровым не считается),
+        # либо подтверждённый владельцем снапшот провайдера.
+        env:
+          PROVIDER_SNAPSHOT: ${{ inputs.provider_snapshot }}
+        run: |
+          if [ -n "$PROVIDER_SNAPSHOT" ]; then
+            echo "Гейт открыт снапшотом провайдера: $PROVIDER_SNAPSHOT (подтверждён владельцем при запуске)"
+            exit 0
+          fi
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
+            set -e
+            fresh() {
+              # $1 — файл-отметка, $2 — предельный возраст в часах
+              [ -f "$1" ] || { echo "нет отметки $1"; return 1; }
+              age=$(( ( $(date +%s) - $(stat -c %Y "$1") ) / 3600 ))
+              echo "$1: $age ч назад (предел $2 ч)"
+              [ "$age" -le "$2" ]
+            }
+            ok=1
+            fresh /var/lib/helm-guardian/last-backup 48 || ok=0
+            fresh /var/lib/helm-guardian/last-restore-test 168 || ok=0
+            [ "$ok" = 1 ]
+          ' || {
+            echo "::error::Гейт закрыт: нет свежего offsite-бэкапа с пройденным тестом восстановления. Запустите action=backup, затем action=restore-test — либо укажите provider_snapshot, если снапшот VPS снят и проверен вручную."
+            exit 1
+          }
+
+      - name: Необратимое действие
+        if: inputs.action == 'destructive'
+        run: |
+          if [ -z "${{ inputs.script }}" ]; then
+            echo "::error::Для destructive нужно указать script (имя файла в scripts/)"
+            exit 1
+          fi
+          scp -i ~/.ssh/id_deploy "helm/tree/scripts/${{ inputs.script }}" \
+              "$VPS_USER@$VPS_HOST:/tmp/destructive.sh"
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=12 \
+            -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
+            bash /tmp/destructive.sh
+            rc=$?
+            rm -f /tmp/destructive.sh
+            exit $rc
+          '
+
       - name: Проверка восстановления
         if: inputs.action == 'restore-test'
-        # Тот же keepalive, что у "Точка возврата" — тут тоже сначала
+        # Тот же keepalive, что у "Offsite-бэкап" — тут тоже сначала
         # молча отрабатывает backup.sh.
         run: |
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=12 \
@@ -348,11 +447,7 @@ jobs:
             exit 0
           fi
           STATUS='${{ job.status }}'
-          NOTE=''
-          if [ "${{ steps.backup_step.outcome }}" = "failure" ]; then
-            NOTE=' (ВНИМАНИЕ: бэкап перед деплоем не прошёл, деплой продолжился без свежей точки возврата)'
-          fi
           curl -sS -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
             -d "chat_id=$TG_CHAT_ID" \
-            -d "text=Выкат «${{ inputs.action }}»: $STATUS$NOTE. Логи: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            -d "text=Выкат «${{ inputs.action }}»: $STATUS. Логи: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             > /dev/null || true

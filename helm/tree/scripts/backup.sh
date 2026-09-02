@@ -108,10 +108,12 @@ restic backup \
   --exclude '/opt/helm-knowledge/derived' \
   --tag helm-daily
 
-# Ретеншен: спека не задаёт конкретное число дней для бэкапов (только для
-# n8n-executions в §25.6) — 7 daily / 4 weekly / 3 monthly разумный
-# дефолт, не окончательное решение.
-restic forget --keep-daily 7 --keep-weekly 4 --keep-monthly 3 --prune
+# Ретеншен по v4.0 §26.3: 7 daily / 4 weekly / 6 monthly. До 02.09.2026
+# здесь стояло 3 monthly (дефолт, выбранный когда спека числа не задавала)
+# — сверка с CURRENT spec это разошедшееся место и нашла. Числа обязаны
+# совпадать с раскрытием сроков хранения в knowledge/offboarding.py, за
+# этим следит test_retention_numbers_match_the_actual_backup_script.
+restic forget --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune
 
 # Guardian (§25) читает mtime этого файла как возраст последнего бэкапа.
 touch /var/lib/helm-guardian/last-backup
