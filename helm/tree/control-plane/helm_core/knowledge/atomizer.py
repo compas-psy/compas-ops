@@ -189,7 +189,11 @@ def atomize(text: str, *, domain: str) -> list[AtomizedAtom]:
     try:
         return _parse_atoms(raw_response)
     except (json.JSONDecodeError, AtomizerUnavailable) as exc:
-        raise AtomizerUnavailable(f"невалидный JSON от модели: {exc}") from exc
+        # Сырой ответ модели — не только текст исключения — обязателен в
+        # сообщении: без него "невалидный JSON" ничем не отличается от
+        # "модель недоступна" в логе fail-open, диагностировать нечего.
+        raise AtomizerUnavailable(
+            f"невалидный JSON от модели: {exc} | сырой ответ: {raw_response[:300]!r}") from exc
 
 
 def atomize_or_empty(text: str, *, domain: str) -> list[AtomizedAtom]:
