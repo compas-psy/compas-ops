@@ -114,6 +114,55 @@ else
   echo "restore test: Markdown-зеркал памяти восстановлено ${MIRROR_COUNT}"
 fi
 
+# Health-схема и приватное дерево (§14.16, R1 от 02.09.2026). Без этой
+# проверки тест восстановления давал бы зелёный свет на снятие копии
+# health-чанков из общей схемы, даже если в снапшоте приватных данных
+# нет вовсе — а это ровно тот исход, ради которого тест и существует:
+# база выглядит целой, а второго мозга в ней уже нет.
+HEALTH_SCHEMA=$(docker exec "$TEST_CONTAINER" psql -U postgres -d helm -tAc \
+  "select count(*) from information_schema.schemata where schema_name = 'health'")
+if [ "$HEALTH_SCHEMA" = "1" ]; then
+  HEALTH_CHUNKS=$(docker exec "$TEST_CONTAINER" psql -U postgres -d helm -tAc \
+    "select count(*) from health.knowledge_chunks")
+  HEALTH_SOURCES=$(docker exec "$TEST_CONTAINER" psql -U postgres -d helm -tAc \
+    "select count(*) from health.knowledge_source_private")
+  echo "restore test: health-схема восстановлена — чанков ${HEALTH_CHUNKS}," \
+       "приватных источников ${HEALTH_SOURCES}"
+
+  # Каждой строке сайдкара обязан соответствовать восстановленный файл.
+  # Сверяем по имени файла, а не по полному пути: restic кладёт дерево
+  # под свой префикс, и абсолютный путь из колонки здесь не совпадёт.
+  if [ "$HEALTH_SOURCES" -gt 0 ]; then
+    PRIVATE_MISSING=0
+    while IFS= read -r stored; do
+      [ -n "$stored" ] || continue
+      name=$(basename "$stored")
+      find "$RESTORE_DIR" -path '*/helm-knowledge-private/*' -name "$name" \
+        -print -quit | grep -q . || PRIVATE_MISSING=$((PRIVATE_MISSING + 1))
+    done < <(docker exec "$TEST_CONTAINER" psql -U postgres -d helm -tAc \
+              "select stored_path from health.knowledge_source_private")
+    if [ "$PRIVATE_MISSING" -gt 0 ]; then
+      echo "FAIL: ${PRIVATE_MISSING} из ${HEALTH_SOURCES} приватных файлов health не восстановились" >&2
+      exit 1
+    fi
+    echo "restore test: приватных файлов health восстановлено ${HEALTH_SOURCES} из ${HEALTH_SOURCES}"
+  fi
+
+  # Роли — часть изоляции, а не её оформление: без helm_health
+  # восстановленная база вернёт данные, но не разграничение доступа.
+  for role in helm_app helm_health; do
+    HAS_ROLE=$(docker exec "$TEST_CONTAINER" psql -U postgres -d helm -tAc \
+      "select count(*) from pg_roles where rolname = '$role'")
+    if [ "$HAS_ROLE" != "1" ]; then
+      echo "FAIL: роль ${role} не восстановлена — изоляция health не воспроизводится" >&2
+      exit 1
+    fi
+  done
+  echo "restore test: роли helm_app и helm_health восстановлены"
+else
+  echo "restore test: health-схемы в снапшоте нет (снапшот старше R1)"
+fi
+
 PROFILE_COUNT=$(find "$RESTORE_DIR" -path '*/profiles/*/config.yaml' | wc -l)
 echo "restore test: профилей Hermes восстановлено: ${PROFILE_COUNT}"
 
