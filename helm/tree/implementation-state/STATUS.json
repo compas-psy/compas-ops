@@ -14,7 +14,20 @@
     "timezone_target": "Europe/Moscow",
     "ssh_hardening": "complete: PasswordAuthentication no, PermitRootLogin no, admin user helm verified via independent second login"
   },
-  "blockers": [],
+  "blockers": [
+    {
+      "id": "B-R1-01",
+      "title": "R1 NOT PASS: копия health-чанков остаётся в public, полный §30.8.5 C не пройден",
+      "blocks": "R2 semantic-v2 и всё, что за ним (R3–R10)",
+      "criteria": [
+        "public health chunks = 0",
+        "все семь строк §30.8.5 C зелёные",
+        "restore-тест пройден на снапшоте, содержащем приватное дерево"
+      ],
+      "state": "открыт",
+      "human_task": "H-260902-01"
+    }
+  ],
   "open_findings": [
     {
       "id": "F-260829-34",
