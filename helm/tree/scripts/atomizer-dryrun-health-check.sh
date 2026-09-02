@@ -8,7 +8,7 @@
 # чем доверять ей запись в Second Brain по всему корпусу.
 #
 # ВАЖНО: domain для самого вызова atomize_and_store() ниже — "personal", не
-# "health", хотя ТЕКСТ читается из настоящих health-чанков. Не ошибка: для
+# "health", хотя ТЕКСТ читается из настоящих health-источников. Не ошибка: для
 # health atomizer.py пишет через health_schema.write_notes()/write_relations()
 # — они открывают СОБСТВЕННОЕ соединение и коммитят немедленно (см. докстринг
 # health_schema.py, "Короткоживущая сессия... Коммитит на успешном выходе") —
@@ -17,6 +17,14 @@
 # единственный способ увидеть вывод модели на реальном тексте, ничего не
 # закоммитив. Маршрутизация в health.* уже отдельно проверена юнит-тестами
 # (test_knowledge_health_isolation.py) — здесь проверяется НЕ она.
+#
+# НАЙДЕНО этим же заходом (health-chunks-location-check.sh): все 90
+# health-источников физически лежат текстом в public.knowledge_chunks, НИ
+# ОДИН — в health.knowledge_chunks. Они загружены ДО первого прогона
+# setup-health-role.sh; migrate-health-filenames-to-sidecar.sh перенёс
+# только original_filename, не сам текст (P12 деплой не завершён — задача
+# #39, отдельная от этого ADR). Читаем текст оттуда, где он РЕАЛЬНО лежит
+# сегодня — public.knowledge_chunks, не health.knowledge_chunks.
 #
 # Запускается на сервере: bash /tmp/recon.sh
 set -uo pipefail
@@ -29,10 +37,9 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from helm_core.config import get_settings
-from helm_core.knowledge import health_schema
 from helm_core.knowledge.atomizer import atomize_and_store
 from helm_core.knowledge.tenancy import bind_knowledge_user
-from helm_core.models import HealthKnowledgeChunk, KnowledgeNote, KnowledgeRelation, KnowledgeSource
+from helm_core.models import KnowledgeChunk, KnowledgeNote, KnowledgeRelation, KnowledgeSource
 
 N = 3
 
@@ -49,12 +56,11 @@ with Session(engine) as s, tempfile.TemporaryDirectory() as vault_root:
     print(f"взято {len(sources)} health-источников для пробного прогона (без коммита)")
 
     for source in sources:
-        with health_schema.health_session(knowledge_user_id) as hs:
-            rows = hs.scalars(
-                select(HealthKnowledgeChunk.text)
-                .where(HealthKnowledgeChunk.source_id == source.id)
-                .order_by(HealthKnowledgeChunk.ordinal)
-            ).all()
+        rows = s.scalars(
+            select(KnowledgeChunk.text)
+            .where(KnowledgeChunk.source_id == source.id)
+            .order_by(KnowledgeChunk.ordinal)
+        ).all()
         text = "\n\n".join(rows)
         print(f"\n=== source={source.id} chunks={len(rows)} chars={len(text)} ===")
 
