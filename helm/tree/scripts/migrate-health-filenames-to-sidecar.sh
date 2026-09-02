@@ -1,11 +1,23 @@
 #!/bin/bash
-# Разовая data-миграция ADR-005/P12: 4 уже существующих живых health-
-# документа заведены ДО этого решения — их original_filename всё ещё
-# сидит в public.knowledge_sources. Переносит его в health.knowledge_
-# source_private и обнуляет в public — тот же код (health_schema.py::
-# write_original_filename), который теперь используется для НОВЫХ
-# health-загрузок, здесь просто применён постфактум к уже существующим
-# строкам.
+# Разовая data-миграция ADR-005/P12: health-документы, заведённые ДО
+# этого решения, всё ещё держат original_filename в public.knowledge_
+# sources. Переносит его в health.knowledge_source_private и обнуляет в
+# public — тот же код, который теперь используется для НОВЫХ health-
+# загрузок, применён постфактум к уже существующим строкам.
+#
+# Правка 02.09.2026 (v4.0 RESCUE, шаг R1), две штуки:
+#
+# 1. Берутся ВСЕ health-источники, а не только те, у кого имя ещё в
+#    public. Строка в сайдкаре нужна каждому независимо от имени:
+#    health.knowledge_chunks.source_id ссылается на неё внешним ключом,
+#    и без неё перенос чанков такого источника упадёт.
+# 2. Снята ловушка expire_on_commit. Первый живой прогон 01.09 перенёс
+#    ровно ОДИН источник из девяноста и встал: s.commit() в конце
+#    итерации истекает ВСЕ объекты сессии, включая ещё не обработанные,
+#    и следующее же обращение к source.* перечитывает строку до того,
+#    как GUC установлен на новой транзакции — RLS её не показывает.
+#    Теперь всё нужное вычитывается кортежами ДО цикла, и ORM-объектов,
+#    которые могли бы протухнуть, в цикле нет вовсе.
 #
 # Требует scripts/setup-health-role.sh уже прогнанным (секрет заполнен,
 # health.* таблицы существуют) И helm-core уже перезапущенным с новым
@@ -23,7 +35,7 @@ echo '=== ADR-005/P12: перенос original_filename health-источник�
 sudo docker compose exec -T helm-core python3 <<'PY'
 import sys
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, update
 from sqlalchemy.orm import Session
 
 from helm_core.config import get_settings
@@ -47,36 +59,39 @@ with Session(engine) as s:
     # текущий код: "единственный тенант делает это неотличимым от
     # прежнего поведения" (см. probe.py::probe() docstring).
     bind_knowledge_user(s, None)
-    sources = s.scalars(
-        select(KnowledgeSource).where(
-            KnowledgeSource.domain == KnowledgeDomain.HEALTH,
-            KnowledgeSource.original_filename.isnot(None),
-        )
+    # Кортежи, не ORM-объекты: всё, что нужно циклу, вычитано здесь и
+    # больше от сессии не зависит. Именно ORM-объекты в прошлой версии
+    # протухали на первом же commit() и уносили с собой весь прогон.
+    rows = s.execute(
+        select(KnowledgeSource.id, KnowledgeSource.knowledge_user_id,
+               KnowledgeSource.original_filename)
+        .where(KnowledgeSource.domain == KnowledgeDomain.HEALTH)
     ).all()
-    print(f"найдено health-источников с именем файла в public: {len(sources)}")
+    print(f"найдено health-источников: {len(rows)}")
 
-    for source in sources:
-        # SET LOCAL живёт до конца транзакции — предыдущий s.commit() уже
-        # закрыл её, а expire_on_commit=True (дефолт Session) истёк все
-        # объекты из sources: следующее обращение к source.* внутри этой
-        # итерации перечитывает строку без GUC → RLS её не показывает →
-        # ObjectDeletedError вместо реального обновления. Перепривязка на
-        # каждой итерации — не единожды до цикла.
-        set_current_knowledge_user(s, source.knowledge_user_id)
-        with health_session(source.knowledge_user_id) as hs:
-            already = hs.get(HealthKnowledgeSourcePrivate, source.id)
+    for source_id, knowledge_user_id, original_filename in rows:
+        with health_session(knowledge_user_id) as hs:
+            already = hs.get(HealthKnowledgeSourcePrivate, source_id)
             if already is not None:
                 skipped += 1
-                print(f"  {source.id}: sidecar уже существует, пропущен")
+                print(f"  {source_id}: sidecar уже существует, пропущен")
                 continue
             hs.add(HealthKnowledgeSourcePrivate(
-                source_id=source.id, knowledge_user_id=source.knowledge_user_id,
-                original_filename=source.original_filename,
+                source_id=source_id, knowledge_user_id=knowledge_user_id,
+                original_filename=original_filename,
             ))
-        source.original_filename = None
+        # SET LOCAL живёт до конца транзакции, а предыдущая итерация её
+        # закоммитила — GUC надо ставить заново перед каждым UPDATE,
+        # иначе RLS не найдёт строку и UPDATE молча обновит ноль строк.
+        set_current_knowledge_user(s, knowledge_user_id)
+        s.execute(
+            update(KnowledgeSource)
+            .where(KnowledgeSource.id == source_id)
+            .values(original_filename=None)
+        )
         s.commit()
         migrated += 1
-        print(f"  {source.id}: перенесён")
+        print(f"  {source_id}: перенесён")
 
 print(f"готово: перенесено {migrated}, пропущено (уже были) {skipped}")
 PY

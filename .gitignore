@@ -27,3 +27,6 @@ products/
 # Панель HELM: зависимости и собранный бандл пересобираются из исходников
 helm/tree/panel/node_modules/
 helm/tree/panel/dist/
+
+# рабочий каталог планировщика: план живёт в implementation-state, а не здесь
+.ultraplan/
