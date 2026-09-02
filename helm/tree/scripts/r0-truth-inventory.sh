@@ -25,11 +25,15 @@ echo "--- отметка ревизии (появляется начиная с 
 sudo cat /opt/helm/DEPLOYED_SHA 2>/dev/null || echo "отметки нет — ревизия только по отпечатку ниже"
 echo "--- helm_core: файлов .py и общий отпечаток ---"
 sudo find /opt/helm/control-plane/helm_core -name '*.py' -type f | wc -l
-sudo find /opt/helm/control-plane/helm_core -name '*.py' -type f -print0 \
-  | sort -z \
+# LC_ALL=C обязателен: без него порядок задаёт локаль оболочки, а в
+# UTF-8-локали пунктуация при сортировке игнорируется — `hooks.py` и
+# `hooks_knowledge_telegram.py` меняются местами относительно порядка в
+# локали C. Первый прогон 02.09.2026 из-за этого дал отпечаток, не
+# совпавший ни с одним коммитом, хотя все 59 файлов побайтово равны HEAD.
+(cd /opt/helm/control-plane && sudo find helm_core -name '*.py' -type f -print0 \
+  | LC_ALL=C sort -z \
   | xargs -0 sudo sha256sum \
-  | sed 's|/opt/helm/control-plane/||' \
-  | sha256sum
+  | sha256sum)
 echo "--- самый свежий файл helm_core (когда выкатывали) ---"
 sudo find /opt/helm/control-plane/helm_core -name '*.py' -type f -printf '%T+ %p\n' \
   | sort | tail -1

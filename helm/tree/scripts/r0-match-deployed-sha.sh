@@ -19,7 +19,7 @@ for sha in $(git -C "$repo_root" rev-list -n "$depth" HEAD); do
   if git -C "$repo_root" archive "$sha" helm/tree/control-plane/helm_core 2>/dev/null \
      | tar -x -C "$tmp" 2>/dev/null; then
     fp="$(cd "$tmp/helm/tree/control-plane" \
-          && find helm_core -name '*.py' -type f -print0 | sort -z \
+          && find helm_core -name '*.py' -type f -print0 | LC_ALL=C sort -z \
           | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
     echo "$fp  $sha  $(git -C "$repo_root" log -1 --format=%s "$sha" | cut -c1-60)"
   fi

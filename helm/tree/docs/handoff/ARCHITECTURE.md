@@ -60,7 +60,7 @@ Control Plane).
 недостижим — модули, которые собирают ответ, не импортируют ни один
 модельный клиент, гарантия проверена AST-тестами, не флагом (ADR-020).
 
-## Хранилище — Markdown + Postgres, не одно из двух (ADR-019, канонический слой)
+## Хранилище — Markdown + Postgres, не одно из двух
 
 Second Brain — `/opt/helm-knowledge`, реальные `.md`-файлы с YAML
 frontmatter (§14.3, читаемо напрямую Obsidian/SFTP) + Postgres
@@ -68,10 +68,18 @@ frontmatter (§14.3, читаемо напрямую Obsidian/SFTP) + Postgres
 `knowledge_memories` и т.д. — метаданные и индексы, не BLOB текста).
 Мультитенантность — `knowledge_user_id` на каждой tenant-scoped
 таблице, изоляция — двойной слой: явный предикат в коде + PostgreSQL
-RLS `FORCE` (ADR-030). Graphify — задуманный derived-слой поверх
-`knowledge_relations`, решение принято 01.09.2026 (`ADR-019-knowledge-
-canonical-markdown-graphify.md`), реализация (semantic atomizer →
-L2-заметки → relations → Graphify) не начата.
+RLS `FORCE` (ADR-030).
+
+Семантический слой (канонические узлы сущностей, события/факты/решения
+с provenance, типизированные рёбра, KnowledgeGraphify) в живой базе
+отсутствует: 0 заметок, 0 связей. Контракт — `docs/spec/CURRENT.md`,
+§14.4–§14.12; порядок работ — шаги R0–R10; разбор фактического
+состояния — `implementation-state/V4.0-RESCUE-DELTA.md`. ADR-019
+описывает промежуточный эксперимент и помечен SUPERSEDED.
+
+`KnowledgeGraphify` (граф знаний владельца) и `RepoGraphify`
+(`tools/graphify.py`, навигация агента по этому репозиторию) — разные
+инструменты. Второй никогда не засчитывается за первый.
 
 ## Сеть и периметр
 

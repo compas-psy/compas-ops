@@ -1,24 +1,55 @@
-# HELM Knowledge — Retrieval / Free-first Probe (ТЗ §14.9–§14.14)
+# HELM Knowledge — Retrieval / Free-first Probe
 
-Как вопрос ищет ответ в базе знаний до платной модели, что из спеки уже
-работает и что нет. Подтверждено живьём 29.08.2026 на реальном сервере.
+Нормативный источник: `docs/spec/CURRENT.md` → HELM v4.0 RESCUE,
+§14.12–§14.14. Здесь — фактическое состояние `probe.py` на 02.09.2026.
 
-## Что есть сегодня: только лексический слой
+## Главный пробел
 
-`helm_core/knowledge/probe.py::probe(session, *, query, domain=None)`.
+v4.0 §14.12 требует **маршрутизатор до retrieval**: вопрос сначала
+классифицируется (`MICRO_MEMORY_EXACT`, `STRUCTURED_GRAPH`,
+`GRAPH_PLUS_SEMANTIC`, `SEMANTIC_TEXT`, `DOCUMENT_REQUEST`, …), и
+структурные вопросы исполняются обходом канонических узлов и рёбер, а не
+подбором похожих кусков текста.
 
-Спека (§14.9, §14.11) описывает три независимых сигнала объединённых
-rank fusion — lexical (FTS), dense (embeddings), relations
-(`knowledge_relations`) — плюс optional local rerank. Реализован только
-**lexical**. Dense и rank fusion — P8.5.4 остаток, требует бенчмарка
-embedding-модели на живом сервере (см. `docs/KNOWLEDGE_MODELS.md`).
-Relations не участвуют — `knowledge_relations` пока пустая таблица,
-ничто не создаёт в неё записи (extraction связей — P8.5.2+).
+**Маршрутизатора нет. Графового пути нет.** `probe()` не обращается ни к
+`knowledge_notes`, ни к `knowledge_relations` — ни одного упоминания в
+файле. Есть один универсальный путь: память → лексика → векторы → top-5.
 
-Практическое следствие: probe находит меньше, чем финальная версия
-(семантическая перефразировка без общих слов с источником не найдётся),
-но то, что находит — находит бесплатно, детерминированно и с
-проверяемым provenance.
+Практическое следствие, которое видно владельцу: «каких врачей я
+посещал» — это агрегат по сущностям, и подбор пяти похожих фрагментов
+на него отвечает плохо в принципе, сколько ни настраивай ранжирование.
+Настройка `ts_rank` как основного лечения таких вопросов запрещена
+v4.0 §14.23. Закрывается шагом R7.
+
+## Что реально делает probe() сегодня
+
+`helm_core/knowledge/probe.py::probe(session, *, query, domain=None,
+knowledge_user_id=None)`:
+
+```text
+0. bind_knowledge_user()      тенант обязателен, RLS — защита в глубину
+1. is_future_reminder(query)? → NEEDS_REASONING, память не трогаем
+2. search_memories(...)       → есть попадание → ответ из памяти, конец
+3. лексика (FTS)              public и/или health, по MIN_RANK_SCORE
+4. pgvector                   только если лексика не набрала MAX_EVIDENCE
+5. нет evidence               → NEEDS_REASONING
+6. Z0/Z1 ответ                + локальный рефраз (Ollama) только для Z0
+```
+
+Пороги: `MIN_RANK_SCORE = 0.003`, `MAX_EVIDENCE = 5`,
+`MIN_COSINE_SIMILARITY = 0.35`, `MIN_LEXICAL_CHUNK_CHARS = 20`.
+
+Векторный слой (ADR-025) дополняет лексику ДО `MAX_EVIDENCE` и не
+запрашивается вовсе, если лексика уже набрала полный колчан. Fail-open:
+недоступный embed-сервис деградирует до чисто лексического поведения, а
+не в отказ.
+
+`MIN_LEXICAL_CHUNK_CHARS` — не про качество совпадения, а про то, есть
+ли в чанке что цитировать: живой чат владельца вернул пять совпадений
+«Врач КДЛ:» (подпись лаборанта на бланке, чанк в несколько слов) вместо
+реальных визитов, и эти пять пустых фрагментов полностью закрывали
+`MAX_EVIDENCE`, не оставляя pgvector ни одного слота. Симптом починен,
+причина — отсутствие слоя сущностей — нет.
 
 ### Lexical search — `_lexical_search()`
 
@@ -26,8 +57,8 @@ Relations не участвуют — `knowledge_relations` пока пуста�
 plainto_tsquery('russian', query)
 → OR-ификация: replace(...::text, ' & ', ' | ')::tsquery
 → ts_rank(chunk.tsv, tsquery, normalization=2)
-→ фильтр по domain (явный domain, либо все кроме health)
-→ фильтр status != ARCHIVED
+→ фильтр по тенанту и domain (из общего поиска исключён simpas/zapiski)
+→ фильтр status != ARCHIVED, отсев чанков короче MIN_LEXICAL_CHUNK_CHARS
 → ORDER BY rank DESC LIMIT 5
 ```
 
@@ -109,11 +140,13 @@ canonical_text`) — §14.14 «exact URL/identifier not modified». Ноль
 Z0/Z1 означают «детерминированный локальный ответ», чем recall и
 является; заводить значения enum'а сверх спеки не стали.
 
-Оба режима — без LLM (`_compose_answer()`, чистый Python). `Z2`
-(опциональный локальный генератор) не реализован — спека явно разрешает
-оставить его выключенным («Z2 is not allowed to delay B.5 completion»);
-Z0/Z1 уже дают бесплатные ответы, C1 защищает качество там, где их
-недостаточно.
+Подбор evidence и сам ответ — без LLM (`_compose_answer()`, чистый
+Python). Поверх Z0 (одна цитата) работает локальный рефраз через Ollama
+(`gemma2:2b`, живой замер 31.08.2026): он делает формулировку
+человеческой, но не добавляет фактов и не считается платным вызовом.
+Z1 (список из нескольких находок) рефразом сознательно не покрыт —
+замер проверял рефраз ровно одного факта за раз, а совмещать несколько
+находок в одном вызове модели рискованнее и не проверено.
 
 ## Wiring — обе точки входа до Hermes
 
@@ -143,30 +176,42 @@ Control Plane не получает от Hermes gateway событие о зав
 Probe-гейт при этом работает одинаково на обоих каналах; недостаёт
 только доли метрики §14.14 для платных Telegram-эскалаций.
 
-### Health ACL (§14.15)
+### Health в общем поиске
 
-`domain=None` (обычный вопрос) исключает `KnowledgeDomain.HEALTH` из
-поиска на уровне SQL-запроса — health не течёт в общий ответ по
-умолчанию. Явный `domain="health"` — доступ есть, отдельный путь, не
-общий поиск.
+Решение владельца 01.09.2026: health отвечает в общем бесплатном поиске
+наравне со всеми доменами. Явный `domain="health"` решает не ДОПУСК, а
+ГДЕ физически искать: при настроенной схеме — в `health.knowledge_chunks`
+(обычная сессия их не видит), иначе — в public.
+
+Общий вопрос (`domain=None`) при настроенной схеме заглядывает в обе
+схемы и объединяет находки. Единственное оставшееся исключение из общего
+поиска — `simpas/zapiski` (клиентский контент чужих людей).
+
+Фактическое состояние на 02.09.2026: схема `health` настроена, но данные
+в неё не перенесены — весь health-текст ещё в public (см.
+`implementation-state/V4.0-RESCUE-DELTA.md`, F14). Ответы находятся, но
+изоляция пока номинальная.
 
 ## Quality gate §14.13 — что выполняется, что нет
 
 | Критерий | Статус |
 |---|---|
-| ACL PASS | ✅ (health exclusion) |
-| top evidence score >= calibrated threshold | ⚠️ порог есть, калибровка первая прикидка, не финальная |
-| source provenance present | ✅ (`original_filename`/`source_id` в каждом ответе) |
-| no unresolved contradiction | ❌ не реализовано — требует `knowledge_relations`, которая пуста (extraction связей — P8.5.2+); известный, задокументированный пробел, не молчаливый |
-| coverage sufficient | ⚠️ только лексическое покрытие, без dense/relations |
-| answer claims traceable to evidence | ✅ (Z0/Z1 — чистая экстракция, не синтез) |
+| тенант и ACL | ✅ тенант обязателен, RLS в глубину, `simpas/zapiski` вне общего поиска |
+| top evidence score >= calibrated threshold | ⚠️ порог есть, калибровка — первая прикидка на маленьком корпусе |
+| source provenance present | ✅ `original_filename`/`source_id` в каждом ответе |
+| no unresolved contradiction | ❌ требует типизированных связей; `knowledge_relations` пуста |
+| coverage sufficient | ⚠️ лексика + векторы; графового покрытия нет вовсе |
+| answer claims traceable to evidence | ✅ Z0/Z1 — экстракция, не синтез; локальный рефраз не добавляет фактов |
+| маршрутизация до retrieval (§14.12) | ❌ не реализована — шаг R7 |
 
 ## Тесты
 
-`tests/test_knowledge_probe.py` (13), `tests/test_knowledge_recall.py`
-(20 — все четыре фикстуры acceptance-списка «Recall» из v3.8 дословно,
-плюс tenant-изоляция recall), `tests/test_api.py` (эндпоинт),
-`tests/test_max_channel.py` (webhook-интеграция) — 370/370 зелёных.
-Полный набор golden cases §30.8.5 (semantic paraphrase, multi-hop
-relation, contradictory sources, Graphify-сравнение) недостижим без
-dense retrieval/relations — появится вместе с P8.5.4 остатком/P8.5.6.
+`tests/test_knowledge_probe.py`, `tests/test_knowledge_recall.py`,
+`tests/test_api.py` (эндпоинт), `tests/test_max_channel.py` (webhook).
+
+Отдельно, v4.0 §30.8.5 L: зелёные юнит-тесты доказывают контракты кода и
+**не** доказывают качество ответов. Обязательные золотые вопросы («каких
+врачей я посещал в этом году», «какие решения принимали по проекту X»,
+«с кем обсуждал проект X») должны исполняться графовым путём и сегодня
+не проходят вовсе — не потому, что тест не написан, а потому, что пути
+нет.
