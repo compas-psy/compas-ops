@@ -35,6 +35,7 @@ SAFETY_SCRIPTS = [
     SCRIPTS / "restore_test.sh",
     SCRIPTS / "destructive-drop-public-health-chunks.sh",
     SCRIPTS / "destructive-move-health-batches-to-private.sh",
+    SCRIPTS / "destructive-drop-pre-r1-checkpoints.sh",
     SCRIPTS / "r1-verify.sh",
 ]
 
