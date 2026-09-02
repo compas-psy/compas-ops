@@ -15,8 +15,15 @@
 # simpas/* (mkdir -p создаёт вложенность сам). Источник истины —
 # KnowledgeDomain, при добавлении домена туда — обновить и этот список.
 #
-# Запуск: sudo bash /tmp/knowledge-bootstrap.sh
+# Запуск: bash knowledge-bootstrap.sh (права root берёт сам)
 set -euo pipefail
+
+# Самоповышение. Скрипт заводит группу, каталоги и владельцев — всё это
+# требует root. Раньше это было в комментарии "запускать через sudo", и
+# запуск без него падал на первом же chown, пройдя половину mkdir'ов.
+# Заодно скрипт становится запускаемым разведкой из деплой-workflow,
+# которая выполняет доставленный файл обычным `bash`, без sudo.
+if [ "$(id -u)" -ne 0 ]; then exec sudo bash "$0" "$@"; fi
 
 VAULT=/opt/helm-knowledge
 SPOOL=/opt/helm-state/knowledge-spool
