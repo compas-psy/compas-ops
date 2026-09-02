@@ -6,7 +6,7 @@ python3 tools/graphify.py build
 python3 tools/graph_index.py graph/ops/graph.json graph/helm/INDEX.md --scope helm/
 ```
 
-Тем в индексе: 210. Полные связи и провенанс — `graphify explain "<id>" --graph graph/ops/graph.json`.
+Тем в индексе: 211. Полные связи и провенанс — `graphify explain "<id>" --graph graph/ops/graph.json`.
 
 ## ADR
 
@@ -69,11 +69,12 @@ python3 tools/graph_index.py graph/ops/graph.json graph/helm/INDEX.md --scope he
 - `§14.10` — `helm/tree/control-plane/helm_core/knowledge/memory.py`, `helm/tree/control-plane/helm_core/knowledge/onboarding.py`, `helm/tree/control-plane/helm_core/knowledge/probe.py`, `helm/tree/control-plane/helm_core/knowledge/recall.py`, `helm/tree/control-plane/helm_core/knowledge/worker.py`, `helm/tree/control-plane/helm_core/models/base.py` (+9)
 - `§14.11` — `helm/tree/control-plane/helm_core/api/hooks.py`, `helm/tree/control-plane/helm_core/api/hooks_knowledge_telegram.py`, `helm/tree/control-plane/helm_core/api/internal.py`, `helm/tree/control-plane/helm_core/knowledge/admin.py`, `helm/tree/control-plane/helm_core/knowledge/memory.py`, `helm/tree/control-plane/helm_core/knowledge/probe.py` (+11)
 - `§14.11.1` — `helm/tree/docs/KNOWLEDGE_MODELS.md`, `helm/tree/docs/adr/ADR-019-knowledge-canonical-markdown-graphify.md`
-- `§14.12` — `helm/tree/compose/docker-compose.yml`, `helm/tree/control-plane/helm_core/knowledge/embed_benchmark.py`, `helm/tree/control-plane/helm_core/knowledge/embeddings.py`, `helm/tree/control-plane/helm_core/knowledge/probe.py`, `helm/tree/control-plane/helm_core/knowledge/recall.py`, `helm/tree/control-plane/helm_core/knowledge/rephrase.py` (+21)
+- `§14.11.3` — `helm/tree/docs/spec/SPEC_DEVIATION.md`
+- `§14.12` — `helm/tree/compose/docker-compose.yml`, `helm/tree/control-plane/helm_core/knowledge/embed_benchmark.py`, `helm/tree/control-plane/helm_core/knowledge/embeddings.py`, `helm/tree/control-plane/helm_core/knowledge/probe.py`, `helm/tree/control-plane/helm_core/knowledge/recall.py`, `helm/tree/control-plane/helm_core/knowledge/rephrase.py` (+22)
 - `§14.13` — `helm/tree/control-plane/helm_core/knowledge/probe.py`, `helm/tree/control-plane/helm_core/knowledge/recall.py`, `helm/tree/control-plane/tests/test_knowledge_probe.py`, `helm/tree/control-plane/tests/test_knowledge_recall.py`, `helm/tree/docs/KNOWLEDGE_RETRIEVAL.md`, `helm/tree/docs/adr/ADR-027-micro-memory-fast-path.md` (+1)
 - `§14.14` — `helm/tree/control-plane/helm_core/api/hooks.py`, `helm/tree/control-plane/helm_core/api/internal.py`, `helm/tree/control-plane/helm_core/knowledge/probe.py`, `helm/tree/control-plane/helm_core/knowledge/recall.py`, `helm/tree/control-plane/helm_core/knowledge/style.py`, `helm/tree/control-plane/helm_core/models/tables.py` (+15)
 - `§14.15` — `helm/tree/control-plane/helm_core/api/panel.py`, `helm/tree/control-plane/helm_core/knowledge/batch_intake.py`, `helm/tree/control-plane/helm_core/knowledge/chat_intake.py`, `helm/tree/control-plane/helm_core/knowledge/documents.py`, `helm/tree/control-plane/helm_core/knowledge/recall.py`, `helm/tree/control-plane/helm_core/models/base.py` (+15)
-- `§14.16` — `helm/tree/control-plane/helm_core/api/hooks.py`, `helm/tree/control-plane/helm_core/api/hooks_knowledge_telegram.py`, `helm/tree/control-plane/helm_core/api/internal.py`, `helm/tree/control-plane/helm_core/knowledge/admin.py`, `helm/tree/control-plane/helm_core/knowledge/recall.py`, `helm/tree/control-plane/tests/test_api.py` (+12)
+- `§14.16` — `helm/tree/compose/docker-compose.yml`, `helm/tree/control-plane/helm_core/api/hooks.py`, `helm/tree/control-plane/helm_core/api/hooks_knowledge_telegram.py`, `helm/tree/control-plane/helm_core/api/internal.py`, `helm/tree/control-plane/helm_core/knowledge/admin.py`, `helm/tree/control-plane/helm_core/knowledge/atomizer.py` (+21)
 - `§14.17` — `helm/tree/control-plane/tests/test_api.py`, `helm/tree/docs/adr/ADR-103-no-knowledge-cache.md`, `helm/tree/implementation-state/ROADMAP-TO-DONE.md`
 - `§14.18` — `helm/tree/control-plane/helm_core/api/hooks_knowledge_telegram.py`, `helm/tree/control-plane/helm_core/app.py`, `helm/tree/docs/KNOWLEDGE_MODELS.md`, `helm/tree/docs/spec/HELM_FINAL_v4.0_RESCUE_2026-09-02.md`, `helm/tree/implementation-state/V3.4-DELTA.md`, `helm/tree/implementation-state/V4.0-RESCUE-DELTA.md`
 - `§14.2` — `helm/tree/control-plane/helm_core/knowledge/atomizer.py`, `helm/tree/control-plane/helm_core/knowledge/ingest.py`, `helm/tree/control-plane/helm_core/knowledge/tenancy.py`, `helm/tree/control-plane/helm_core/knowledge/worker.py`, `helm/tree/control-plane/helm_core/models/base.py`, `helm/tree/control-plane/helm_core/models/tables.py` (+9)
@@ -83,7 +84,7 @@ python3 tools/graph_index.py graph/ops/graph.json graph/helm/INDEX.md --scope he
 - `§14.24` — `helm/tree/docs/spec/CURRENT.md`
 - `§14.25` — `helm/tree/implementation-state/V4.0-RESCUE-DELTA.md`
 - `§14.3` — `helm/tree/config/policies/actions.yaml`, `helm/tree/control-plane/helm_core/api/auth.py`, `helm/tree/control-plane/helm_core/api/deps.py`, `helm/tree/control-plane/helm_core/api/hooks_knowledge_telegram.py`, `helm/tree/control-plane/helm_core/api/internal.py`, `helm/tree/control-plane/helm_core/api/panel.py` (+22)
-- `§14.4` — `helm/tree/control-plane/helm_core/knowledge/atomizer.py`, `helm/tree/control-plane/helm_core/knowledge/batch_intake.py`, `helm/tree/control-plane/helm_core/knowledge/chat_intake.py`, `helm/tree/control-plane/helm_core/knowledge/ingest.py`, `helm/tree/control-plane/helm_core/knowledge/probe.py`, `helm/tree/control-plane/helm_core/knowledge/quotas.py` (+25)
+- `§14.4` — `helm/tree/control-plane/helm_core/knowledge/atomizer.py`, `helm/tree/control-plane/helm_core/knowledge/batch_intake.py`, `helm/tree/control-plane/helm_core/knowledge/chat_intake.py`, `helm/tree/control-plane/helm_core/knowledge/ingest.py`, `helm/tree/control-plane/helm_core/knowledge/probe.py`, `helm/tree/control-plane/helm_core/knowledge/quotas.py` (+26)
 - `§14.4.0` — `helm/tree/control-plane/helm_core/api/hooks.py`, `helm/tree/control-plane/helm_core/api/internal.py`, `helm/tree/control-plane/helm_core/knowledge/batch_intake.py`, `helm/tree/control-plane/helm_core/knowledge/zip_safety.py`, `helm/tree/control-plane/helm_core/models/base.py`, `helm/tree/control-plane/helm_core/models/tables.py` (+4)
 - `§14.4.1` — `helm/tree/docs/adr/ADR-019-knowledge-canonical-markdown-graphify.md`
 - `§14.4.2` — `helm/tree/docs/adr/ADR-019-knowledge-canonical-markdown-graphify.md`, `helm/tree/implementation-state/V4.0-RESCUE-DELTA.md`
@@ -136,7 +137,7 @@ python3 tools/graph_index.py graph/ops/graph.json graph/helm/INDEX.md --scope he
 - `§30.6` — `helm/PLAN_HELM_v3.3.md`
 - `§30.7` — `helm/PLAN_HELM_v3.3.md`, `helm/tree/control-plane/helm_core/api/panel.py`, `helm/tree/control-plane/helm_core/api/security.py`, `helm/tree/control-plane/tests/test_api.py`, `helm/tree/docs/adr/ADR-015-panel-static-frontend.md`, `helm/tree/guardian/guardian.py` (+1)
 - `§30.8` — `helm/PLAN_HELM_v3.3.md`, `helm/tree/implementation-state/V3.4-DELTA.md`, `helm/tree/implementation-state/WORKPLAN.md`
-- `§30.8.5` — `helm/tree/control-plane/helm_core/knowledge/probe.py`, `helm/tree/control-plane/helm_core/knowledge/recall.py`, `helm/tree/control-plane/tests/test_knowledge_probe.py`, `helm/tree/docs/KNOWLEDGE_INGEST.md`, `helm/tree/docs/KNOWLEDGE_MODELS.md`, `helm/tree/docs/KNOWLEDGE_RETRIEVAL.md` (+8)
+- `§30.8.5` — `helm/tree/control-plane/helm_core/knowledge/probe.py`, `helm/tree/control-plane/helm_core/knowledge/recall.py`, `helm/tree/control-plane/tests/test_knowledge_probe.py`, `helm/tree/docs/KNOWLEDGE_INGEST.md`, `helm/tree/docs/KNOWLEDGE_MODELS.md`, `helm/tree/docs/KNOWLEDGE_RETRIEVAL.md` (+10)
 - `§30.9` — `helm/PLAN_HELM_v3.3.md`, `helm/tree/control-plane/helm_core/api/security.py`, `helm/tree/control-plane/tests/test_perimeter.py`
 - `§31.0` — `helm/PLAN_HELM_v3.3.md`, `helm/tree/README.md`, `helm/tree/docs/adr/ADR-017-offline-build.md`, `helm/tree/docs/adr/ADR-018-single-agent.md`, `helm/tree/implementation-state/WORKPLAN.md`, `helm/tree/scripts/checkpoint.sh` (+1)
 - `§31.0.1` — `helm/tree/implementation-state/V3.4-DELTA.md`, `helm/tree/implementation-state/V3.7-DELTA.md`, `helm/tree/implementation-state/V3.8-DELTA.md`

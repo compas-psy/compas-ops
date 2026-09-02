@@ -1,8 +1,8 @@
 {
  "generated_by": "tools/graphify.py",
- "corpus_hash": "28bf8d27c35fcdccb3f9c2af82b875bbef94bae436b4ad992d7c64f71bff11d8",
- "node_count": 597,
- "edge_count": 2305,
+ "corpus_hash": "33ce8d21d05ce4b8f1e7033e464ac88bfeacf54518a201f6ec99083b0c40767e",
+ "node_count": 606,
+ "edge_count": 2333,
  "nodes": [
   {
    "id": "file:.github/workflows/board.yml",
@@ -75,6 +75,18 @@
    "type": "file",
    "path": ".github/workflows/tg-relay.yml",
    "title": "tg-relay.yml"
+  },
+  {
+   "id": "file:.ultraplan/plan.md",
+   "type": "file",
+   "path": ".ultraplan/plan.md",
+   "title": "Implementation Plan: R1 — health privacy migration"
+  },
+  {
+   "id": "spec_section:14.16",
+   "type": "spec_section",
+   "value": "14.16",
+   "label": "§14.16"
   },
   {
    "id": "file:CLAUDE.md",
@@ -983,12 +995,6 @@
    "label": "§14.4.0"
   },
   {
-   "id": "spec_section:14.16",
-   "type": "spec_section",
-   "value": "14.16",
-   "label": "§14.16"
-  },
-  {
    "id": "file:helm/tree/control-plane/helm_core/api/hooks_knowledge_telegram.py",
    "type": "file",
    "path": "helm/tree/control-plane/helm_core/api/hooks_knowledge_telegram.py",
@@ -1431,6 +1437,12 @@
    "type": "file",
    "path": "helm/tree/control-plane/helm_core/knowledge/tenancy.py",
    "title": "tenancy.py"
+  },
+  {
+   "id": "file:helm/tree/control-plane/helm_core/knowledge/vault.py",
+   "type": "file",
+   "path": "helm/tree/control-plane/helm_core/knowledge/vault.py",
+   "title": "vault.py"
   },
   {
    "id": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
@@ -2489,6 +2501,18 @@
    "title": "HELM repo audit — 02.09.2026"
   },
   {
+   "id": "file:helm/tree/docs/spec/SPEC_DEVIATION.md",
+   "type": "file",
+   "path": "helm/tree/docs/spec/SPEC_DEVIATION.md",
+   "title": "Осознанные отступления от HELM v4.0 RESCUE"
+  },
+  {
+   "id": "spec_section:14.11.3",
+   "type": "spec_section",
+   "value": "14.11.3",
+   "label": "§14.11.3"
+  },
+  {
    "id": "file:helm/tree/guardian/.pytest_cache/README.md",
    "type": "file",
    "path": "helm/tree/guardian/.pytest_cache/README.md",
@@ -3197,10 +3221,22 @@
    "title": "max-register-webhook.sh"
   },
   {
+   "id": "file:helm/tree/scripts/migrate-health-chunks-to-schema.sh",
+   "type": "file",
+   "path": "helm/tree/scripts/migrate-health-chunks-to-schema.sh",
+   "title": "migrate-health-chunks-to-schema.sh"
+  },
+  {
    "id": "file:helm/tree/scripts/migrate-health-filenames-to-sidecar.sh",
    "type": "file",
    "path": "helm/tree/scripts/migrate-health-filenames-to-sidecar.sh",
    "title": "migrate-health-filenames-to-sidecar.sh"
+  },
+  {
+   "id": "file:helm/tree/scripts/migrate-health-files-to-private.sh",
+   "type": "file",
+   "path": "helm/tree/scripts/migrate-health-files-to-private.sh",
+   "title": "migrate-health-files-to-private.sh"
   },
   {
    "id": "file:helm/tree/scripts/n8n-export-runbook.md",
@@ -3285,6 +3321,24 @@
    "type": "file",
    "path": "helm/tree/scripts/r0-truth-inventory.sh",
    "title": "r0-truth-inventory.sh"
+  },
+  {
+   "id": "file:helm/tree/scripts/r1-preflight.sh",
+   "type": "file",
+   "path": "helm/tree/scripts/r1-preflight.sh",
+   "title": "r1-preflight.sh"
+  },
+  {
+   "id": "file:helm/tree/scripts/r1-probe-smoke.sh",
+   "type": "file",
+   "path": "helm/tree/scripts/r1-probe-smoke.sh",
+   "title": "r1-probe-smoke.sh"
+  },
+  {
+   "id": "file:helm/tree/scripts/r1-verify.sh",
+   "type": "file",
+   "path": "helm/tree/scripts/r1-verify.sh",
+   "title": "r1-verify.sh"
   },
   {
    "id": "file:helm/tree/scripts/restic-backup-diagnose.sh",
@@ -3635,6 +3689,14 @@
    "evidence_type": "explicit_link",
    "file": ".github/workflows/deploy.yml",
    "line": 263
+  },
+  {
+   "from": "file:.ultraplan/plan.md",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": ".ultraplan/plan.md",
+   "line": 4
   },
   {
    "from": "file:HANDOFF.md",
@@ -5070,7 +5132,7 @@
   },
   {
    "from": "file:helm/tree/compose/docker-compose.yml",
-   "to": "spec_section:10.2",
+   "to": "spec_section:14.16",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/compose/docker-compose.yml",
@@ -5078,11 +5140,19 @@
   },
   {
    "from": "file:helm/tree/compose/docker-compose.yml",
+   "to": "spec_section:10.2",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/compose/docker-compose.yml",
+   "line": 211
+  },
+  {
+   "from": "file:helm/tree/compose/docker-compose.yml",
    "to": "roadmap_item:5.2",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/compose/docker-compose.yml",
-   "line": 226
+   "line": 231
   },
   {
    "from": "file:helm/tree/compose/docker-compose.yml",
@@ -5090,7 +5160,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/compose/docker-compose.yml",
-   "line": 245
+   "line": 250
   },
   {
    "from": "file:helm/tree/compose/docker-compose.yml",
@@ -5098,7 +5168,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/compose/docker-compose.yml",
-   "line": 254
+   "line": 259
   },
   {
    "from": "file:helm/tree/compose/docker-compose.yml",
@@ -5106,7 +5176,15 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/compose/docker-compose.yml",
-   "line": 255
+   "line": 260
+  },
+  {
+   "from": "file:helm/tree/compose/docker-compose.yml",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/compose/docker-compose.yml",
+   "line": 263
   },
   {
    "from": "file:helm/tree/compose/docker-compose.yml",
@@ -5114,7 +5192,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/compose/docker-compose.yml",
-   "line": 258
+   "line": 268
   },
   {
    "from": "file:helm/tree/compose/docker-compose.yml",
@@ -5122,7 +5200,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/compose/docker-compose.yml",
-   "line": 281
+   "line": 291
   },
   {
    "from": "file:helm/tree/compose/docker-compose.yml",
@@ -5130,7 +5208,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/compose/docker-compose.yml",
-   "line": 306
+   "line": 316
   },
   {
    "from": "file:helm/tree/compose/docker-compose.yml",
@@ -5138,7 +5216,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/compose/docker-compose.yml",
-   "line": 311
+   "line": 321
   },
   {
    "from": "file:helm/tree/compose/docker-compose.yml",
@@ -5146,7 +5224,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/compose/docker-compose.yml",
-   "line": 328
+   "line": 338
   },
   {
    "from": "file:helm/tree/compose/docker-compose.yml",
@@ -5154,7 +5232,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/compose/docker-compose.yml",
-   "line": 356
+   "line": 366
   },
   {
    "from": "file:helm/tree/compose/docker-compose.yml",
@@ -5162,7 +5240,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/compose/docker-compose.yml",
-   "line": 358
+   "line": 368
   },
   {
    "from": "file:helm/tree/compose/docker-compose.yml",
@@ -5170,7 +5248,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/compose/docker-compose.yml",
-   "line": 383
+   "line": 393
   },
   {
    "from": "file:helm/tree/compose/docker-compose.yml",
@@ -5178,7 +5256,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/compose/docker-compose.yml",
-   "line": 415
+   "line": 425
   },
   {
    "from": "file:helm/tree/compose/docker-compose.yml",
@@ -5186,7 +5264,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/compose/docker-compose.yml",
-   "line": 429
+   "line": 439
   },
   {
    "from": "file:helm/tree/compose/docker-compose.yml",
@@ -5194,7 +5272,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/compose/docker-compose.yml",
-   "line": 451
+   "line": 461
   },
   {
    "from": "file:helm/tree/compose/docker-compose.yml",
@@ -5202,7 +5280,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/compose/docker-compose.yml",
-   "line": 485
+   "line": 495
   },
   {
    "from": "file:helm/tree/compose/docker-compose.yml",
@@ -5210,7 +5288,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/compose/docker-compose.yml",
-   "line": 487
+   "line": 497
   },
   {
    "from": "file:helm/tree/compose/docker-compose.yml",
@@ -5218,7 +5296,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/compose/docker-compose.yml",
-   "line": 493
+   "line": 503
   },
   {
    "from": "file:helm/tree/config/models/litellm.yaml",
@@ -6965,6 +7043,14 @@
    "line": 94
   },
   {
+   "from": "file:helm/tree/control-plane/helm_core/knowledge/atomizer.py",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/control-plane/helm_core/knowledge/atomizer.py",
+   "line": 290
+  },
+  {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/audio.py",
    "to": "adr:021",
    "relation_type": "relates_to",
@@ -7082,7 +7168,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
-   "line": 61
+   "line": 62
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
@@ -7090,7 +7176,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
-   "line": 65
+   "line": 66
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
@@ -7098,7 +7184,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
-   "line": 111
+   "line": 112
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
@@ -7106,7 +7192,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
-   "line": 126
+   "line": 127
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
@@ -7114,7 +7200,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
-   "line": 136
+   "line": 137
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
@@ -7122,7 +7208,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
-   "line": 138
+   "line": 139
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
@@ -7130,7 +7216,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
-   "line": 230
+   "line": 231
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
@@ -7138,7 +7224,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
-   "line": 340
+   "line": 342
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
@@ -7146,7 +7232,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
-   "line": 344
+   "line": 346
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
@@ -7154,7 +7240,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
-   "line": 348
+   "line": 350
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
@@ -7162,7 +7248,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
-   "line": 374
+   "line": 376
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
@@ -7170,7 +7256,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
-   "line": 433
+   "line": 435
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
@@ -7178,7 +7264,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
-   "line": 475
+   "line": 477
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
@@ -7186,7 +7272,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/batch_intake.py",
-   "line": 494
+   "line": 496
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
@@ -7242,7 +7328,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 59
+   "line": 60
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
@@ -7250,7 +7336,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 106
+   "line": 107
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
@@ -7258,19 +7344,11 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 121
+   "line": 122
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
    "to": "adr:024",
-   "relation_type": "relates_to",
-   "evidence_type": "explicit_link",
-   "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 127
-  },
-  {
-   "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "to": "spec_section:14.5",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
@@ -7282,7 +7360,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 160
+   "line": 129
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
@@ -7290,7 +7368,15 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 163
+   "line": 161
+  },
+  {
+   "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
+   "to": "spec_section:14.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
+   "line": 164
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
@@ -7298,7 +7384,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 217
+   "line": 218
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
@@ -7306,7 +7392,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 223
+   "line": 224
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
@@ -7314,7 +7400,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 226
+   "line": 227
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
@@ -7322,7 +7408,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 244
+   "line": 245
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
@@ -7330,7 +7416,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 277
+   "line": 278
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
@@ -7338,19 +7424,11 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 280
+   "line": 281
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
    "to": "spec_section:14.4",
-   "relation_type": "relates_to",
-   "evidence_type": "explicit_link",
-   "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 282
-  },
-  {
-   "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "to": "roadmap_item:6.2",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
@@ -7358,11 +7436,19 @@
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
+   "to": "roadmap_item:6.2",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
+   "line": 284
+  },
+  {
+   "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
    "to": "adr:021",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 293
+   "line": 294
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
@@ -7370,7 +7456,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 365
+   "line": 367
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
@@ -7378,7 +7464,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 384
+   "line": 386
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
@@ -7386,7 +7472,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 400
+   "line": 402
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
@@ -7394,7 +7480,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 419
+   "line": 421
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
@@ -7402,7 +7488,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 433
+   "line": 435
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
@@ -7410,7 +7496,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 446
+   "line": 448
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
@@ -7418,7 +7504,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/chat_intake.py",
-   "line": 456
+   "line": 458
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/documents.py",
@@ -7682,7 +7768,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 43
+   "line": 44
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -7690,7 +7776,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 50
+   "line": 51
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -7698,7 +7784,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 63
+   "line": 64
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -7706,7 +7792,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 86
+   "line": 87
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -7714,7 +7800,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 86
+   "line": 87
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -7722,7 +7808,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 89
+   "line": 90
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -7730,7 +7816,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 98
+   "line": 99
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -7738,7 +7824,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 123
+   "line": 125
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -7746,7 +7832,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 130
+   "line": 132
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -7754,7 +7840,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 132
+   "line": 134
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -7762,7 +7848,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 140
+   "line": 142
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -7770,7 +7856,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 148
+   "line": 150
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -7778,7 +7864,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 153
+   "line": 155
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -7786,19 +7872,11 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 189
+   "line": 191
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
    "to": "spec_section:14.4",
-   "relation_type": "relates_to",
-   "evidence_type": "explicit_link",
-   "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 193
-  },
-  {
-   "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "to": "roadmap_item:6.2",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -7806,11 +7884,19 @@
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
+   "to": "roadmap_item:6.2",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
+   "line": 197
+  },
+  {
+   "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
    "to": "spec_section:14.4",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 213
+   "line": 215
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/ingest.py",
@@ -7818,7 +7904,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/ingest.py",
-   "line": 231
+   "line": 234
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/memory.py",
@@ -7930,7 +8016,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/offboarding.py",
-   "line": 50
+   "line": 52
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/offboarding.py",
@@ -7938,7 +8024,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/offboarding.py",
-   "line": 89
+   "line": 91
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/onboarding.py",
@@ -8206,19 +8292,19 @@
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "to": "spec_section:14.4",
-   "relation_type": "relates_to",
-   "evidence_type": "explicit_link",
-   "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "line": 141
-  },
-  {
-   "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
    "to": "roadmap_item:5.7",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "line": 154
+   "line": 132
+  },
+  {
+   "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
+   "to": "spec_section:14.4",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
+   "line": 171
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
@@ -8226,7 +8312,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "line": 170
+   "line": 191
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
@@ -8234,19 +8320,11 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "line": 201
+   "line": 218
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
    "to": "spec_section:14.12",
-   "relation_type": "relates_to",
-   "evidence_type": "explicit_link",
-   "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "line": 250
-  },
-  {
-   "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "to": "spec_section:14.14",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
@@ -8254,11 +8332,19 @@
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
+   "to": "spec_section:14.14",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
+   "line": 284
+  },
+  {
+   "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
    "to": "spec_section:10.2",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "line": 270
+   "line": 287
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
@@ -8266,7 +8352,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "line": 276
+   "line": 293
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
@@ -8274,7 +8360,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "line": 278
+   "line": 295
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
@@ -8282,7 +8368,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "line": 285
+   "line": 302
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
@@ -8290,7 +8376,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "line": 290
+   "line": 307
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
@@ -8298,7 +8384,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "line": 296
+   "line": 313
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
@@ -8306,7 +8392,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "line": 299
+   "line": 316
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
@@ -8314,7 +8400,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "line": 317
+   "line": 334
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
@@ -8322,7 +8408,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "line": 339
+   "line": 356
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
@@ -8330,7 +8416,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "line": 346
+   "line": 363
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
@@ -8338,7 +8424,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "line": 364
+   "line": 381
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
@@ -8346,7 +8432,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "line": 371
+   "line": 388
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/probe.py",
@@ -8354,7 +8440,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/probe.py",
-   "line": 379
+   "line": 396
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/quotas.py",
@@ -8667,6 +8753,14 @@
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/helm_core/knowledge/tenancy.py",
    "line": 80
+  },
+  {
+   "from": "file:helm/tree/control-plane/helm_core/knowledge/vault.py",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/control-plane/helm_core/knowledge/vault.py",
+   "line": 1
   },
   {
    "from": "file:helm/tree/control-plane/helm_core/knowledge/worker.py",
@@ -10322,7 +10416,23 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/control-plane/tests/test_knowledge_health_isolation.py",
-   "line": 224
+   "line": 225
+  },
+  {
+   "from": "file:helm/tree/control-plane/tests/test_knowledge_health_isolation.py",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/control-plane/tests/test_knowledge_health_isolation.py",
+   "line": 408
+  },
+  {
+   "from": "file:helm/tree/control-plane/tests/test_knowledge_health_isolation.py",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/control-plane/tests/test_knowledge_health_isolation.py",
+   "line": 411
   },
   {
    "from": "file:helm/tree/control-plane/tests/test_knowledge_memory.py",
@@ -11426,7 +11536,15 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/docs/KNOWLEDGE.md",
-   "line": 66
+   "line": 80
+  },
+  {
+   "from": "file:helm/tree/docs/KNOWLEDGE.md",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/KNOWLEDGE.md",
+   "line": 88
   },
   {
    "from": "file:helm/tree/docs/KNOWLEDGE.md",
@@ -11434,7 +11552,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/docs/KNOWLEDGE.md",
-   "line": 69
+   "line": 91
   },
   {
    "from": "file:helm/tree/docs/KNOWLEDGE.md",
@@ -11442,7 +11560,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/docs/KNOWLEDGE.md",
-   "line": 86
+   "line": 108
   },
   {
    "from": "file:helm/tree/docs/KNOWLEDGE.md",
@@ -11450,7 +11568,15 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/docs/KNOWLEDGE.md",
-   "line": 86
+   "line": 108
+  },
+  {
+   "from": "file:helm/tree/docs/KNOWLEDGE.md",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/KNOWLEDGE.md",
+   "line": 129
   },
   {
    "from": "file:helm/tree/docs/KNOWLEDGE_ADMIN.md",
@@ -14302,6 +14428,22 @@
   },
   {
    "from": "file:helm/tree/docs/adr/README.md",
+   "to": "spec_section:14.4",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 59
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
+   "to": "spec_section:14.12",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/adr/README.md",
+   "line": 59
+  },
+  {
+   "from": "file:helm/tree/docs/adr/README.md",
    "to": "adr:020",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
@@ -15963,6 +16105,22 @@
    "evidence_type": "explicit_link",
    "file": "helm/tree/docs/spec/HELM_REPO_AUDIT_2026-09-02.md",
    "line": 223
+  },
+  {
+   "from": "file:helm/tree/docs/spec/SPEC_DEVIATION.md",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/spec/SPEC_DEVIATION.md",
+   "line": 9
+  },
+  {
+   "from": "file:helm/tree/docs/spec/SPEC_DEVIATION.md",
+   "to": "spec_section:14.11.3",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/docs/spec/SPEC_DEVIATION.md",
+   "line": 77
   },
   {
    "from": "file:helm/tree/guardian/cleanup.sh",
@@ -18006,11 +18164,11 @@
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "to": "spec_section:30.8.5",
+   "to": "spec_section:14.16",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 117
+   "line": 134
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18018,7 +18176,15 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 118
+   "line": 153
+  },
+  {
+   "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
+   "to": "spec_section:30.8.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
+   "line": 154
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18026,7 +18192,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 119
+   "line": 155
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18034,7 +18200,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 119
+   "line": 155
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18042,7 +18208,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 120
+   "line": 156
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18050,7 +18216,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 121
+   "line": 157
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18058,7 +18224,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 122
+   "line": 158
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18066,7 +18232,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 123
+   "line": 159
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18074,7 +18240,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 123
+   "line": 159
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18082,7 +18248,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 124
+   "line": 160
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18090,7 +18256,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 125
+   "line": 161
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18098,7 +18264,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 126
+   "line": 162
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18106,7 +18272,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 127
+   "line": 163
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18114,7 +18280,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 128
+   "line": 164
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18122,7 +18288,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 129
+   "line": 165
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18130,7 +18296,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 130
+   "line": 166
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18138,7 +18304,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 131
+   "line": 167
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18146,7 +18312,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 132
+   "line": 168
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18154,7 +18320,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 132
+   "line": 168
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18162,7 +18328,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 133
+   "line": 169
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18170,15 +18336,23 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 142
+   "line": 178
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "to": "spec_section:14.22",
+   "to": "adr:019",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 170
+   "line": 184
+  },
+  {
+   "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
+   "to": "spec_section:30.8.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
+   "line": 258
   },
   {
    "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
@@ -18186,7 +18360,23 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
-   "line": 173
+   "line": 290
+  },
+  {
+   "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
+   "to": "spec_section:14.22",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
+   "line": 315
+  },
+  {
+   "from": "file:helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/implementation-state/V4.0-RESCUE-DELTA.md",
+   "line": 318
   },
   {
    "from": "file:helm/tree/implementation-state/WORKPLAN.md",
@@ -19406,11 +19596,27 @@
   },
   {
    "from": "file:helm/tree/scripts/backup.sh",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/scripts/backup.sh",
+   "line": 74
+  },
+  {
+   "from": "file:helm/tree/scripts/backup.sh",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/scripts/backup.sh",
+   "line": 80
+  },
+  {
+   "from": "file:helm/tree/scripts/backup.sh",
    "to": "spec_section:25.6",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/scripts/backup.sh",
-   "line": 101
+   "line": 112
   },
   {
    "from": "file:helm/tree/scripts/batch-errors-check.sh",
@@ -19858,7 +20064,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/scripts/knowledge-bootstrap.sh",
-   "line": 50
+   "line": 57
   },
   {
    "from": "file:helm/tree/scripts/knowledge-bootstrap.sh",
@@ -19866,7 +20072,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/scripts/knowledge-bootstrap.sh",
-   "line": 58
+   "line": 65
   },
   {
    "from": "file:helm/tree/scripts/knowledge-bootstrap.sh",
@@ -19874,7 +20080,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/scripts/knowledge-bootstrap.sh",
-   "line": 71
+   "line": 78
   },
   {
    "from": "file:helm/tree/scripts/knowledge-bootstrap.sh",
@@ -19882,7 +20088,15 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/scripts/knowledge-bootstrap.sh",
-   "line": 75
+   "line": 82
+  },
+  {
+   "from": "file:helm/tree/scripts/knowledge-bootstrap.sh",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/scripts/knowledge-bootstrap.sh",
+   "line": 97
   },
   {
    "from": "file:helm/tree/scripts/knowledge-deploy-runbook.md",
@@ -20181,6 +20395,30 @@
    "line": 8
   },
   {
+   "from": "file:helm/tree/scripts/migrate-health-chunks-to-schema.sh",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/scripts/migrate-health-chunks-to-schema.sh",
+   "line": 3
+  },
+  {
+   "from": "file:helm/tree/scripts/migrate-health-chunks-to-schema.sh",
+   "to": "spec_section:30.8.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/scripts/migrate-health-chunks-to-schema.sh",
+   "line": 3
+  },
+  {
+   "from": "file:helm/tree/scripts/migrate-health-chunks-to-schema.sh",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/scripts/migrate-health-chunks-to-schema.sh",
+   "line": 12
+  },
+  {
    "from": "file:helm/tree/scripts/migrate-health-filenames-to-sidecar.sh",
    "to": "adr:005",
    "relation_type": "relates_to",
@@ -20194,7 +20432,15 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/scripts/migrate-health-filenames-to-sidecar.sh",
-   "line": 22
+   "line": 34
+  },
+  {
+   "from": "file:helm/tree/scripts/migrate-health-files-to-private.sh",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/scripts/migrate-health-files-to-private.sh",
+   "line": 3
   },
   {
    "from": "file:helm/tree/scripts/n8n-export-runbook.md",
@@ -20378,6 +20624,14 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "helm/tree/scripts/r0-truth-inventory.sh",
+   "line": 2
+  },
+  {
+   "from": "file:helm/tree/scripts/r1-verify.sh",
+   "to": "spec_section:30.8.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "helm/tree/scripts/r1-verify.sh",
    "line": 2
   },
   {
@@ -21342,11 +21596,35 @@
   },
   {
    "from": "file:state/11_HUMAN_QUEUE.md",
+   "to": "spec_section:14.16",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "state/11_HUMAN_QUEUE.md",
+   "line": 21
+  },
+  {
+   "from": "file:state/11_HUMAN_QUEUE.md",
+   "to": "spec_section:30.8.5",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "state/11_HUMAN_QUEUE.md",
+   "line": 21
+  },
+  {
+   "from": "file:state/11_HUMAN_QUEUE.md",
+   "to": "spec_section:6.2",
+   "relation_type": "relates_to",
+   "evidence_type": "explicit_link",
+   "file": "state/11_HUMAN_QUEUE.md",
+   "line": 34
+  },
+  {
+   "from": "file:state/11_HUMAN_QUEUE.md",
    "to": "spec_section:6.1",
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "state/11_HUMAN_QUEUE.md",
-   "line": 19
+   "line": 35
   },
   {
    "from": "file:state/11_HUMAN_QUEUE.md",
@@ -21354,7 +21632,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "state/11_HUMAN_QUEUE.md",
-   "line": 19
+   "line": 35
   },
   {
    "from": "file:state/11_HUMAN_QUEUE.md",
@@ -21362,7 +21640,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "state/11_HUMAN_QUEUE.md",
-   "line": 22
+   "line": 38
   },
   {
    "from": "file:state/11_HUMAN_QUEUE.md",
@@ -21370,7 +21648,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "state/11_HUMAN_QUEUE.md",
-   "line": 44
+   "line": 60
   },
   {
    "from": "file:state/11_HUMAN_QUEUE.md",
@@ -21378,7 +21656,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "state/11_HUMAN_QUEUE.md",
-   "line": 44
+   "line": 60
   },
   {
    "from": "file:state/11_HUMAN_QUEUE.md",
@@ -21386,7 +21664,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "state/11_HUMAN_QUEUE.md",
-   "line": 47
+   "line": 63
   },
   {
    "from": "file:state/11_HUMAN_QUEUE.md",
@@ -21394,7 +21672,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "state/11_HUMAN_QUEUE.md",
-   "line": 55
+   "line": 71
   },
   {
    "from": "file:state/11_HUMAN_QUEUE.md",
@@ -21402,7 +21680,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "state/11_HUMAN_QUEUE.md",
-   "line": 69
+   "line": 85
   },
   {
    "from": "file:state/11_HUMAN_QUEUE.md",
@@ -21410,7 +21688,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "state/11_HUMAN_QUEUE.md",
-   "line": 82
+   "line": 98
   },
   {
    "from": "file:state/11_HUMAN_QUEUE.md",
@@ -21418,7 +21696,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "state/11_HUMAN_QUEUE.md",
-   "line": 83
+   "line": 99
   },
   {
    "from": "file:state/11_HUMAN_QUEUE.md",
@@ -21426,7 +21704,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "state/11_HUMAN_QUEUE.md",
-   "line": 100
+   "line": 116
   },
   {
    "from": "file:state/11_HUMAN_QUEUE.md",
@@ -21434,7 +21712,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "state/11_HUMAN_QUEUE.md",
-   "line": 104
+   "line": 120
   },
   {
    "from": "file:state/11_HUMAN_QUEUE.md",
@@ -21442,7 +21720,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "state/11_HUMAN_QUEUE.md",
-   "line": 112
+   "line": 128
   },
   {
    "from": "file:state/11_HUMAN_QUEUE.md",
@@ -21450,7 +21728,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "state/11_HUMAN_QUEUE.md",
-   "line": 118
+   "line": 134
   },
   {
    "from": "file:state/11_HUMAN_QUEUE.md",
@@ -21458,7 +21736,7 @@
    "relation_type": "relates_to",
    "evidence_type": "explicit_link",
    "file": "state/11_HUMAN_QUEUE.md",
-   "line": 119
+   "line": 135
   },
   {
    "from": "file:state/12_DECISIONS.md",
