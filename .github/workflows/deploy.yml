@@ -59,6 +59,7 @@ on:
           - keyscan       # напечатать ключи сервера для VPS_KNOWN_HOSTS
           - verify        # только посмотреть состояние, ничего не менять
           - backup        # offsite: зашифрованный restic в удалённое хранилище
+          - seed          # offsite: первичное заполнение маленькими порциями
           - checkpoint    # локальная точка возврата на самом VPS
           - deploy        # SAFE: код + панель + пересборка (только аддитивное)
           - migrate       # alembic upgrade head (после deploy)
@@ -162,16 +163,17 @@ jobs:
       # возврата быть не должно), а отдельным лёгким scp, который не
       # трогает работающие контейнеры.
       - name: Доставить скрипты страховок
-        if: contains(fromJSON('["backup","checkpoint","deploy","migrate","restore-test","destructive","rollback"]'), inputs.action)
+        if: contains(fromJSON('["backup","seed","checkpoint","deploy","migrate","restore-test","destructive","rollback"]'), inputs.action)
         run: |
           scp -i ~/.ssh/id_deploy \
             helm/tree/scripts/backup.sh \
             helm/tree/scripts/restore_test.sh \
             helm/tree/scripts/local-rescue-checkpoint.sh \
+            helm/tree/scripts/backup-seed.sh \
             "$VPS_USER@$VPS_HOST:/tmp/"
           ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
             set -e
-            for f in backup.sh restore_test.sh local-rescue-checkpoint.sh; do
+            for f in backup.sh restore_test.sh local-rescue-checkpoint.sh backup-seed.sh; do
               sudo mv "/tmp/$f" "/opt/helm/scripts/$f"
               sudo chown root:root "/opt/helm/scripts/$f"
               sudo chmod 755 "/opt/helm/scripts/$f"
@@ -213,6 +215,19 @@ jobs:
         run: |
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=12 \
             -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" 'sudo /opt/helm/scripts/backup.sh'
+
+      - name: Заполнение offsite порциями
+        if: inputs.action == 'seed'
+        # Первая заливка по ненадёжному каналу: не одна большая выгрузка,
+        # а несколько маленьких. Каждая успешная порция навсегда
+        # закрепляется в репозитории, повторный запуск продолжает с того
+        # места, где остановился. Собственный бюджет по времени внутри
+        # скрипта — чтобы прогон не обрывался таймаутом раннера на
+        # полуслове: недоделанное честно, оборванное непонятно.
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=12 \
+            -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
+            'sudo /opt/helm/scripts/backup-seed.sh'
 
       # ── deploy: код, панель, конфигурация, пересборка ────────────────
       - uses: actions/setup-node@v4
