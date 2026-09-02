@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import shutil
 import uuid
 import zipfile
 from collections import Counter
@@ -194,6 +195,45 @@ class ResolveBatchOutcome:
     batch: KnowledgeIngestBatch | None = None
 
 
+def _relocate_archive_for_domain(batch: KnowledgeIngestBatch, *, domain: str,
+                                 vault_root: str) -> None:
+    """Перенести архив пачки в приватное дерево, если домен приватный.
+
+    Переезд, а не копия: копия оставила бы в общем дереве ровно то, что
+    мы оттуда убираем. Если перенести не удалось — не молчим и не
+    продолжаем как ни в чём не бывало: пачка блокируется, потому что
+    альтернатива это извлекать health-документы, оставив их исходник на
+    виду.
+    """
+    private_root = scope_root(vault_root, domain=domain,
+                              knowledge_user_id=batch.knowledge_user_id)
+    if private_root == vault_root:
+        return  # домен не приватный либо health-схема не настроена
+
+    source = Path(batch.archive_raw_path)
+    if not source.is_file():
+        return  # архива уже нет — не наше дело выяснять почему здесь
+
+    target_dir = Path(private_root) / "raw-batches" / str(batch.id)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / source.name
+    try:
+        source.replace(target)
+    except OSError:
+        # Тот же cross-device случай, что уже ловится в chat_intake:
+        # приватное дерево может оказаться на другом устройстве.
+        shutil.copy2(source, target)
+        source.unlink()
+    batch.archive_raw_path = str(target)
+
+    # Каталог пачки в общем дереве больше не нужен и пустым оставаться
+    # не должен: пустой каталог с идентификатором пачки — тоже след.
+    try:
+        source.parent.rmdir()
+    except OSError:
+        pass
+
+
 def resolve_batch_domain(session: Session, *, channel: str, reply_text: str,
                          vault_root: str = DEFAULT_VAULT_ROOT) -> ResolveBatchOutcome:
     """Следующее сообщение канала после `stage_batch()` — тот же паттерн
@@ -233,6 +273,21 @@ def resolve_batch_domain(session: Session, *, channel: str, reply_text: str,
     batch.sensitivity = (KnowledgeSensitivity.CLIENT_RESTRICTED.value
                          if domain == KnowledgeDomain.SIMPAS_ZAPISKI.value
                          else "internal")
+
+    # НАЙДЕНО 02.09.2026 при приёмке R1. Архив пачки пишется в
+    # `stage_batch()` ДО того, как известен домен, — то есть всегда в
+    # общее дерево. Для health это дыра ровно того же класса, что F15:
+    # имена записей внутри ZIP («Врачи/…_Консультация гастроэнтеролога.pdf»,
+    # «Анализы и обследования/…_Биохимический анализ крови.pdf») сами по
+    # себе рассказывают, к каким специалистам обращался владелец. Сайдкар
+    # заведён ровно затем, чтобы имя файла не лежало в общем контуре, — а
+    # здесь те же имена лежали россыпью в архиве.
+    #
+    # Домен становится известен именно здесь. Значит здесь архив и
+    # переезжает, до того как из него что-либо извлекут: путь дальше
+    # берётся из `archive_raw_path`, поэтому смена пути прозрачна для
+    # извлечения, повторов и отмены.
+    _relocate_archive_for_domain(batch, domain=domain, vault_root=vault_root)
 
     try:
         decisions = zip_safety.preflight(Path(batch.archive_raw_path))

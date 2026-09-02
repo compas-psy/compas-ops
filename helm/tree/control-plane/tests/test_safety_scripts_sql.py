@@ -34,6 +34,7 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 SAFETY_SCRIPTS = [
     SCRIPTS / "restore_test.sh",
     SCRIPTS / "destructive-drop-public-health-chunks.sh",
+    SCRIPTS / "destructive-move-health-batches-to-private.sh",
     SCRIPTS / "r1-verify.sh",
 ]
 

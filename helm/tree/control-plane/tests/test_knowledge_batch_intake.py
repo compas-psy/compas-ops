@@ -10,6 +10,9 @@ from dataclasses import dataclass
 import pytest
 from sqlalchemy import select
 
+from pathlib import Path
+
+from helm_core.knowledge import vault as vault_module
 from helm_core.knowledge import worker as worker_module
 from helm_core.knowledge.batch_intake import (
     cancel_remaining, disable_created_sources, finalize_batch_if_terminal,
@@ -426,3 +429,61 @@ def test_disable_created_sources_only_touches_batch_created_not_preexisting(sess
     assert disabled_count == 1  # только new.txt — dup.txt ссылается на pre-existing source
     pre_source = session.get(KnowledgeSource, pre_result.source.id)
     assert pre_source.status == KnowledgeStatus.ACTIVE, "pre-existing source не должен трогаться"
+
+
+# ── health: архив пачки не остаётся в общем дереве ────────────────────────
+
+def test_health_batch_archive_moves_out_of_common_tree(session, tmp_path, monkeypatch):
+    """НАЙДЕНО 02.09.2026 при приёмке R1 (§30.8.5 C).
+
+    `stage_batch()` пишет архив ДО того, как известен домен, — то есть
+    всегда в общее дерево. Для health это дыра того же класса, что F15:
+    имена записей внутри ZIP («Врачи/…_Консультация гастроэнтеролога.pdf»)
+    сами по себе рассказывают, к каким специалистам обращался владелец.
+    Ради того, чтобы имя файла не лежало в общем контуре, и заведён
+    сайдкар — а архив с теми же именами лежал рядом, в открытом дереве.
+
+    Домен становится известен в `resolve_batch_domain()`, там архив и
+    обязан переехать. Проверяется именно переезд, а не копия: копия
+    оставила бы в общем дереве ровно то, что мы оттуда убираем.
+    """
+    monkeypatch.setattr(vault_module, "health_schema_configured", lambda: True)
+
+    staged, outcome, vault_root = _stage_and_resolve(
+        session, tmp_path, monkeypatch,
+        {"Врачи/1209754_Консультация гастроэнтеролога.txt": "приём".encode()},
+        domain="health")
+    session.flush()
+
+    archive = Path(outcome.batch.archive_raw_path)
+    assert archive.is_file(), "архив пачки потерялся при переносе"
+    assert "-private/" in str(archive), (
+        f"архив health-пачки остался в общем дереве: {archive}")
+    assert str(staged.batch.id) in str(archive)
+
+    # В общем дереве не должно остаться ни файла, ни пустого каталога с
+    # идентификатором пачки: пустой каталог — тоже след.
+    common_batches = tmp_path / "raw-batches"
+    assert not list(common_batches.rglob("*.zip")), (
+        "в общем дереве остался архив health-пачки")
+    assert not (common_batches / str(staged.batch.id)).exists(), (
+        "в общем дереве остался каталог health-пачки")
+
+
+def test_non_health_batch_archive_stays_where_it_was(session, tmp_path, monkeypatch):
+    """Обратная сторона: переезд касается только приватных доменов.
+
+    Без этой проверки правку легко «упростить» до безусловного переноса,
+    и тогда инженерные пачки уедут в health-дерево — туда, куда общий
+    контур не ходит.
+    """
+    monkeypatch.setattr(vault_module, "health_schema_configured", lambda: True)
+
+    staged, outcome, _ = _stage_and_resolve(
+        session, tmp_path, monkeypatch, {"one.txt": b"first"}, domain="engineering")
+    session.flush()
+
+    archive = Path(outcome.batch.archive_raw_path)
+    assert archive.is_file()
+    assert "-private/" not in str(archive), (
+        f"архив непривативного домена уехал в приватное дерево: {archive}")
