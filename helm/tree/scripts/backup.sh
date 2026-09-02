@@ -71,6 +71,16 @@ if [ ! -d "$FORGEJO_DATA" ]; then
   exit 1
 fi
 
+# HELM v4.0 §14.16: приватное дерево health — отдельный КОРЕНЬ, а не
+# подкаталог /opt/helm-knowledge, поэтому в бэкап оно не попадало бы само
+# собой и его надо назвать явно.
+#
+# Исключения заякорены полными путями. Раньше стояло --exclude 'derived'
+# без якоря, а restic сопоставляет такой шаблон с ЛЮБЫМ компонентом пути:
+# каталог derived/ внутри приватного дерева (его предполагает та же §14.16
+# для KnowledgeGraphify) молча не попал бы в бэкап. Найдено разбором при
+# добавлении второго корня, а не отказом восстановления — что и есть
+# правильный момент.
 restic backup \
   "$WORKDIR/postgres-dumpall.sql" \
   "$WORKDIR/hermes-sqlite" \
@@ -93,8 +103,9 @@ restic backup \
   /home/helm/.hermes/profiles \
   /home/helm/.hermes/memories \
   /opt/helm-knowledge \
-  --exclude 'skills' \
-  --exclude 'derived' \
+  /opt/helm-knowledge-private \
+  --exclude '/opt/helm-knowledge/skills' \
+  --exclude '/opt/helm-knowledge/derived' \
   --tag helm-daily
 
 # Ретеншен: спека не задаёт конкретное число дней для бэкапов (только для

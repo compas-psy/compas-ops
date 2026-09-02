@@ -22,7 +22,7 @@ from contextlib import contextmanager
 from functools import lru_cache
 from typing import Iterator
 
-from sqlalchemy import create_engine, func, select, text
+from sqlalchemy import create_engine, delete, func, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -181,3 +181,25 @@ def write_notes(*, knowledge_user_id: uuid.UUID, source_id: uuid.UUID, source_sh
         if source_sha256 not in (existing.source_sha256 or []):
             existing.source_sha256 = [*(existing.source_sha256 or []), source_sha256]
         return False
+
+
+def delete_all_for_user(*, knowledge_user_id: uuid.UUID) -> int:
+    """Стереть всё содержимое health-схемы этого владельца. Возвращает
+    число удалённых строк.
+
+    Нужна `offboarding.delete_user_permanently()`: его список таблиц
+    перечисляет только `public`, и до переноса R1 это было невидимо —
+    health-таблицы стояли пустыми. После переноса тот же пробел означает
+    медицинский текст, переживший явное необратимое удаление аккаунта.
+
+    Порядок — от ссылающихся к тем, на кого ссылаются: чанки и связи
+    держат внешний ключ на сайдкар.
+    """
+    removed = 0
+    with health_session(knowledge_user_id) as session:
+        for table in (HealthKnowledgeChunk, HealthKnowledgeRelation,
+                      HealthKnowledgeNote, HealthKnowledgeSourcePrivate):
+            result = session.execute(
+                delete(table).where(table.knowledge_user_id == knowledge_user_id))
+            removed += result.rowcount or 0
+    return removed

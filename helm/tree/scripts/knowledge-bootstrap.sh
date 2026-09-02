@@ -87,6 +87,30 @@ chown helm:helm "$SPOOL"
 chmod 770 "$SPOOL"
 chmod g+s "$SPOOL"
 
+# Приватное дерево health (HELM v4.0 §14.16). Отдельный КОРЕНЬ, а не
+# подкаталог Vault: требование спеки — "MUST NOT be /opt/helm-knowledge/
+# sources/ or the common semantic directories". Смысл именно в этом:
+# инструмент, которому дали общий Vault (будущий KnowledgeGraphify,
+# выгрузка, любой обход дерева), физически не встретит здесь health.
+#
+# Группа отдельная и с фиксированным GID: 1002 прописан в group_add
+# docker-compose.yml, поэтому он не может выбираться системой при
+# создании. Владелец root, а не helm — чтобы доступ давался явно членством
+# в группе, а не доставался всему, что работает под helm.
+#
+# helm в эту группу добавлен намеренно (решение владельца 02.09.2026):
+# дерево обязано оставаться читаемой .md-структурой для его Obsidian и
+# приложения ЗАПИСКИ. Что это даёт и чего не даёт — SPEC_DEVIATION.md.
+PRIVATE=/opt/helm-knowledge-private
+HEALTH_GID=1002
+getent group helm-health >/dev/null || groupadd -g "$HEALTH_GID" helm-health
+id -nG helm | tr ' ' '\n' | grep -qx helm-health || usermod -aG helm-health helm
+
+mkdir -p "$PRIVATE/health/users"
+chown -R root:helm-health "$PRIVATE"
+chmod -R 2770 "$PRIVATE"
+
 echo "готово:"
 find "$VAULT" -maxdepth 2 -type d | sort
+find "$PRIVATE" -maxdepth 3 -type d | sort
 echo "$SPOOL"

@@ -36,12 +36,14 @@ from pathlib import Path
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from .health_schema import delete_all_for_user, health_schema_configured
 from .ingest import DEFAULT_VAULT_ROOT
 from .tenancy import bind_knowledge_user, knowledge_principal
+from .vault import scope_root
 from ..models import (
     KnowledgeAnswerRun, KnowledgeBatchItem, KnowledgeChannelIdentity, KnowledgeChunk,
     KnowledgeIngestBatch, KnowledgeIngestJob, KnowledgeInvite, KnowledgeMemory,
-    KnowledgePendingAttachment, KnowledgeRelation, KnowledgeSource, KnowledgeUser,
+    KnowledgeDomain, KnowledgePendingAttachment, KnowledgeRelation, KnowledgeSource, KnowledgeUser,
     KnowledgeUserStatus, KnowledgeUserUsage, PanelEnrollmentToken, PanelSession,
     WebauthnCredential,
 )
@@ -236,10 +238,25 @@ def delete_user_permanently(session: Session, knowledge_user_id: uuid.UUID, *,
     session.execute(delete(WebauthnCredential)
                     .where(WebauthnCredential.owner_id == principal))
 
-    vault_dir = user_vault_dir(vault_root, tenant_id)
-    files_removed = vault_dir.is_dir()
-    if files_removed:
-        shutil.rmtree(vault_dir)
+    # health живёт в собственной схеме и собственном дереве — ни то, ни
+    # другое не покрывается списком public-таблиц и `users/<uid>/` ниже.
+    # До переноса R1 это было невидимо: health-таблицы стояли пустыми.
+    #
+    # Условие то же, что у самого разделения. Без него `scope_root()` для
+    # ненастроенной health-схемы честно возвращает ОБЩИЙ корень Vault —
+    # и следующий цикл снёс бы его целиком, вместе с данными других
+    # владельцев. Поймано тестом test_delete_does_not_touch_another_user.
+    directories = [user_vault_dir(vault_root, tenant_id)]
+    if health_schema_configured():
+        rows += delete_all_for_user(knowledge_user_id=tenant_id)
+        directories.append(Path(scope_root(vault_root, domain=KnowledgeDomain.HEALTH,
+                                           knowledge_user_id=tenant_id)))
+
+    files_removed = False
+    for directory in directories:
+        if directory.is_dir():
+            shutil.rmtree(directory)
+            files_removed = True
 
     user.status = KnowledgeUserStatus.DELETED
     user.display_name = None

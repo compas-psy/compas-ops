@@ -29,13 +29,14 @@ from helm_core.knowledge import health_schema
 from helm_core.knowledge import worker as worker_module
 from helm_core.knowledge.atomizer import AtomizedAtom
 from helm_core.knowledge.documents import find_sources, read_original
+from helm_core.knowledge.offboarding import delete_user_permanently
 from helm_core.knowledge.ingest import ingest_text, register_file_for_ingest
 from helm_core.knowledge.probe import probe
 from helm_core.knowledge.worker import process_job
 from helm_core.models import (
     HealthKnowledgeChunk, HealthKnowledgeNote, HealthKnowledgeRelation, HealthKnowledgeSourcePrivate,
     KnowledgeChunk, KnowledgeIngestStatus, KnowledgeNote, KnowledgeRelation, KnowledgeSource,
-    KnowledgeUser, KnowledgeUserRole, OutboxMessage,
+    KnowledgeUser, KnowledgeUserRole, KnowledgeUserStatus, OutboxMessage,
 )
 from helm_core.models.health_tables import HealthBase
 from conftest import DB_URL
@@ -449,6 +450,32 @@ def test_health_semantic_note_file_is_not_written_into_common_vault(
                / "entities" / "Бокова Мария Николаевна.md")
     assert private.is_file()
     assert "Врач эндокринолог." in private.read_text(encoding="utf-8")
+
+
+# ── offboarding.py — окончательное удаление не оставляет health ───────────
+
+def test_delete_user_permanently_removes_health_rows_and_private_tree(
+        session, health_configured, user, tmp_path):
+    """До R1 health-таблицы были пусты, и пробел был невидим: список
+    удаляемых таблиц перечислял только public. После переноса это уже
+    медицинский текст, переживающий явное необратимое удаление аккаунта."""
+    ingest_text(session, domain="health", text="Приём эндокринолога, повторный.",
+                knowledge_user_id=user.id, vault_root=str(tmp_path))
+    session.flush()
+    private_root = tmp_path.parent / f"{tmp_path.name}-private" / "health" / "users" / str(user.id)
+    private_root.mkdir(parents=True, exist_ok=True)
+    (private_root / "sources").mkdir(exist_ok=True)
+    (private_root / "sources" / "x.md").write_text("приём", encoding="utf-8")
+
+    user.status = KnowledgeUserStatus.SUSPENDED
+    session.flush()
+    delete_user_permanently(session, knowledge_user_id=user.id, vault_root=str(tmp_path))
+    session.flush()
+
+    with health_schema.health_session(user.id) as hs:
+        assert hs.scalars(select(HealthKnowledgeChunk)).all() == []
+        assert hs.scalars(select(HealthKnowledgeSourcePrivate)).all() == []
+    assert not private_root.exists()
 
 
 # ── documents.py — поиск/скачивание своих health-документов владельцем ───
