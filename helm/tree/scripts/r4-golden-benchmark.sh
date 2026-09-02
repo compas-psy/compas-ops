@@ -2,47 +2,53 @@
 # HELM v4.0 RESCUE · R4 — живой прогон golden-бенчмарка + сравнение
 # keep_alive на реальных кандидатах (§14.18, R4 пп.3-6).
 #
-# Кандидаты выбраны ПОСЛЕ r4-inventory.sh (не по «уже скачана»):
-#   gemma2:2b   — обязательный baseline (уже на сервере, было для Z2).
-#   qwen2.5:3b  — современный 3-4B instruct, уже проверен pullable на
-#                 этом VPS (тот же Z2-замер, ollama-benchmark.sh).
-#   qwen2.5:7b  — «сильный» 7-8B instruct. Пробуется ТОЛЬКО потому, что
-#                 inventory показал 45G диска и ~9.1G available RAM —
-#                 см. r4-inventory.sh прогон. Текущий compose-лимит
-#                 ollama (4GiB) реального q4 7B физически не пропустит
-#                 (cgroup убьёт контейнер независимо от свободной RAM
-#                 хоста) — лимит поднимается ВРЕМЕННО `docker update`,
-#                 не правкой docker-compose.yml: recon не персистит
-#                 конфигурацию, и следующий обычный деплой/`up` вернёт
-#                 объявленные 4GiB сам, без отдельного отката.
+# Ретракция владельца 02.09.2026 (после #185-#187): скрипт БЕЗУСЛОВНО
+# гасил ollama и удалял ВСЕ модели кандидатов в конце, включая gemma2:2b
+# — боевую модель Z2 style-rephrase (rephrase.py), которая была на
+# сервере ДО бенчмарка. Раз ollama входит в обычный `deploy` (docker-
+# compose.yml: «сервис входит в обычный deploy... up -d ollama + ollama
+# pull gemma2:2b идемпотентно на каждый normal deploy»), она обязана
+# быть в этом же состоянии и ПОСЛЕ бенчмарка — не только «в целом
+# работает после следующего деплоя».
 #
-# Идемпотентно: если результат кандидата уже лежит на диске — кандидат
-# пропускается. Можно звать recon с этим же именем скрипта повторно,
-# если один прогон не уложился в 60-минутный лимит джобы.
+# Правило теперь простое и без исключений: снять точный снимок ДО
+# (что запущено, что скачано, какой лимит памяти) — и вернуть РОВНО его
+# после, что бы ни случилось внутри (успех, провал кандидата, обрыв
+# соединения — EXIT trap видит все три случая одинаково).
 #
-# Публикации графа здесь нет вообще — CLI (semantic_benchmark.py) не
-# знает о publish_semantic_run(), только зовёт extract_window() напрямую
-# (R4 п.1: «Не использовать publish_semantic_run() для owner corpus»).
+# Кандидаты выбраны по r4-inventory.sh: gemma2:2b (обязательный
+# baseline, уже на сервере), qwen2.5:3b (современный 3-4B, уже проверен
+# pullable на этом VPS для Z2), qwen2.5:7b (сильный 7-8B — только если
+# живой resource preflight прямо перед попыткой показывает свободных
+# >=6GiB, иначе пропускается).
+#
+# Идемпотентность больше не «файл существует» (найдено BLOCKER-ом:
+# частично записанный/устаревший результат мог сойти за готовый) — а
+# fingerprint (R4 п.4): каталог результата назван по хэшу от git SHA +
+# SHA256 кода извлечения/промпта/схемы/фикстур/харнесса + seed + модель
+# + digest + keep_alive. Разные входы — разные каталоги; те же входы —
+# тот же каталог, и уже лежащий там результат проверяется ЗАНОВО
+# (`validate`), а не просто «файл есть».
 set -uo pipefail
 cd /opt/helm/compose
 
-RUN_DIR=/opt/helm-state/benchmarks/r4/run1
-# НАЙДЕНО живым прогоном 02.09.2026: `sudo mkdir -p` создаёт каталог
-# root:root, а `docker compose exec ... > "$out"` ниже открывает файл
-# ОБЫЧНЫМ пользователем helm (sudo относится только к самой команде
-# docker) — редирект падал с Permission denied ДО запуска python,
-# извлечение ни разу не выполнилось. chown сразу после mkdir отдаёт
-# каталог текущему пользователю SSH-сессии.
-sudo mkdir -p "$RUN_DIR"
-sudo chown "$(id -u):$(id -g)" "$RUN_DIR"
+BASE_DIR=/opt/helm-state/benchmarks/r4
+sudo mkdir -p "$BASE_DIR"
+sudo chown "$(id -u):$(id -g)" "$BASE_DIR"
+
+GIT_SHA=$(sudo cat /opt/helm/DEPLOYED_SHA 2>/dev/null || echo "unknown")
+echo "выкачено: $GIT_SHA"
 
 OLLAMA_CID() { sudo docker compose ps -q ollama; }
 
-trap '
-  echo "=== восстановление лимита ollama (4g, как в docker-compose.yml) ==="
-  sudo docker update --memory=4g --memory-swap=4g "$(OLLAMA_CID)" >/dev/null 2>&1 || true
-  sudo docker compose stop ollama >/dev/null 2>&1 || true
-' EXIT
+# ── 1. Снимок ДО (владелец п.1-2) ────────────────────────────────────
+WAS_OLLAMA_RUNNING=false
+existing_cid=$(OLLAMA_CID)
+if [ -n "$existing_cid" ] \
+   && [ "$(sudo docker inspect -f '{{.State.Running}}' "$existing_cid" 2>/dev/null)" = "true" ]; then
+  WAS_OLLAMA_RUNNING=true
+fi
+echo "ollama до бенчмарка: running=$WAS_OLLAMA_RUNNING"
 
 sudo docker compose up -d ollama >/dev/null
 for i in $(seq 1 30); do
@@ -51,35 +57,195 @@ for i in $(seq 1 30); do
 done
 curl -sf http://127.0.0.1:11434/api/tags >/dev/null || { echo "::error::ollama API не поднялся"; exit 1; }
 
-health_snapshot() {
-  sudo docker compose ps --format "{{.Service}}: {{.Status}}"
-}
-echo "############ ЗДОРОВЬЕ ДО БЕНЧМАРКА ############"
-BEFORE_HEALTH=$(health_snapshot)
-echo "$BEFORE_HEALTH"
+PREEXISTING_MODELS=$(sudo docker compose exec -T ollama ollama list | tail -n +2 | awk '{print $1}')
+echo "модели до бенчмарка:"
+echo "$PREEXISTING_MODELS" | sed 's/^/  /'
 
-run_golden() {
-  local model="$1" out="$2"
+ORIGINAL_MEM_LIMIT=$(sudo docker inspect -f '{{.HostConfig.Memory}}' "$(OLLAMA_CID)")
+# Docker отдаёт лимит в байтах (0 = не задан). compose объявляет 4g —
+# используем его как читаемый дефолт, если рантайм почему-то вернул 0
+# (например, ollama только что поднята этим же скриптом с нуля).
+if [ "$ORIGINAL_MEM_LIMIT" = "0" ] || [ -z "$ORIGINAL_MEM_LIMIT" ]; then
+  ORIGINAL_MEM_LIMIT_HUMAN="4g"
+else
+  ORIGINAL_MEM_LIMIT_HUMAN="${ORIGINAL_MEM_LIMIT}b"
+fi
+echo "лимит памяти ollama до бенчмарка: $ORIGINAL_MEM_LIMIT_HUMAN"
+
+# ── 2. Восстановление — ЕДИНСТВЕННЫЙ trap, что бы ни случилось ──────
+restore_ollama_state() {
+  echo
+  echo "############ ВОССТАНОВЛЕНИЕ ИСХОДНОГО СОСТОЯНИЯ OLLAMA ############"
+  local cid
+  cid=$(OLLAMA_CID)
+  if [ -z "$cid" ]; then
+    echo "  ollama-контейнер не найден — восстанавливать нечего"
+    return
+  fi
+
+  echo "-- лимит памяти -> $ORIGINAL_MEM_LIMIT_HUMAN --"
+  sudo docker update --memory="$ORIGINAL_MEM_LIMIT_HUMAN" --memory-swap="$ORIGINAL_MEM_LIMIT_HUMAN" \
+    "$cid" >/dev/null 2>&1 || echo "  ::warning::не удалось восстановить лимит памяти"
+
+  echo "-- модели: удаляем ТОЛЬКО то, чего не было до бенчмарка --"
+  local current_models m found
+  current_models=$(sudo docker compose exec -T ollama ollama list 2>/dev/null | tail -n +2 | awk '{print $1}')
+  for m in $current_models; do
+    found=0
+    for p in $PREEXISTING_MODELS; do
+      [ "$m" = "$p" ] && found=1 && break
+    done
+    if [ "$found" -eq 0 ]; then
+      echo "  rm $m (появилась во время бенчмарка)"
+      sudo docker compose exec -T ollama ollama rm "$m" >/dev/null 2>&1 || true
+    else
+      echo "  оставляем $m (была до бенчмарка)"
+    fi
+  done
+  echo "-- проверка: все preexisting модели на месте --"
+  local after m2 ok=1
+  after=$(sudo docker compose exec -T ollama ollama list 2>/dev/null | tail -n +2 | awk '{print $1}')
+  for m2 in $PREEXISTING_MODELS; do
+    if ! echo "$after" | grep -qxF "$m2"; then
+      echo "  ::error::$m2 была до бенчмарка и ОТСУТСТВУЕТ после восстановления — pull заново"
+      sudo docker compose exec -T ollama ollama pull "$m2" || true
+      ok=0
+    fi
+  done
+  [ "$ok" -eq 1 ] && echo "  все preexisting модели на месте"
+
+  echo "-- running/stopped: было running=$WAS_OLLAMA_RUNNING --"
+  if [ "$WAS_OLLAMA_RUNNING" = "true" ]; then
+    sudo docker compose up -d ollama >/dev/null 2>&1
+    echo "  ollama оставлена/возвращена запущенной"
+  else
+    sudo docker compose stop ollama >/dev/null 2>&1
+    echo "  ollama остановлена (было остановлено до бенчмарка)"
+  fi
+}
+trap restore_ollama_state EXIT
+
+# ── 3. Поведенческое здоровье HELM (владелец п.6, не только `ps`) ───
+# Возвращают буквально "OK" или "FAIL ..." — сравнимо до/после кандидата,
+# не просто печатают в лог.
+check_helm_core_healthz() {
+  sudo docker compose exec -T helm-core python3 -c "
+import urllib.request
+try:
+    r = urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)
+    print('OK' if r.status == 200 else f'FAIL status={r.status}')
+except Exception as e:
+    print(f'FAIL {e}')
+" 2>&1 | tail -1
+}
+
+check_postgres_query() {
+  local out
+  out=$(sudo docker exec -i helm-postgres-1 psql -U helm -d helm -tAc "select 1" 2>&1)
+  [ "$(echo "$out" | tr -d '[:space:]')" = "1" ] && echo "OK" || echo "FAIL $out"
+}
+
+behavioral_health_check() {
+  local label="$1"
+  echo "-- $label: контейнеры --"
+  sudo docker compose ps --format "{{.Service}}: {{.Status}}"
+  echo "-- $label: helm-core /healthz прямо сейчас: $(check_helm_core_healthz) --"
+  echo "-- $label: postgres реальным запросом: $(check_postgres_query) --"
+  echo "-- $label: swap --"
+  free -m | awk '/^Swap:/ {print "  " $0}'
+  echo "-- $label: restart count --"
+  for svc in helm-core postgres litellm ollama; do
+    local cid
+    cid=$(sudo docker compose ps -q "$svc" 2>/dev/null)
+    [ -n "$cid" ] && echo "  $svc: $(sudo docker inspect -f '{{.RestartCount}}' "$cid")"
+  done
+}
+
+echo "############ ЗДОРОВЬЕ ДО БЕНЧМАРКА (поведенчески) ############"
+behavioral_health_check "ДО"
+echo
+echo "############ Z2 REPHRASE SMOKE ДО БЕНЧМАРКА ############"
+sudo docker compose exec -T helm-core python3 <<'PY'
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from helm_core.config import get_settings
+from helm_core.knowledge.ingest import ingest_text
+from helm_core.knowledge.probe import probe
+engine = create_engine(get_settings().database_url)
+with Session(engine) as s:
+    ingest_text(s, domain="psychology",
+               text="Схема — это устойчивый паттерн мышления и поведения, сформированный в детстве.",
+               original_filename="r4-z2-smoke-before.txt")
+    s.flush()
+    result = probe(s, query="что такое схема?")
+    print("outcome:", result.outcome, "| mode:", result.mode)
+    s.rollback()
+PY
+
+#: ollama pull/exec на каждый кандидат уходит в лог LiteLLM/OpenRouter-
+#: активности как «до/после» окно (владелец п.7) — точных счётчиков
+#: запросов у этого стека нет, поэтому берётся число строк лога за
+#: контейнером как best-effort runtime evidence поверх structural
+#: AST-инварианта (test_extraction_never_leaves_the_machine), а не
+#: вместо него.
+LITELLM_LOG_LINES_BEFORE=$(sudo docker compose logs litellm 2>/dev/null | wc -l)
+
+run_golden_canonical() {
+  local model="$1" digest="$2" keep_alive="$3"
+  local fp_json fp_hash run_dir tmp_out out
+
+  fp_json=$(sudo docker compose exec -T helm-core \
+    python3 -m helm_core.knowledge.semantic_benchmark fingerprint \
+    --model "$model" --keep-alive "$keep_alive" --git-sha "$GIT_SHA" --model-digest "$digest")
+  fp_hash=$(echo "$fp_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['fingerprint_hash'])")
+  run_dir="$BASE_DIR/$(echo "$model" | tr ':/.' '___')-${fp_hash:0:16}"
+  sudo mkdir -p "$run_dir"
+  sudo chown "$(id -u):$(id -g)" "$run_dir"
+  out="$run_dir/result.json"
+  tmp_out="$run_dir/result.json.tmp"
+  echo "$fp_json" > "$run_dir/fingerprint.json"
+
+  if [ -s "$out" ]; then
+    echo "-- существующий результат найден, проверяю fingerprint --"
+    if sudo docker compose exec -T helm-core \
+         python3 -m helm_core.knowledge.semantic_benchmark validate \
+         --file "/dev/stdin" --expect-model "$model" --expect-fingerprint-hash "$fp_hash" \
+         < "$out" 2>&1; then
+      echo "-- reuse: fingerprint совпал, канонический прогон уже есть в $out --"
+      return 0
+    fi
+    echo "-- существующий результат не прошёл валидацию под текущим fingerprint — прогоняю заново --"
+  fi
+
+  echo "-- golden benchmark (keep_alive=$keep_alive, каноническая ревизия) --"
   sudo docker compose exec -T helm-core \
     python3 -m helm_core.knowledge.semantic_benchmark golden \
-    --model "$model" --keep-alive "0" --stability-repeats 3 \
-    > "$out" 2> "${out%.json}.stderr.log"
+    --model "$model" --keep-alive "$keep_alive" --stability-repeats 3 \
+    --git-sha "$GIT_SHA" --model-digest "$digest" --run-id "${fp_hash:0:16}" \
+    > "$tmp_out" 2> "$run_dir/stderr.log"
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "::error::extraction завершилась с кодом $rc — см. $run_dir/stderr.log"
+    rm -f "$tmp_out"
+    return 1
+  fi
+
+  if ! sudo docker compose exec -T helm-core \
+         python3 -m helm_core.knowledge.semantic_benchmark validate \
+         --file /dev/stdin --expect-model "$model" --expect-fingerprint-hash "$fp_hash" \
+         < "$tmp_out"; then
+    echo "::error::result.json.tmp не прошёл валидацию — НЕ публикуется как result.json"
+    return 1
+  fi
+  mv "$tmp_out" "$out"
+  echo "-- $out записан и провалидирован --"
 }
 
-# Латентность/RAM одного и того же кейса под keep_alive=0 (production
-# сейчас) против keep_alive=5m (кандидат в production policy) — R4 п.6.
-# Пять повторов подряд: первый обязательно холодный (веса ещё не в
-# памяти), 2-5 — тёплые при keep_alive=5m и снова холодные каждый раз
-# при keep_alive=0 (веса выгружаются между вызовами).
 run_keepalive_probe() {
   local model="$1" out="$2"
-  # НАЙДЕНО живым прогоном 02.09.2026: с keep_alive=0 gemma2:2b каждый
-  # раз перезагружается с диска — 20 вызовов подряд занимают несколько
-  # минут. Раньше весь вывод уходил ТОЛЬКО в файл (`> "$out"`), и SSH-
-  # сессия несколько минут не видела ни байта — соединение рвалось как
-  # «простаивающее» (client_loop: send disconnect: Broken pipe), хотя
-  # работа шла. `tee` держит поток в терминале живым и одновременно
-  # пишет тот же текст в файл — второй `cat` после вызова не нужен.
+  # tee — держит SSH-трафик живым при долгом молчаливом выводе (найдено
+  # живым прогоном 02.09.2026: без него соединение рвётся как
+  # «простаивающее», хотя работа идёт).
   {
     for ka in 0 5m; do
       echo "--- keep_alive=$ka ---"
@@ -88,7 +254,7 @@ run_keepalive_probe() {
         sudo docker compose exec -T helm-core \
           python3 -m helm_core.knowledge.semantic_benchmark golden \
           --model "$model" --keep-alive "$ka" --stability-repeats 1 \
-          --case doctor_visit > /dev/null 2>> "${out%.json}.stderr.log"
+          --case doctor_visit > /dev/null 2>> "${out%.log}.stderr.log"
         t1=$(date +%s.%N)
         elapsed=$(python3 -c "print(round($t1 - $t0, 2))")
         rss=$(sudo docker stats --no-stream "$(OLLAMA_CID)" --format "{{.MemUsage}}")
@@ -101,50 +267,138 @@ run_keepalive_probe() {
 run_candidate() {
   local model="$1" safe
   safe=$(echo "$model" | tr ':/.' '___')
-  local golden_out="$RUN_DIR/golden-$safe.json"
-  local keepalive_out="$RUN_DIR/keepalive-$safe.log"
-
-  if [ -f "$golden_out" ] && [ -f "$keepalive_out" ]; then
-    echo "=== $model: уже сделан (результаты на диске) — пропуск ==="
-    return 0
-  fi
 
   echo "=========================================="
   echo "=== кандидат: $model ==="
   echo "=========================================="
   echo "=== ollama pull ==="
-  time sudo docker compose exec -T ollama ollama pull "$model"
+  sudo docker compose exec -T ollama ollama pull "$model"
+  local digest
+  digest=$(sudo docker compose exec -T ollama ollama list | awk -v m="$model" '$1==m {print $2}')
+  echo "digest: $digest"
 
-  if [ ! -f "$golden_out" ]; then
-    echo "=== golden benchmark (keep_alive=0, качество) ==="
-    time run_golden "$model" "$golden_out"
-    echo "-- итог (schema_stats/metrics верхнего уровня) --"
-    python3 -c "
+  local health_before_core health_before_pg
+  health_before_core=$(check_helm_core_healthz)
+  health_before_pg=$(check_postgres_query)
+
+  # Фоновый опрос swap на время реальной работы — снимок "до/после" сам
+  # по себе пропускает транзиентный пик посередине (владелец п.6: "swap
+  # before/peak/after" — три разных числа, не два).
+  local swap_poll_file swap_poll_pid
+  swap_poll_file=$(mktemp)
+  ( while true; do free -m | awk '/^Swap:/ {print $3}' >> "$swap_poll_file"; sleep 2; done ) &
+  swap_poll_pid=$!
+
+  local t_total_start t_total_end
+  t_total_start=$(date +%s.%N)
+
+  echo "=== keep_alive: cold(0) vs warm(5m), измеряется ПЕРВЫМ — до основного прогона ==="
+  local ka_out="$BASE_DIR/keepalive-$safe.log"
+  run_keepalive_probe "$model" "$ka_out"
+  local cold0 warm0
+  cold0=$(grep -A1 "keep_alive=0" "$ka_out" | grep "прогон 1:" | grep -oP '\d+\.\d+(?=с)')
+  warm0=$(grep -A6 "keep_alive=5m" "$ka_out" | grep "прогон 5:" | grep -oP '\d+\.\d+(?=с)')
+
+  run_golden_canonical "$model" "$digest" "0"
+
+  t_total_end=$(date +%s.%N)
+  local total_seconds
+  total_seconds=$(python3 -c "print(round($t_total_end - $t_total_start, 2))")
+
+  kill "$swap_poll_pid" 2>/dev/null
+  wait "$swap_poll_pid" 2>/dev/null
+  local swap_before swap_peak swap_after oom_flag raw_mem raw_cpu
+  swap_before=$(head -1 "$swap_poll_file" 2>/dev/null)
+  swap_peak=$(sort -n "$swap_poll_file" 2>/dev/null | tail -1)
+  swap_after=$(free -m | awk '/^Swap:/ {print $3}')
+  rm -f "$swap_poll_file"
+
+  echo "=== ресурсы: RSS/CPU/swap/OOM ==="
+  raw_mem=$(sudo docker stats --no-stream "$(OLLAMA_CID)" --format "{{.MemUsage}}")
+  raw_cpu=$(sudo docker stats --no-stream "$(OLLAMA_CID)" --format "{{.CPUPerc}}")
+  # State.OOMKilled — то, что реально знает ядро об ЭТОМ контейнере, не
+  # догадка по уровню swap (владелец п.6: "OOM evidence", не "похоже на OOM").
+  oom_flag=$(sudo docker inspect -f '{{.State.OOMKilled}}' "$(OLLAMA_CID)" 2>/dev/null || echo "unknown")
+
+  python3 - "$model" "$digest" "${cold0:-}" "${warm0:-}" "$total_seconds" \
+           "$raw_mem" "$raw_cpu" "${swap_before:-}" "${swap_peak:-}" "${swap_after:-}" "$oom_flag" "0" \
+           > "$BASE_DIR/resources-$safe.json" <<'PYEOF'
 import json
-d = json.load(open('$golden_out'))
-print('schema_stats:', d['schema_stats'])
-print('total_material_hallucinations:', d['metrics']['total_material_hallucinations'])
-print('safety_case_hallucinations:', d['metrics']['safety_case_hallucinations'])
-print('entity_precision/recall:', d['metrics']['entity_precision'], d['metrics']['entity_recall'])
-print('atom_precision/recall:', d['metrics']['atom_precision'], d['metrics']['atom_recall'])
-print('relation_precision/recall:', d['metrics']['relation_precision'], d['metrics']['relation_recall'])
-print('p50/p95 latency:', d['p50_latency'], d['p95_latency'])
-" || echo "::error::не удалось разобрать $golden_out — см. ${golden_out%.json}.stderr.log"
-  fi
+import re
+import sys
 
-  echo "=== RSS сразу после golden ==="
-  sudo docker stats --no-stream "$(OLLAMA_CID)" --format "{{.MemUsage}}"
+(model, digest, cold, warm, total, raw_mem, raw_cpu,
+ swap_before, swap_peak, swap_after, oom_flag, keep_alive) = sys.argv[1:13]
 
-  if [ ! -f "$keepalive_out" ]; then
-    echo "=== keep_alive: cold(0) vs warm(5m) на одном кейсе x5 ==="
-    run_keepalive_probe "$model" "$keepalive_out"
-  fi
 
-  echo "=== здоровье HELM после кандидата ==="
-  health_snapshot
+def to_float(x):
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
 
-  echo "=== ollama rm (диск для следующего кандидата) ==="
-  sudo docker compose exec -T ollama ollama rm "$model" || true
+
+def parse_size_mb(text):
+    m = re.match(r"([\d.]+)\s*([A-Za-z]+)", text.strip())
+    if not m:
+        return None
+    val, unit = float(m.group(1)), m.group(2)
+    mult = {"B": 1e-6, "KB": 1e-3, "KiB": 1.048576e-3 * 1000 / 1024,
+            "MB": 1.0, "MiB": 1.048576, "GB": 1000.0, "GiB": 1073.741824}
+    return round(val * mult.get(unit, 1.0), 3)
+
+
+used_mem = raw_mem.split("/")[0]
+print(json.dumps({
+    "model": model, "model_digest": digest,
+    "cold_latency_seconds": to_float(cold),
+    "warm_latency_seconds": to_float(warm),
+    "total_benchmark_seconds": to_float(total),
+    "peak_rss_mb": parse_size_mb(used_mem),
+    "peak_cpu_percent": to_float(raw_cpu.strip().rstrip("%")),
+    "swap_before_mb": to_float(swap_before),
+    "swap_peak_mb": to_float(swap_peak),
+    "swap_after_mb": to_float(swap_after),
+    "oom_occurred": {"true": True, "false": False}.get(oom_flag),
+    "keep_alive_policy": keep_alive,
+}, indent=2))
+PYEOF
+  cat "$BASE_DIR/resources-$safe.json"
+
+  echo "=== здоровье HELM после кандидата (поведенчески) ==="
+  local health_after_core health_after_pg degraded="false"
+  health_after_core=$(check_helm_core_healthz)
+  health_after_pg=$(check_postgres_query)
+  echo "  helm-core: до=$health_before_core после=$health_after_core"
+  echo "  postgres:  до=$health_before_pg после=$health_after_pg"
+  if [ "$health_before_core" = "OK" ] && [ "$health_after_core" != "OK" ]; then degraded="true"; fi
+  if [ "$health_before_pg" = "OK" ] && [ "$health_after_pg" != "OK" ]; then degraded="true"; fi
+  echo "  other_services_degraded=$degraded"
+  python3 -c "
+import json
+p = '$BASE_DIR/resources-$safe.json'
+d = json.load(open(p))
+d['other_services_degraded'] = $degraded
+json.dump(d, open(p, 'w'), indent=2)
+"
+  behavioral_health_check "ПОСЛЕ $model"
+  echo "=== Z2 rephrase smoke после кандидата ==="
+  sudo docker compose exec -T helm-core python3 <<PY
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from helm_core.config import get_settings
+from helm_core.knowledge.ingest import ingest_text
+from helm_core.knowledge.probe import probe
+engine = create_engine(get_settings().database_url)
+with Session(engine) as s:
+    ingest_text(s, domain="psychology",
+               text="Схема — это устойчивый паттерн мышления и поведения, сформированный в детстве.",
+               original_filename="r4-z2-smoke-after-$safe.txt")
+    s.flush()
+    result = probe(s, query="что такое схема?")
+    print("outcome:", result.outcome, "| mode:", result.mode)
+    s.rollback()
+PY
 }
 
 echo
@@ -157,43 +411,53 @@ run_candidate "qwen2.5:3b"
 
 echo
 echo "############ КАНДИДАТ 3/3: qwen2.5:7b (нужен подъём лимита) ############"
-# Живой повторный замер прямо перед попыткой — снимок из r4-inventory.sh
-# сделан отдельным прогоном раньше и мог устареть. 6GiB — 8GiB потолок
-# ollama плюс запас для postgres/litellm/n8n/forgejo/helm-core/helm-embed,
-# уже занимающих место на этом же хосте; ниже — 7B не пробуем, это и есть
-# сам resource preflight (R4 п.3), а не догадка.
 AVAILABLE_MB=$(free -m | awk '/^Mem:/ {print $7}')
 echo "доступно сейчас: ${AVAILABLE_MB}MiB"
 if [ "$AVAILABLE_MB" -lt 6144 ]; then
   echo "::warning::доступно ${AVAILABLE_MB}MiB < 6144MiB — qwen2.5:7b пропущен, resource preflight не пройден"
 else
-  echo "=== временно поднимаем лимит ollama-контейнера до 8g (docker update, не persisted) ==="
+  echo "=== временно поднимаем лимит ollama-контейнера до 8g (docker update, восстанавливается trap'ом) ==="
   sudo docker update --memory=8g --memory-swap=8g "$(OLLAMA_CID)"
   run_candidate "qwen2.5:7b"
 fi
 
+LITELLM_LOG_LINES_AFTER=$(sudo docker compose logs litellm 2>/dev/null | wc -l)
 echo
-echo "############ ЗДОРОВЬЕ ПОСЛЕ ВСЕХ КАНДИДАТОВ ############"
-AFTER_HEALTH=$(health_snapshot)
-echo "$AFTER_HEALTH"
-if [ "$BEFORE_HEALTH" != "$AFTER_HEALTH" ]; then
-  echo "::warning::статус сервисов изменился за время бенчмарка — сверить вручную, не считать автоматически деградацией (мог быть плановый healthcheck-переход)"
-fi
+echo "############ LITELLM RUNTIME EVIDENCE (best-effort, поверх structural AST-инварианта) ############"
+echo "строк лога litellm: было $LITELLM_LOG_LINES_BEFORE, стало $LITELLM_LOG_LINES_AFTER"
+
+# Ретракция владельца, найдено в #185-#187: здоровье проверялось ДО
+# восстановления состояния ollama, а восстановление жило только в
+# EXIT trap — сценарий "VERIFY health green → EXIT trap → ollama
+# stopped" был буквально тем, что происходило. Восстановление вызывается
+# явно ЗДЕСЬ, до финальной проверки; trap ниже по-прежнему стоит как
+# сеть безопасности на случай обрыва прямо во время этого явного
+# вызова — сама функция идемпотентна, повторный вызов ничего не портит.
+echo
+echo "############ ЯВНОЕ ВОССТАНОВЛЕНИЕ ПЕРЕД ФИНАЛЬНОЙ ПРОВЕРКОЙ ############"
+restore_ollama_state
 
 echo
-echo "############ R4 GOLDEN BENCHMARK DONE ############"
-ls -la "$RUN_DIR"
+echo "############ ЗДОРОВЬЕ ПОСЛЕ ВОССТАНОВЛЕНИЯ (то состояние, в котором сервер остаётся) ############"
+behavioral_health_check "ПОСЛЕ ВОССТАНОВЛЕНИЯ"
+echo "############ Z2 REPHRASE SMOKE ПОСЛЕ ВОССТАНОВЛЕНИЯ ############"
+sudo docker compose exec -T helm-core python3 <<'PY'
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from helm_core.config import get_settings
+from helm_core.knowledge.ingest import ingest_text
+from helm_core.knowledge.probe import probe
+engine = create_engine(get_settings().database_url)
+with Session(engine) as s:
+    ingest_text(s, domain="psychology",
+               text="Схема — это устойчивый паттерн мышления и поведения, сформированный в детстве.",
+               original_filename="r4-z2-smoke-final.txt")
+    s.flush()
+    result = probe(s, query="что такое схема?")
+    print("outcome:", result.outcome, "| mode:", result.mode)
+    s.rollback()
+PY
 
-# `set -uo pipefail` без `-e` намеренно (нужны `|| true`/`|| echo` по
-# ходу скрипта) — но это значит, что джоба зелёная, даже если каждый
-# кандидат молча ничего не записал (найдено живым прогоном 02.09.2026:
-# ровно так и было). Явная проверка на выходе — единственное, что не
-# даёт "recon success" означать "результат есть".
-missing=0
-for f in golden-gemma2_2b.json golden-qwen2_5_3b.json; do
-  [ -s "$RUN_DIR/$f" ] || { echo "::error::нет результата: $RUN_DIR/$f"; missing=$((missing + 1)); }
-done
-if [ "$missing" -gt 0 ]; then
-  echo "::error::$missing обязательных результатов отсутствует — R4 GOLDEN BENCHMARK FAIL"
-  exit 1
-fi
+echo
+echo "############ R4 GOLDEN BENCHMARK DONE (состояние ollama уже восстановлено выше) ############"
+sudo find "$BASE_DIR" -maxdepth 2 -type f -newer /opt/helm/DEPLOYED_SHA 2>/dev/null | sort
