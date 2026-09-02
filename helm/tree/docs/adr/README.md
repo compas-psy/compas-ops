@@ -56,7 +56,7 @@
 | 016 | Panel Telegram OIDC + WebAuthn | ✅ `ADR-016-panel-telegram-webauthn.md` — реализовано другое: Telegram Login Widget, не OIDC (задокументированное отклонение, OIDC недоступен у BotFather для этого бота) |
 | 017 | Live-server-first initial deployment | ✅ `ADR-017-offline-build.md` — отклонено, выбрана офлайн-сборка |
 | 018 | Multimodel implementation policy | ✅ `ADR-018-single-agent.md` — отклонено фактически |
-| 019 | Knowledge canonical Markdown/Postgres; Graphify derived | 🟡 `ADR-019-knowledge-canonical-markdown-graphify.md` — решение принято 01.09.2026 (E13 пересмотрен, корпус реальный: 90 health-источников); фаза 1-2 (semantic atomizer, аддитивно в ingest) сделана и покрыта тестами, живой деплой + backfill + per-user Graphify + Knowledge Router не начаты |
+| 019 | Knowledge canonical Markdown/Postgres; Graphify derived | 🔴 `ADR-019-knowledge-canonical-markdown-graphify.md` — SUPERSEDED / REVISED BY HELM v4.0 RESCUE (02.09.2026). Нормативен контракт semantic-v2, `docs/spec/CURRENT.md` §14.4–§14.12; прежнее решение сохранено разделом History как эксперимент semantic-v1 |
 | 020 | Strict zero-paid Knowledge lock | ✅ `ADR-020-strict-zero-paid-knowledge-lock.md` |
 | 021 | Local parser/GigaAM/Ollama Knowledge pipeline | 🟡 `ADR-021-gigaam-voice-pipeline.md` — модель GigaAM выбрана живым замером (e2e_rnnt), фаза 2 (схема/wiring/voice-Remember) в процессе. Ollama (1.8) — отдельно, не в этом ADR |
 | 022 | Smart source dedup + versioning | ✅ `ADR-022-source-dedup-versioning.md` — дедуп сделан, версионирование сознательно отложено (решение владельца 31.08.2026, D2/§14.7) |
