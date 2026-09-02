@@ -4,7 +4,8 @@ from .base import (
     KnowledgeIngestStatus, KnowledgeMemoryKind, KnowledgeMemoryStatus, KnowledgeSensitivity,
     KnowledgeStatus, KnowledgeTrust, KnowledgeUserRole, KnowledgeUserStatus,
     SemanticDatePrecision, SemanticEvidenceType, SemanticNodeKind, SemanticNodeStatus,
-    SemanticRelationType, SemanticRunStatus,
+    SemanticRelationType, SemanticRunStatus, SemanticWindowStatus,
+    TERMINAL_WINDOW_STATUSES,
     TaskStatus, utcnow,
 )
 from .tables import (
@@ -14,7 +15,7 @@ from .tables import (
     KnowledgeIngestBatch, KnowledgeIngestJob, KnowledgeInvite, KnowledgeMemory,
     KnowledgeNode, KnowledgeNodeMention,
     KnowledgeNote, KnowledgePendingAttachment, KnowledgeRelation,
-    KnowledgeSemanticRun,
+    KnowledgeSemanticRun, KnowledgeSemanticWindow,
     KnowledgeSource, KnowledgeUser, KnowledgeUserUsage, MetricPoint, ModelRun, OutboxMessage,
     PanelEnrollmentToken, PanelSession, PanelStepUpChallenge, Routine, Task, TaskEvent,
     WebauthnCredential,
@@ -22,7 +23,8 @@ from .tables import (
 from .health_tables import (
     HealthBase, HealthKnowledgeChunk, HealthKnowledgeEdge, HealthKnowledgeEntityAlias,
     HealthKnowledgeNode, HealthKnowledgeNodeMention, HealthKnowledgeNote,
-    HealthKnowledgeRelation, HealthKnowledgeSourcePrivate,
+    HealthKnowledgeRelation, HealthKnowledgeSemanticWindow,
+    HealthKnowledgeSourcePrivate,
 )
 
 __all__ = [
@@ -31,7 +33,8 @@ __all__ = [
     "BudgetDaily", "Channel", "ChannelEvent", "Decision",
     "HealthBase", "HealthKnowledgeChunk", "HealthKnowledgeEdge",
     "HealthKnowledgeEntityAlias", "HealthKnowledgeNode", "HealthKnowledgeNodeMention",
-    "HealthKnowledgeNote", "HealthKnowledgeRelation", "HealthKnowledgeSourcePrivate",
+    "HealthKnowledgeNote", "HealthKnowledgeRelation", "HealthKnowledgeSemanticWindow",
+    "HealthKnowledgeSourcePrivate",
     "KnowledgeAnswerMode", "KnowledgeAnswerRun", "KnowledgeBatchItem",
     "KnowledgeBatchItemStatus", "KnowledgeBatchStatus", "KnowledgeChannelIdentity",
     "KnowledgeChunk", "KnowledgeCustomDomain", "KnowledgeDomain",
@@ -40,12 +43,14 @@ __all__ = [
     "KnowledgeIngestStatus", "KnowledgeInvite", "KnowledgeMemory", "KnowledgeMemoryKind",
     "KnowledgeMemoryStatus", "KnowledgeNode", "KnowledgeNodeMention", "KnowledgeNote",
     "KnowledgePendingAttachment",
-    "KnowledgeRelation", "KnowledgeSemanticRun", "KnowledgeSensitivity", "KnowledgeSource",
+    "KnowledgeRelation", "KnowledgeSemanticRun", "KnowledgeSemanticWindow",
+    "KnowledgeSensitivity", "KnowledgeSource",
     "KnowledgeStatus",
     "KnowledgeTrust", "KnowledgeUser", "KnowledgeUserRole", "KnowledgeUserStatus",
     "KnowledgeUserUsage", "MetricPoint", "ModelRun", "OutboxMessage",
     "PanelEnrollmentToken", "PanelSession", "PanelStepUpChallenge", "Routine",
     "SemanticDatePrecision", "SemanticEvidenceType", "SemanticNodeKind",
     "SemanticNodeStatus", "SemanticRelationType", "SemanticRunStatus",
+    "SemanticWindowStatus", "TERMINAL_WINDOW_STATUSES",
     "Task", "TaskEvent", "TaskStatus", "WebauthnCredential", "utcnow",
 ]

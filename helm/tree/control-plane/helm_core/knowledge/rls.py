@@ -26,6 +26,9 @@ TENANT_SCOPED_TABLES = (
     # соседа», а не служебная телеметрия.
     "knowledge_semantic_runs", "knowledge_nodes", "knowledge_node_mentions",
     "knowledge_edges", "knowledge_entity_aliases",
+    # R3 (§14.4.1). Окно не хранит текста, но хранит путь заголовков и
+    # границы — по ним видно, из чего состоит чужой документ.
+    "knowledge_semantic_windows",
 )
 
 POLICY_NAME = "knowledge_tenant_isolation"

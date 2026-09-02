@@ -31,8 +31,8 @@ from .base import (
     ApprovalStatus, Base, KnowledgeBatchItemStatus, KnowledgeBatchStatus, KnowledgeIngestStatus,
     KnowledgeMemoryStatus, KnowledgeStatus, KnowledgeUserStatus, NODE_KINDS_WITHOUT_RUN,
     SemanticDatePrecision, SemanticEvidenceType, SemanticNodeKind, SemanticNodeStatus,
-    SemanticRelationType, SemanticRunStatus, TaskStatus, sql_enum_values, ts_column, utcnow,
-    uuid_pk,
+    SemanticRelationType, SemanticRunStatus, SemanticWindowStatus, TaskStatus,
+    sql_enum_values, ts_column, utcnow, uuid_pk,
 )
 
 #: Виды узлов, которым ревизия не обязательна (§14.5 + решение
@@ -1197,4 +1197,65 @@ class KnowledgeSemanticRun(Base):
         CheckConstraint(f"status IN ({sql_enum_values(SemanticRunStatus)})",
                         name="status"),
         Index("ix_knowledge_semantic_runs_source", "source_id", "semantic_version"),
+    )
+
+
+class KnowledgeSemanticWindow(Base):
+    """§14.4.1 `knowledge_semantic_windows` — окно обработки источника.
+
+    Без этой таблицы главное требование §14.4.1 — «100% окон должны
+    стать терминальными» — нечем проверить: счётчиков на прогоне хватает
+    на «сколько», но не на «какие именно» и не на «почему это окно
+    ничего не дало». Ровно этой разницы и не было в semantic-v1, где
+    непокрытый хвост документа выглядел так же, как пустой.
+
+    Текст окна ЗДЕСЬ НЕ ХРАНИТСЯ. Он и так есть в L1 SOURCE, а по
+    `char_start`/`char_end` восстанавливается точно; дублировать его
+    значило бы завести вторую копию содержимого источника — в том числе
+    health — там, где нужны только границы и хэш.
+    """
+
+    __tablename__ = "knowledge_semantic_windows"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_users.id"), nullable=False)
+    semantic_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_semantic_runs.id"), nullable=False)
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_sources.id"), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: Родитель для окна, полученного делением переполненного (§14.4.1).
+    #: По нему видно, что деление было, — иначе «окон стало больше»
+    #: выглядело бы как другое разбиение того же текста.
+    parent_window_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_semantic_windows.id"))
+    char_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    char_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: Путь заголовков, по которому окно найдено. Для health это часть
+    #: содержимого («Анализы» → «Биохимия» уже говорит о теме), поэтому
+    #: в health-зеркале живёт в отдельной схеме.
+    heading_path: Mapped[str | None] = mapped_column(Text)
+    text_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), default=SemanticWindowStatus.PENDING, nullable=False)
+    nodes_created: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    edges_created: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    #: Сколько записей ответа отброшено проверкой. §14.4.1 требует
+    #: отличать «нечего извлекать» от «вернули мусор»; ноль узлов при
+    #: ненулевом счётчике — это второе.
+    rejected_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    #: §14.4.1: «A PROCESSED window stores a result hash/count even when
+    #: it produced zero nodes». Хэш ответа, а не самого ответа: повтор
+    #: того же разбора узнаётся, содержимое не дублируется.
+    result_hash: Mapped[str | None] = mapped_column(String(64))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(f"status IN ({sql_enum_values(SemanticWindowStatus)})", name="status"),
+        CheckConstraint("char_end > char_start", name="span_not_empty"),
+        UniqueConstraint("semantic_run_id", "ordinal", name="uq_knowledge_semantic_windows_run_ordinal"),
+        Index("ix_knowledge_semantic_windows_run_status", "semantic_run_id", "status"),
+        Index("ix_knowledge_semantic_windows_source", "source_id"),
     )

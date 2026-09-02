@@ -40,8 +40,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from .base import (
     NAMING_CONVENTION, KnowledgeStatus, SemanticDatePrecision, SemanticEvidenceType,
-    SemanticNodeKind, SemanticNodeStatus, SemanticRelationType, ts_column, utcnow,
-    sql_enum_values,
+    SemanticNodeKind, SemanticNodeStatus, SemanticRelationType, SemanticWindowStatus,
+    ts_column, utcnow, sql_enum_values,
 )
 from .tables import _KINDS_WITHOUT_RUN_SQL, KNOWLEDGE_EMBED_DIM
 
@@ -350,4 +350,50 @@ class HealthKnowledgeEntityAlias(HealthBase):
                          name="uq_health_knowledge_entity_aliases_node_alias"),
         Index("ix_health_knowledge_entity_aliases_lookup",
               "knowledge_user_id", "normalized_alias"),
+    )
+
+
+class HealthKnowledgeSemanticWindow(HealthBase):
+    """Зеркало `KnowledgeSemanticWindow` (§14.4.1) для health.
+
+    Зеркалится ради ОДНОГО поля: `heading_path`. «Анализы и обследования»
+    → «Биохимический анализ крови» — уже медицинская информация, ровно
+    того рода, ради которой заведена схема; остальное здесь — границы,
+    хэши и счётчики.
+
+    `semantic_run_id` без внешнего ключа: прогон живёт в public, куда
+    `helm_health` не имеет прав. Та же причина, что у `source_id`
+    сайдкара.
+    """
+
+    __tablename__ = "knowledge_semantic_windows"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    semantic_run_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("health.knowledge_source_private.source_id"), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    parent_window_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("health.knowledge_semantic_windows.id"))
+    char_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    char_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    heading_path: Mapped[str | None] = mapped_column(Text)
+    text_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), default=SemanticWindowStatus.PENDING, nullable=False)
+    nodes_created: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    edges_created: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    rejected_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    result_hash: Mapped[str | None] = mapped_column(String(64))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(f"status IN ({sql_enum_values(SemanticWindowStatus)})", name="status"),
+        CheckConstraint("char_end > char_start", name="span_not_empty"),
+        UniqueConstraint("semantic_run_id", "ordinal",
+                         name="uq_health_knowledge_semantic_windows_run_ordinal"),
+        Index("ix_health_knowledge_semantic_windows_run_status", "semantic_run_id", "status"),
+        Index("ix_health_knowledge_semantic_windows_source", "source_id"),
     )

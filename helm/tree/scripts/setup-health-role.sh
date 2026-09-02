@@ -278,6 +278,37 @@ CREATE TABLE IF NOT EXISTS health.knowledge_entity_aliases (
 CREATE INDEX IF NOT EXISTS ix_health_knowledge_entity_aliases_lookup
   ON health.knowledge_entity_aliases (knowledge_user_id, normalized_alias);
 
+-- Окна обработки (§14.4.1, R3). Зеркалятся ради heading_path: «Анализы
+-- и обследования» → «Биохимический анализ крови» уже медицинская
+-- информация. Текст окна не хранится ни здесь, ни в public — он есть в
+-- L1 SOURCE и восстанавливается по границам.
+CREATE TABLE IF NOT EXISTS health.knowledge_semantic_windows (
+  id uuid PRIMARY KEY,
+  knowledge_user_id uuid NOT NULL,
+  -- Без REFERENCES: прогон живёт в public, прав туда у helm_health нет.
+  semantic_run_id uuid NOT NULL,
+  source_id uuid NOT NULL REFERENCES health.knowledge_source_private(source_id),
+  ordinal integer NOT NULL,
+  parent_window_id uuid REFERENCES health.knowledge_semantic_windows(id),
+  char_start integer NOT NULL,
+  char_end integer NOT NULL,
+  heading_path text,
+  text_hash varchar(64) NOT NULL,
+  status varchar(16) NOT NULL DEFAULT 'pending',
+  nodes_created integer NOT NULL DEFAULT 0,
+  edges_created integer NOT NULL DEFAULT 0,
+  rejected_count integer NOT NULL DEFAULT 0,
+  result_hash varchar(64),
+  error_code varchar(64),
+  created_at timestamptz NOT NULL,
+  CONSTRAINT uq_health_knowledge_semantic_windows_run_ordinal
+    UNIQUE (semantic_run_id, ordinal)
+);
+CREATE INDEX IF NOT EXISTS ix_health_knowledge_semantic_windows_run_status
+  ON health.knowledge_semantic_windows (semantic_run_id, status);
+CREATE INDEX IF NOT EXISTS ix_health_knowledge_semantic_windows_source
+  ON health.knowledge_semantic_windows (source_id);
+
 -- Закрытые реестры и цикл ревизии — те же, что в public (R2-hardening,
 -- §14.5/§14.9). Отдельным блоком, а не в CREATE TABLE выше: таблицы уже
 -- созданы прошлым прогоном без ограничений, а `CREATE TABLE IF NOT
@@ -307,7 +338,11 @@ DECLARE
     ['knowledge_edges', 'ck_knowledge_edges_status',
      'status IN (''active'', ''disabled'', ''superseded'', ''quarantine'', ''deleted'')'],
     ['knowledge_edges', 'ck_knowledge_edges_run_required_for_derived',
-     'semantic_run_id IS NOT NULL OR evidence_type = ''owner_explicit''']
+     'semantic_run_id IS NOT NULL OR evidence_type = ''owner_explicit'''],
+    ['knowledge_semantic_windows', 'ck_knowledge_semantic_windows_status',
+     'status IN (''pending'', ''processed'', ''no_knowledge'', ''split'', ''failed'')'],
+    ['knowledge_semantic_windows', 'ck_knowledge_semantic_windows_span_not_empty',
+     'char_end > char_start']
   ];
   i int;
 BEGIN
@@ -335,7 +370,7 @@ SQL
 echo "== RLS на health.* (тот же предикат, что ADR-030) =="
 for table in knowledge_source_private knowledge_chunks knowledge_relations \
              knowledge_notes knowledge_nodes knowledge_node_mentions \
-             knowledge_edges knowledge_entity_aliases; do
+             knowledge_edges knowledge_entity_aliases knowledge_semantic_windows; do
   sudo docker exec -i helm-postgres-1 psql -U helm -d helm -v ON_ERROR_STOP=1 <<SQL
 ALTER TABLE health.$table ENABLE ROW LEVEL SECURITY;
 ALTER TABLE health.$table FORCE ROW LEVEL SECURITY;
@@ -364,7 +399,7 @@ sudo docker exec -i helm-postgres-1 psql -U helm -d helm -tAc \
   "select has_schema_privilege('helm_app', 'health', 'USAGE')"
 for table in knowledge_source_private knowledge_chunks knowledge_relations \
              knowledge_notes knowledge_nodes knowledge_node_mentions \
-             knowledge_edges knowledge_entity_aliases; do
+             knowledge_edges knowledge_entity_aliases knowledge_semantic_windows; do
   granted=$(sudo docker exec -i helm-postgres-1 psql -U helm -d helm -tAc \
     "select has_table_privilege('helm_app', 'health.$table', 'SELECT')")
   echo "  health.$table: $granted"

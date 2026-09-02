@@ -366,6 +366,40 @@ class SemanticRelationType(enum.StrEnum):
     RELATED_TO = "related_to"
 
 
+class SemanticWindowStatus(enum.StrEnum):
+    """§14.4.1 `knowledge_semantic_windows.status`.
+
+    Спека называет три терминальных состояния — PROCESSED, NO_KNOWLEDGE,
+    FAILED — и отдельно описывает TRUNCATED: окно, упёршееся в потолок
+    атомов, «автоматически делится/перезапускается». Деление здесь не
+    состояние, а событие: родитель получает SPLIT и перестаёт быть
+    работой, работу несут дети.
+
+    SPLIT сделан терминальным намеренно. «100% окон терминальны» — это
+    проверка полноты разбора, и родитель, навсегда застрявший в
+    промежуточном состоянии, делал бы её невыполнимой при каждом
+    делении.
+
+    PROCESSED против NO_KNOWLEDGE — не оттенок: §14.4.1 требует, чтобы
+    «во фрагменте нечего извлекать» отличалось от «модель вернула
+    неполный объект, и мы это проглотили». Поэтому у PROCESSED всегда
+    есть `result_hash` и счётчики, даже когда узлов ноль.
+    """
+
+    PENDING = "pending"
+    PROCESSED = "processed"
+    NO_KNOWLEDGE = "no_knowledge"
+    SPLIT = "split"
+    FAILED = "failed"
+
+
+#: Окно в любом из этих состояний больше не ждёт работы.
+TERMINAL_WINDOW_STATUSES = frozenset({
+    SemanticWindowStatus.PROCESSED, SemanticWindowStatus.NO_KNOWLEDGE,
+    SemanticWindowStatus.SPLIT, SemanticWindowStatus.FAILED,
+})
+
+
 class SemanticRunStatus(enum.StrEnum):
     """§14.5 `knowledge_semantic_runs.status`.
 
