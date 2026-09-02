@@ -119,6 +119,36 @@ def query_hash(query: str) -> str:
     return hashlib.sha256(query.strip().casefold().encode("utf-8")).hexdigest()
 
 
+def _apply_domain_filter(stmt, domain: str | None):
+    """Доменный фильтр public-пути, общий для лексики и векторов.
+
+    Решение владельца 01.09.2026: все домены, включая health, отвечают в
+    общем бесплатном поиске — второй мозг не имеет смысла, если владелец
+    обязан помнить явный синтаксис домена для собственных же данных.
+
+    Из общего поиска исключены ровно два случая, и по разным причинам:
+
+    `simpas/zapiski` — клиентский контент чужих людей, спека прямо
+    требует "not indexed into general namespaces" (P8.5.7,
+    `chat_intake.py` форсирует `client_restricted` при ingest). Это
+    защита приватности КЛИЕНТА, а не организационное неудобство.
+
+    `health` при настроенной health-схеме — не про доступ, а про то,
+    чтобы не ответить дважды одним и тем же. Общий вопрос ходит в обе
+    схемы (`probe()`), а во время миграции R1 один и тот же чанк
+    физически лежит и в `public`, и в `health`: без этого исключения он
+    занял бы два слота из пяти. Когда health-схема не настроена,
+    health-текст живёт только в public — и тогда исключать его нельзя,
+    иначе корпус погаснет.
+    """
+    if domain is not None:
+        return stmt.where(KnowledgeSource.domain == domain)
+    excluded = [KnowledgeDomain.SIMPAS_ZAPISKI]
+    if health_schema_configured():
+        excluded.append(KnowledgeDomain.HEALTH)
+    return stmt.where(KnowledgeSource.domain.notin_(excluded))
+
+
 def _lexical_search(session: Session, *, query: str, domain: str | None,
                     knowledge_user_id: uuid.UUID) -> list[Evidence]:
     # plainto_tsquery AND-combines all stems ('как' & 'решен' & 'приня') —
@@ -146,16 +176,7 @@ def _lexical_search(session: Session, *, query: str, domain: str | None,
         .order_by(rank.desc())
         .limit(MAX_EVIDENCE)
     )
-    # Решение владельца 01.09.2026: все домены, включая health, отвечают
-    # в общем бесплатном поиске — второй мозг не имеет смысла, если
-    # владелец обязан помнить явный синтаксис домена для собственных же
-    # данных. Единственное оставшееся исключение — simpas/zapiski,
-    # клиентский контент чужих людей: спека прямо требует "not indexed
-    # into general namespaces" (P8.5.7, chat_intake.py форсирует
-    # client_restricted при ingest) — это защита приватности КЛИЕНТА, не
-    # организационное неудобство, поэтому не отменяется вместе с health.
-    stmt = (stmt.where(KnowledgeSource.domain == domain) if domain is not None
-           else stmt.where(KnowledgeSource.domain != KnowledgeDomain.SIMPAS_ZAPISKI))
+    stmt = _apply_domain_filter(stmt, domain)
 
     rows = session.execute(stmt).all()
     return [
@@ -181,11 +202,7 @@ def _vector_search(session: Session, *, query_embedding: list[float], domain: st
         .order_by(similarity.desc())
         .limit(MAX_EVIDENCE)
     )
-    # То же исключение simpas/zapiski, что уже применяет _lexical_search
-    # (см. её комментарий) — health в общем поиске участвует наравне со
-    # всеми остальными доменами.
-    stmt = (stmt.where(KnowledgeSource.domain == domain) if domain is not None
-           else stmt.where(KnowledgeSource.domain != KnowledgeDomain.SIMPAS_ZAPISKI))
+    stmt = _apply_domain_filter(stmt, domain)
 
     rows = session.execute(stmt).all()
     return [

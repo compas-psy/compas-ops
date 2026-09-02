@@ -21,7 +21,7 @@ import uuid
 from dataclasses import dataclass
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
 from helm_core.config import get_settings
 from helm_core.knowledge import atomizer
@@ -361,6 +361,31 @@ def test_probe_general_query_finds_health_chunk_after_move_to_sidecar(
     result = probe(session, query="что там с анализом крови", knowledge_user_id=user.id)
 
     assert result.outcome == "LOCAL_ANSWER"
+
+
+def test_probe_general_query_does_not_answer_health_twice_during_migration(
+        session, health_configured, user):
+    """Окно миграции R1: чанк уже скопирован в health-схему, но из public
+    ещё не удалён (решение владельца — удаляем только после успешного
+    бэкапа). Общий вопрос идёт в ОБЕ схемы, и без исключения health из
+    public-пути один и тот же текст вернулся бы дважды, съев два слота
+    из пяти доступных доказательств."""
+    source = ingest_text(session, domain="health",
+                         text="Анализ крови показал дефицит железа.",
+                         knowledge_user_id=user.id)
+    session.flush()
+    # То, что физически лежит в public у всех 90 живых health-источников.
+    session.add(KnowledgeChunk(
+        knowledge_user_id=user.id, source_id=source.id, ordinal=0,
+        text="Анализ крови показал дефицит железа.",
+        tsv=func.to_tsvector("russian", "Анализ крови показал дефицит железа."),
+    ))
+    session.flush()
+
+    result = probe(session, query="что там с анализом крови", knowledge_user_id=user.id)
+
+    assert result.outcome == "LOCAL_ANSWER"
+    assert len(result.evidence) == 1
 
 
 def test_probe_general_query_still_excludes_zapiski_client_content(
