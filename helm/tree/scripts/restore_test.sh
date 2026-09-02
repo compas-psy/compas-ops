@@ -145,8 +145,12 @@ fi
 q() {
   # Единственный способ обратиться к восстановленной базе. Падение psql
   # завершает тест, а не теряется в подоболочке.
+  # `< /dev/null` — чтобы запрос никогда не съел stdin вызывающего кода.
+  # Здесь цикл читает из файла и q() внутри него не вызывается, но именно
+  # так дефект и появляется: сначала не нужно, потом кто-то добавит вызов.
   if ! docker exec "$TEST_CONTAINER" psql -U postgres -d helm -tA \
-       -v ON_ERROR_STOP=1 -c "$1" > "$HEALTH_TMP/q.out" 2> "$HEALTH_TMP/q.err"; then
+       -v ON_ERROR_STOP=1 -c "$1" > "$HEALTH_TMP/q.out" 2> "$HEALTH_TMP/q.err" \
+       < /dev/null; then
     echo "FAIL: запрос к восстановленной базе не выполнился" >&2
     sed 's/^/    /' "$HEALTH_TMP/q.err" >&2
     exit 1

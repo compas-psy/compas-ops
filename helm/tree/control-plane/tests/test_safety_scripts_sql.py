@@ -150,6 +150,50 @@ def test_heredoc_sql_reaches_the_database(script: Path) -> None:
             )
 
 
+@pytest.mark.parametrize("script", SAFETY_SCRIPTS, ids=lambda p: p.name)
+def test_query_helpers_do_not_steal_stdin(script: Path) -> None:
+    """Обёртка над psql не должна читать stdin вызывающего кода.
+
+    НАЙДЕНО 02.09.2026 (прогон #155). `docker exec -i` читает stdin. Такой
+    вызов внутри `while read ... done < файл` съедает остаток файла: цикл
+    отрабатывает одну итерацию из девяноста, счётчики пропаж честно равны
+    нулю, и проверка выглядит пройденной («оригиналов 1 из 90»).
+
+    Правило именно про функции-обёртки, а не про любой вызов psql:
+    обёртку зовут отовсюду, в том числе из цикла, и место вызова из её
+    определения не видно. Разовый вызов вне цикла безопасен и правилом не
+    затрагивается — иначе тест начал бы требовать `/dev/null` там, где он
+    ничего не значит, и его перестали бы читать.
+
+    Исключение — обёртка-передатчик (`"$@"` без `-c`): ей stdin передают
+    намеренно, heredoc'ом.
+    """
+    text = _code(script)
+    lines = text.splitlines()
+    bodies: list[tuple[int, str]] = []
+    i = 0
+    while i < len(lines):
+        if re.match(r"^\s*\w+\(\)\s*\{", lines[i]):
+            depth = lines[i].count("{") - lines[i].count("}")
+            body = [lines[i]]
+            start_line = i + 1
+            while depth > 0 and i + 1 < len(lines):
+                i += 1
+                body.append(lines[i])
+                depth += lines[i].count("{") - lines[i].count("}")
+            bodies.append((start_line, "\n".join(body)))
+        i += 1
+
+    for start_line, body in bodies:
+        if "psql" not in body or not re.search(r"-\w*c\s", body):
+            continue
+        assert "/dev/null" in body, (
+            f"{script.name}:{start_line}: обёртка над psql получает запрос "
+            "аргументом и не закрывает себе stdin. Вызванная из цикла, она "
+            "съест читаемый файл — добавьте `< /dev/null`."
+        )
+
+
 def test_restore_test_marks_success_only_after_every_check() -> None:
     """`touch last-restore-test` обязан быть последним действием.
 
