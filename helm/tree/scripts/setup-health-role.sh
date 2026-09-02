@@ -175,39 +175,125 @@ CREATE TABLE IF NOT EXISTS health.knowledge_notes (
   CONSTRAINT uq_health_knowledge_notes_user_slug UNIQUE (knowledge_user_id, slug)
 );
 
+-- semantic-v2 (v4.0 §14.5, "private equivalents/adapters under health
+-- schema"). Зеркалятся четыре таблицы из пяти: knowledge_semantic_runs
+-- остаётся только в public, в ней нет ни одного поля с содержимым
+-- источника — счётчики окон, имя модели, её отпечаток. Тот же довод, по
+-- которому конверт public.knowledge_sources един для всех доменов.
+--
+-- Чувствительное здесь — canonical_label ("визит к гастроэнтерологу"),
+-- normalized_key, subtype, alias ("Безручко Д.Ю.") и role у ребра: те
+-- же "health entities/topics", ради которых сюда уехали
+-- knowledge_relations и knowledge_notes.
+--
+-- semantic_run_id без REFERENCES: прогон живёт в public, а helm_health
+-- не имеет там никаких прав. Та же причина, что у source_id сайдкара.
+CREATE TABLE IF NOT EXISTS health.knowledge_nodes (
+  id uuid PRIMARY KEY,
+  knowledge_user_id uuid NOT NULL,
+  kind varchar(16) NOT NULL,
+  subtype varchar(64),
+  canonical_label text NOT NULL,
+  normalized_key text,
+  primary_domain_id uuid,
+  security_scope varchar(32) NOT NULL DEFAULT 'internal',
+  occurred_at_start timestamptz,
+  occurred_at_end timestamptz,
+  date_precision varchar(8),
+  valid_from timestamptz,
+  valid_to timestamptz,
+  status varchar(16) NOT NULL DEFAULT 'active',
+  markdown_path text,
+  semantic_run_id uuid,
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_health_knowledge_nodes_user_kind
+  ON health.knowledge_nodes (knowledge_user_id, kind);
+CREATE INDEX IF NOT EXISTS ix_health_knowledge_nodes_resolution
+  ON health.knowledge_nodes (knowledge_user_id, kind, subtype, normalized_key);
+CREATE INDEX IF NOT EXISTS ix_health_knowledge_nodes_run
+  ON health.knowledge_nodes (semantic_run_id);
+
+CREATE TABLE IF NOT EXISTS health.knowledge_node_mentions (
+  id uuid PRIMARY KEY,
+  knowledge_user_id uuid NOT NULL,
+  node_id uuid NOT NULL REFERENCES health.knowledge_nodes(id),
+  source_id uuid NOT NULL REFERENCES health.knowledge_source_private(source_id),
+  window_id integer,
+  chunk_id uuid REFERENCES health.knowledge_chunks(id),
+  page integer,
+  time_start_ms integer,
+  time_end_ms integer,
+  char_start integer,
+  char_end integer,
+  evidence_text_hash varchar(64),
+  evidence_type varchar(16) NOT NULL,
+  confidence numeric(4,3),
+  semantic_run_id uuid,
+  created_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_health_knowledge_node_mentions_node
+  ON health.knowledge_node_mentions (node_id);
+CREATE INDEX IF NOT EXISTS ix_health_knowledge_node_mentions_source
+  ON health.knowledge_node_mentions (source_id);
+CREATE INDEX IF NOT EXISTS ix_health_knowledge_node_mentions_run
+  ON health.knowledge_node_mentions (semantic_run_id);
+
+CREATE TABLE IF NOT EXISTS health.knowledge_edges (
+  id uuid PRIMARY KEY,
+  knowledge_user_id uuid NOT NULL,
+  from_node_id uuid NOT NULL REFERENCES health.knowledge_nodes(id),
+  to_node_id uuid NOT NULL REFERENCES health.knowledge_nodes(id),
+  relation_type varchar(32) NOT NULL,
+  role varchar(64),
+  source_id uuid REFERENCES health.knowledge_source_private(source_id),
+  mention_id uuid REFERENCES health.knowledge_node_mentions(id),
+  evidence_node_id uuid REFERENCES health.knowledge_nodes(id),
+  evidence_type varchar(16) NOT NULL,
+  confidence numeric(4,3),
+  status varchar(16) NOT NULL DEFAULT 'active',
+  semantic_run_id uuid,
+  created_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_health_knowledge_edges_from
+  ON health.knowledge_edges (from_node_id, relation_type);
+CREATE INDEX IF NOT EXISTS ix_health_knowledge_edges_to
+  ON health.knowledge_edges (to_node_id, relation_type);
+CREATE INDEX IF NOT EXISTS ix_health_knowledge_edges_run
+  ON health.knowledge_edges (semantic_run_id);
+
+CREATE TABLE IF NOT EXISTS health.knowledge_entity_aliases (
+  id uuid PRIMARY KEY,
+  knowledge_user_id uuid NOT NULL,
+  entity_node_id uuid NOT NULL REFERENCES health.knowledge_nodes(id),
+  alias text NOT NULL,
+  normalized_alias text NOT NULL,
+  source_id uuid REFERENCES health.knowledge_source_private(source_id),
+  confidence numeric(4,3),
+  created_at timestamptz NOT NULL,
+  CONSTRAINT uq_health_knowledge_entity_aliases_node_alias
+    UNIQUE (knowledge_user_id, entity_node_id, normalized_alias)
+);
+CREATE INDEX IF NOT EXISTS ix_health_knowledge_entity_aliases_lookup
+  ON health.knowledge_entity_aliases (knowledge_user_id, normalized_alias);
+
 RESET ROLE;
 SQL
 
 echo "== RLS на health.* (тот же предикат, что ADR-030) =="
-sudo docker exec -i helm-postgres-1 psql -U helm -d helm -v ON_ERROR_STOP=1 <<'SQL'
-ALTER TABLE health.knowledge_source_private ENABLE ROW LEVEL SECURITY;
-ALTER TABLE health.knowledge_source_private FORCE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS knowledge_tenant_isolation ON health.knowledge_source_private;
-CREATE POLICY knowledge_tenant_isolation ON health.knowledge_source_private
-  USING (knowledge_user_id = NULLIF(current_setting('app.current_knowledge_user_id', true), '')::uuid)
-  WITH CHECK (knowledge_user_id = NULLIF(current_setting('app.current_knowledge_user_id', true), '')::uuid);
-
-ALTER TABLE health.knowledge_chunks ENABLE ROW LEVEL SECURITY;
-ALTER TABLE health.knowledge_chunks FORCE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS knowledge_tenant_isolation ON health.knowledge_chunks;
-CREATE POLICY knowledge_tenant_isolation ON health.knowledge_chunks
-  USING (knowledge_user_id = NULLIF(current_setting('app.current_knowledge_user_id', true), '')::uuid)
-  WITH CHECK (knowledge_user_id = NULLIF(current_setting('app.current_knowledge_user_id', true), '')::uuid);
-
-ALTER TABLE health.knowledge_relations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE health.knowledge_relations FORCE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS knowledge_tenant_isolation ON health.knowledge_relations;
-CREATE POLICY knowledge_tenant_isolation ON health.knowledge_relations
-  USING (knowledge_user_id = NULLIF(current_setting('app.current_knowledge_user_id', true), '')::uuid)
-  WITH CHECK (knowledge_user_id = NULLIF(current_setting('app.current_knowledge_user_id', true), '')::uuid);
-
-ALTER TABLE health.knowledge_notes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE health.knowledge_notes FORCE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS knowledge_tenant_isolation ON health.knowledge_notes;
-CREATE POLICY knowledge_tenant_isolation ON health.knowledge_notes
+for table in knowledge_source_private knowledge_chunks knowledge_relations \
+             knowledge_notes knowledge_nodes knowledge_node_mentions \
+             knowledge_edges knowledge_entity_aliases; do
+  sudo docker exec -i helm-postgres-1 psql -U helm -d helm -v ON_ERROR_STOP=1 <<SQL
+ALTER TABLE health.$table ENABLE ROW LEVEL SECURITY;
+ALTER TABLE health.$table FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS knowledge_tenant_isolation ON health.$table;
+CREATE POLICY knowledge_tenant_isolation ON health.$table
   USING (knowledge_user_id = NULLIF(current_setting('app.current_knowledge_user_id', true), '')::uuid)
   WITH CHECK (knowledge_user_id = NULLIF(current_setting('app.current_knowledge_user_id', true), '')::uuid);
 SQL
+done
 
 echo "== проверка: helm_health не видит public, не суперпользователь =="
 sudo docker exec -i helm-postgres-1 psql -U helm -d helm -tAc \
@@ -217,16 +303,22 @@ sudo docker exec -i helm-postgres-1 psql -U helm -d helm -tAc \
 sudo docker exec -i helm-postgres-1 psql -U helm -d helm -tAc \
   "select tablename, tableowner from pg_tables where schemaname = 'health'"
 
-echo "== проверка: helm_app НЕ может читать health.* (ожидается ошибка/false) =="
+# Проверка ниже — не отчёт, а условие. Печатать `t` и завершаться словом
+# SETUP DONE значит сказать «health-изоляция готова» ровно в том случае,
+# когда её нет. Пока таблиц было четыре, это было видно глазами; с
+# восемью — уже нет.
+echo "== проверка: helm_app НЕ может читать health.* (ожидается false везде) =="
+leak=0
 sudo docker exec -i helm-postgres-1 psql -U helm -d helm -tAc \
   "select has_schema_privilege('helm_app', 'health', 'USAGE')"
-sudo docker exec -i helm-postgres-1 psql -U helm -d helm -tAc \
-  "select has_table_privilege('helm_app', 'health.knowledge_source_private', 'SELECT')"
-sudo docker exec -i helm-postgres-1 psql -U helm -d helm -tAc \
-  "select has_table_privilege('helm_app', 'health.knowledge_chunks', 'SELECT')"
-sudo docker exec -i helm-postgres-1 psql -U helm -d helm -tAc \
-  "select has_table_privilege('helm_app', 'health.knowledge_relations', 'SELECT')"
-sudo docker exec -i helm-postgres-1 psql -U helm -d helm -tAc \
-  "select has_table_privilege('helm_app', 'health.knowledge_notes', 'SELECT')"
+for table in knowledge_source_private knowledge_chunks knowledge_relations \
+             knowledge_notes knowledge_nodes knowledge_node_mentions \
+             knowledge_edges knowledge_entity_aliases; do
+  granted=$(sudo docker exec -i helm-postgres-1 psql -U helm -d helm -tAc \
+    "select has_table_privilege('helm_app', 'health.$table', 'SELECT')")
+  echo "  health.$table: $granted"
+  [ "$granted" = "f" ] || leak=$((leak + 1))
+done
+[ "$leak" -eq 0 ] || { echo "::error::helm_app имеет SELECT на $leak health-таблиц"; exit 1; }
 
 echo "SETUP DONE"

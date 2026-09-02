@@ -349,11 +349,38 @@ def store_notes(session: Session, *, domain: str, knowledge_user_id: uuid.UUID |
 def atomize_and_store(session: Session, *, domain: str, knowledge_user_id: uuid.UUID | None,
                       source_id: uuid.UUID, source_sha256: str, text: str,
                       vault_root: str) -> int:
-    """Точка входа для `ingest.py`/`worker.py` — вызывается ПОСЛЕ уже
-    существующего `store_relations()` для сырого текста источника
-    (owner-написанные wikilinks/frontmatter продолжают работать как
-    раньше, этот вызов только добавляет L2-слой поверх)."""
-    atoms = atomize_or_empty(text, domain=domain)
-    return store_notes(session, domain=domain, knowledge_user_id=knowledge_user_id,
-                       source_id=source_id, source_sha256=source_sha256, atoms=atoms,
-                       vault_root=vault_root)
+    """Точка входа для `ingest.py`/`worker.py`. На время rescue не пишет
+    ничего и возвращает 0.
+
+    v4.0, шаг R2: «Legacy semantic-v1 remains quarantined/read-only
+    during migration». Причина не в том, что слой v1 плох в целом, а в
+    двух конкретных вещах, названных спекой нарушениями прямо:
+
+    - `store_notes()` ниже дописывает текст второго источника в заметку
+      первого по совпадению `slug` — §14.23 «merging all text about same
+      slug into one growing entity file», §14.6 «forbidden for v4 source
+      facts/events»: так теряется происхождение утверждения и склеиваются
+      однофамильцы;
+    - связи, порождённые моделью, уезжают в `knowledge_relations` с
+      `evidence_type = explicit_link` — §14.23 «labeling model-generated
+      links OWNER_EXPLICIT/explicit_link as if owner wrote them».
+
+    Пока это работало на каждом ingest, корпус v1 продолжал расти именно
+    тем способом, который R3 обязан заменить. Замораживается здесь, в
+    одной точке, а не удалением вызовов из `ingest.py`/`worker.py`:
+    писателя графа v2 ещё нет, и место, куда он встанет, должно остаться
+    там же, где было.
+
+    Что при этом НЕ выключено: слой 1 (`store_relations()` по
+    wikilink'ам, написанным владельцем), чанки, эмбеддинги, поиск. Ни
+    один ответ сегодня не читает `knowledge_notes` — заморозка не
+    отнимает у владельца ни одного ответа, только перестаёт копить
+    недоверенные данные и зря звать модель на каждом ingest.
+
+    Снимается в R3 вместе с заменой контракта вывода (§14.24
+    «Refactor/replace: atomizer.py output contract, KnowledgeNote
+    merge-by-slug semantics»).
+    """
+    logger.debug("semantic-v1 заморожен на время rescue (R2), источник %s не атомизируется",
+                 source_id)
+    return 0

@@ -234,3 +234,115 @@ class KnowledgeMemoryStatus(enum.StrEnum):
     SUPERSEDED = "SUPERSEDED"
     EXPIRED = "EXPIRED"
     DELETED = "DELETED"
+
+
+# ── semantic-v2 (v4.0 §14.5-§14.9) ────────────────────────────────────
+#
+# Отдельный слой от KnowledgeNote/KnowledgeRelation. Те остаются как
+# semantic-v1 и по §14.5 «may coexist during rescue»: миграция
+# аддитивная и обратимая до R10, старые таблицы не удаляются.
+
+
+class SemanticNodeKind(enum.StrEnum):
+    """§14.5 `knowledge_nodes.kind`.
+
+    Ключевое различие — §14.6: ENTITY это ТОЛЬКО личность («врач
+    Безручко»), а EVENT/FACT/DECISION/CONCEPT — утверждения, привязанные
+    к источнику. Слияние второго в первое по совпадению имени и есть
+    дефект semantic-v1, из-за которого «врач» и «всё, что про врача»
+    оказывались одной растущей заметкой.
+    """
+
+    ENTITY = "entity"
+    EVENT = "event"
+    FACT = "fact"
+    DECISION = "decision"
+    CONCEPT = "concept"
+    DOCUMENT_REF = "document_ref"
+    MEMORY_REF = "memory_ref"
+
+
+class SemanticNodeStatus(enum.StrEnum):
+    """§14.5 `knowledge_nodes.status`.
+
+    QUARANTINE — для узлов semantic-v1, которые §14.22 запрещает считать
+    каноническими: они не удаляются, но и не участвуют в ответах.
+    """
+
+    ACTIVE = "active"
+    DISABLED = "disabled"
+    SUPERSEDED = "superseded"
+    QUARANTINE = "quarantine"
+    DELETED = "deleted"
+
+
+class SemanticDatePrecision(enum.StrEnum):
+    """§14.8. Отсутствие точности — не то же самое, что отсутствие даты.
+
+    «в августе» и «19.08.2026» обязаны различаться структурно, иначе
+    вопрос «что было в этом году» перестаёт быть запросом к графу. При
+    неразрешимой относительной дате спека требует UNKNOWN и сохранение
+    текстовой подсказки — выдумывать точную дату запрещено.
+    """
+
+    DAY = "day"
+    MONTH = "month"
+    YEAR = "year"
+    UNKNOWN = "unknown"
+
+
+class SemanticEvidenceType(enum.StrEnum):
+    """§14.9 «Evidence semantics».
+
+    Разница между EXTRACTED и OWNER_EXPLICIT — не оттенок: пометить
+    машинную связь как написанную владельцем прямо названо нарушением
+    (§14.23). Именно это делал semantic-v1, ставя `explicit_link` всему
+    подряд.
+    """
+
+    OWNER_EXPLICIT = "owner_explicit"
+    EXTRACTED = "extracted"
+    INFERRED = "inferred"
+
+
+class SemanticRelationType(enum.StrEnum):
+    """§14.9, «Minimum core». Реестр закрыт намеренно.
+
+    Модель не изобретает типы связей: неизвестный тип нормализуется к
+    реестру либо становится RELATED_TO с сохранённым свидетельством.
+    Доменная специфика живёт в `subtype`/`role`, а не в новых типах —
+    иначе через полгода в реестре будет двести значений, половина из них
+    синонимы, и обход графа станет невозможным.
+    """
+
+    INVOLVES = "involves"
+    HAS_ROLE = "has_role"
+    ABOUT = "about"
+    LOCATED_AT = "located_at"
+    PART_OF = "part_of"
+    CREATED_BY = "created_by"
+    OWNED_BY = "owned_by"
+    RESULTED_IN = "resulted_in"
+    REASON_FOR = "reason_for"
+    SUPPORTS = "supports"
+    CONTRADICTS = "contradicts"
+    SUPERSEDES = "supersedes"
+    DERIVED_FROM = "derived_from"
+    REFERS_TO = "refers_to"
+    RELATED_TO = "related_to"
+
+
+class SemanticRunStatus(enum.StrEnum):
+    """§14.5 `knowledge_semantic_runs.status`.
+
+    READY — единственное состояние, при котором ревизия может стать
+    текущей для источника. DEGRADED отличается от FAILED тем, что часть
+    окон обработана: §14.19 требует показывать это отдельно, а не
+    схлопывать в «документ готов».
+    """
+
+    PENDING = "pending"
+    RUNNING = "running"
+    READY = "ready"
+    DEGRADED = "degraded"
+    FAILED = "failed"

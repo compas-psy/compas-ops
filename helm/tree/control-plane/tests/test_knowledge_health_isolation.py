@@ -27,9 +27,11 @@ from helm_core.config import get_settings
 from helm_core.knowledge import atomizer
 from helm_core.knowledge import health_schema
 from helm_core.knowledge import worker as worker_module
-from helm_core.knowledge.atomizer import AtomizedAtom
+from helm_core.knowledge.atomizer import AtomizedAtom, store_notes
+from helm_core.knowledge.vault import scope_root
 from helm_core.knowledge.documents import find_sources, read_original
 from helm_core.knowledge.offboarding import delete_user_permanently
+from helm_core.knowledge import ingest as ingest_module
 from helm_core.knowledge.ingest import ingest_text, register_file_for_ingest
 from helm_core.knowledge.probe import probe
 from helm_core.knowledge.worker import process_job
@@ -41,7 +43,9 @@ from helm_core.models import (
 from helm_core.models.health_tables import HealthBase
 from conftest import DB_URL
 
-HEALTH_TABLES = ("knowledge_relations", "knowledge_chunks", "knowledge_source_private", "knowledge_notes")
+HEALTH_TABLES = ("knowledge_relations", "knowledge_chunks", "knowledge_source_private",
+                 "knowledge_notes", "knowledge_nodes", "knowledge_node_mentions",
+                 "knowledge_edges", "knowledge_entity_aliases")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -224,20 +228,27 @@ def test_register_file_for_ingest_health_domain_moves_filename(
 
 # ── atomizer.py (ADR-019) — та же маршрутизация, что chunks/relations ────
 
-def test_ingest_text_health_domain_routes_notes_to_sidecar(
-        session, tmp_path, monkeypatch, health_configured, user):
+def test_health_notes_are_routed_to_the_sidecar(
+        session, tmp_path, health_configured, user):
     """Атомизатор не содержит ветки "если health" — маршрутизация приходит
     из is_health_domain()/health_schema_configured(), как у chunks/
     relations выше. Здесь проверяется РЕЗУЛЬТАТ этой же маршрутизации для
-    knowledge_notes, не новая логика."""
-    monkeypatch.setattr(
-        atomizer, "atomize_or_empty",
-        lambda text, *, domain: [AtomizedAtom(slug="Иванов, уролог", type="PERSON",
-                                              text="Приём у уролога Иванова.", links=())],
-    )
+    knowledge_notes, не новая логика.
 
+    Вызывается `store_notes()` напрямую, а не через `ingest_text()`:
+    точка входа `atomize_and_store()` на время rescue заморожена (R2,
+    §30 «legacy semantic-v1 remains read-only»), а маршрутизация записи
+    — свойство приватности, а не семантики v1, и переживать заморозку
+    она обязана. Тест держит именно её.
+    """
     source = ingest_text(session, domain="health", text="Консультация уролога Иванова.",
                          knowledge_user_id=user.id, vault_root=str(tmp_path))
+    session.flush()
+    root = scope_root(str(tmp_path), domain="health", knowledge_user_id=user.id)
+    store_notes(session, domain="health", knowledge_user_id=user.id, source_id=source.id,
+                source_sha256=source.sha256, vault_root=root,
+                atoms=[AtomizedAtom(slug="Иванов, уролог", type="PERSON",
+                                    text="Приём у уролога Иванова.", links=())])
     session.flush()
 
     assert session.query(KnowledgeNote).filter(
@@ -430,26 +441,30 @@ def test_non_health_source_path_stays_in_common_vault(session, health_configured
     assert source.source_path.startswith(f"{tmp_path}/sources/")
 
 
-def test_health_semantic_note_file_is_not_written_into_common_vault(
+def test_ingest_hands_the_atomizer_the_private_root_not_the_common_one(
         session, health_configured, user, tmp_path, monkeypatch):
-    """F15, аудит 02.09.2026 — BLOCKER: `_note_file_path()` собирал путь
-    из типа и slug без домена, и health-заметка ложилась в общий
-    `<vault>/entities/`, хотя строка в БД уходила в health-схему."""
+    """F15, аудит 02.09.2026 — BLOCKER: строка уходила в health-схему, а
+    сам .md-файл ложился в общий `<vault>/entities/`.
+
+    Дефект был в ВЫЗЫВАЮЩЕМ коде: `_note_file_path()` получал общий
+    корень вместо доменного. Поэтому проверяется именно аргумент, с
+    которым `ingest_text()` зовёт атомизатор, а не то, где окажется файл:
+    писатель на время rescue заморожен (R2), а контракт вызова — нет, и
+    R3 встанет ровно на это место.
+    """
+    handed = {}
     monkeypatch.setattr(
-        atomizer, "atomize_or_empty",
-        lambda text, *, domain: [AtomizedAtom(slug="Бокова Мария Николаевна", type="PERSON",
-                                              text="Врач эндокринолог.", links=())],
+        ingest_module, "atomize_and_store",
+        lambda session, **kw: handed.update(kw) or 0,
     )
 
     ingest_text(session, domain="health", text="Приём эндокринолога.",
                 knowledge_user_id=user.id, vault_root=str(tmp_path))
     session.flush()
 
-    assert not (tmp_path / "entities" / "Бокова Мария Николаевна.md").exists()
-    private = (tmp_path.parent / f"{tmp_path.name}-private" / "health" / "users" / str(user.id)
-               / "entities" / "Бокова Мария Николаевна.md")
-    assert private.is_file()
-    assert "Врач эндокринолог." in private.read_text(encoding="utf-8")
+    private_root = str(tmp_path.parent / f"{tmp_path.name}-private" / "health" / "users" / str(user.id))
+    assert handed["vault_root"] == private_root
+    assert not handed["vault_root"].startswith(f"{tmp_path}/")
 
 
 # ── offboarding.py — окончательное удаление не оставляет health ───────────

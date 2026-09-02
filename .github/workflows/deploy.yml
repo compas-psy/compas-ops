@@ -170,10 +170,12 @@ jobs:
             helm/tree/scripts/restore_test.sh \
             helm/tree/scripts/local-rescue-checkpoint.sh \
             helm/tree/scripts/backup-seed.sh \
+            helm/tree/scripts/setup-health-role.sh \
             "$VPS_USER@$VPS_HOST:/tmp/"
           ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
             set -e
-            for f in backup.sh restore_test.sh local-rescue-checkpoint.sh backup-seed.sh; do
+            for f in backup.sh restore_test.sh local-rescue-checkpoint.sh backup-seed.sh \
+                     setup-health-role.sh; do
               sudo mv "/tmp/$f" "/opt/helm/scripts/$f"
               sudo chown root:root "/opt/helm/scripts/$f"
               sudo chmod 755 "/opt/helm/scripts/$f"
@@ -345,6 +347,24 @@ jobs:
             sudo docker exec helm-postgres-1 psql -U helm -d helm -tAc \
               "select count(*) from knowledge_sources where knowledge_user_id is null"
           '
+
+      - name: Схема health
+        # Схемой `health` alembic не управляет и управлять не может:
+        # `helm_app`, которым он подключается, не имеет CREATE на эту
+        # схему, а её таблицы обязан создавать `helm_health` — иначе
+        # владелец объекта обходит любой REVOKE (см. докстринг
+        # `models/health_tables.py` и сам скрипт).
+        #
+        # Поэтому «привести схему в соответствие с кодом» — это ДВА шага,
+        # и второй до 02.09.2026 не был автоматизирован вовсе: новые
+        # health-таблицы появлялись только если кто-то помнил прогнать
+        # скрипт руками. Скрипт идемпотентен (`CREATE TABLE IF NOT
+        # EXISTS`, пароль не пересоздаётся) и fail-closed на проверке
+        # «helm_app не читает health».
+        if: inputs.action == 'migrate'
+        run: |
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
+            'sudo /opt/helm/scripts/setup-health-role.sh'
 
       # ── recon: разовая read-only/функциональная разведка ─────────────
       - name: Разведка

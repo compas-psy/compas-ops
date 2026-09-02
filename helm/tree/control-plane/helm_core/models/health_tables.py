@@ -19,8 +19,8 @@ fair-queue/retry-логика `worker.py`, без дублирования. Дл
 
 Собственный `DeclarativeBase`, не `Base` из `base.py`: `migrations/
 env.py::target_metadata = Base.metadata`, и `helm_app` (которым Alembic
-подключается) не имеет CREATE на схему `health` — этими двумя
-таблицами управляет `scripts/setup-health-role.sh` (ручной, идемпотентный
+подключается) не имеет CREATE на схему `health` — таблицами этой схемы
+управляет `scripts/setup-health-role.sh` (ручной, идемпотентный
 шаг, тот же класс исключения, что уже есть у `compose/post-migration.
 sql`), не `alembic upgrade head`.
 """
@@ -35,7 +35,9 @@ from sqlalchemy import ForeignKey, Index, Integer, MetaData, Numeric, String, Te
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from .base import NAMING_CONVENTION, KnowledgeStatus, ts_column, utcnow
+from .base import (
+    NAMING_CONVENTION, KnowledgeStatus, SemanticNodeStatus, ts_column, utcnow,
+)
 from .tables import KNOWLEDGE_EMBED_DIM
 
 
@@ -161,4 +163,162 @@ class HealthKnowledgeNote(HealthBase):
 
     __table_args__ = (
         UniqueConstraint("knowledge_user_id", "slug", name="uq_health_knowledge_notes_user_slug"),
+    )
+
+
+# ── semantic-v2 в health (v4.0 §14.5, «private equivalents/adapters
+# under health schema») ───────────────────────────────────────────────
+#
+# Зеркалятся ЧЕТЫРЕ таблицы из пяти. `knowledge_semantic_runs` остаётся
+# только в public и для health тоже: в ней нет ни одного поля с
+# содержимым источника — счётчики окон, имя модели, её отпечаток, код
+# ошибки. Прогресс разбора health-документа не раскрывает, что в нём
+# написано, а зеркалить таблицу «за компанию» значило бы держать вторую
+# очередь и вторую логику ревизий ради нуля чувствительных байт
+# (CLAUDE.md §2). Ровно тот же довод, по которому конверт
+# `public.knowledge_sources` един для всех доменов.
+#
+# Что здесь чувствительно и потому переехало: `canonical_label` («визит
+# к гастроэнтерологу 19.08.2026»), `normalized_key`, `subtype`, `alias`
+# («Безручко Д.Ю.») и `role` у ребра. Это ровно те «health entities/
+# topics», которым решение владельца при разборе P12 запрещает попадать
+# в public, — то же самое, за чем в health уехали `knowledge_relations`
+# и `knowledge_notes`.
+#
+# Ссылки между схемами: `source_id` идёт на `health.knowledge_source_
+# private`, как у остальных health-таблиц, а `semantic_run_id` FK не
+# имеет вовсе — прогон живёт в public, а `helm_health` не имеет там
+# никаких прав (см. `setup-health-role.sh`). Целостность этой одной
+# ссылки — на стороне кода, как и у `source_id` сайдкара.
+
+
+class HealthKnowledgeNode(HealthBase):
+    """Зеркало `KnowledgeNode` (§14.5) для health."""
+
+    __tablename__ = "knowledge_nodes"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    subtype: Mapped[str | None] = mapped_column(String(64))
+    canonical_label: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_key: Mapped[str | None] = mapped_column(Text)
+    #: Без FK на `public.knowledge_domains`: `helm_health` не имеет прав
+    #: на public вообще. Реестр доменов не содержит health-специфики —
+    #: там ключ вроде `health`, а не название болезни.
+    primary_domain_id: Mapped[uuid.UUID | None] = mapped_column()
+    security_scope: Mapped[str] = mapped_column(
+        String(32), default="internal", nullable=False)
+    occurred_at_start: Mapped[datetime | None] = ts_column()
+    occurred_at_end: Mapped[datetime | None] = ts_column()
+    date_precision: Mapped[str | None] = mapped_column(String(8))
+    valid_from: Mapped[datetime | None] = ts_column()
+    valid_to: Mapped[datetime | None] = ts_column()
+    status: Mapped[str] = mapped_column(
+        String(16), default=SemanticNodeStatus.ACTIVE, nullable=False)
+    markdown_path: Mapped[str | None] = mapped_column(Text)
+    semantic_run_id: Mapped[uuid.UUID | None] = mapped_column()
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_health_knowledge_nodes_user_kind", "knowledge_user_id", "kind"),
+        Index("ix_health_knowledge_nodes_resolution",
+              "knowledge_user_id", "kind", "subtype", "normalized_key"),
+        Index("ix_health_knowledge_nodes_run", "semantic_run_id"),
+    )
+
+
+class HealthKnowledgeNodeMention(HealthBase):
+    """Зеркало `KnowledgeNodeMention` (§14.5) для health.
+
+    `evidence_text_hash` считается по тексту чанка, который лежит в
+    `health.knowledge_chunks`: упоминание и цитата остаются по одну
+    сторону границы, и подтвердить происхождение можно, не вынося текст
+    в public.
+    """
+
+    __tablename__ = "knowledge_node_mentions"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("health.knowledge_nodes.id"), nullable=False)
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("health.knowledge_source_private.source_id"), nullable=False)
+    window_id: Mapped[int | None] = mapped_column(Integer)
+    chunk_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("health.knowledge_chunks.id"))
+    page: Mapped[int | None] = mapped_column(Integer)
+    time_start_ms: Mapped[int | None] = mapped_column(Integer)
+    time_end_ms: Mapped[int | None] = mapped_column(Integer)
+    char_start: Mapped[int | None] = mapped_column(Integer)
+    char_end: Mapped[int | None] = mapped_column(Integer)
+    evidence_text_hash: Mapped[str | None] = mapped_column(String(64))
+    evidence_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    semantic_run_id: Mapped[uuid.UUID | None] = mapped_column()
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_health_knowledge_node_mentions_node", "node_id"),
+        Index("ix_health_knowledge_node_mentions_source", "source_id"),
+        Index("ix_health_knowledge_node_mentions_run", "semantic_run_id"),
+    )
+
+
+class HealthKnowledgeEdge(HealthBase):
+    """Зеркало `KnowledgeEdge` (§14.5) для health."""
+
+    __tablename__ = "knowledge_edges"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    from_node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("health.knowledge_nodes.id"), nullable=False)
+    to_node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("health.knowledge_nodes.id"), nullable=False)
+    relation_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    role: Mapped[str | None] = mapped_column(String(64))
+    source_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("health.knowledge_source_private.source_id"))
+    mention_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("health.knowledge_node_mentions.id"))
+    evidence_node_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("health.knowledge_nodes.id"))
+    evidence_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    status: Mapped[str] = mapped_column(
+        String(16), default=SemanticNodeStatus.ACTIVE, nullable=False)
+    semantic_run_id: Mapped[uuid.UUID | None] = mapped_column()
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_health_knowledge_edges_from", "from_node_id", "relation_type"),
+        Index("ix_health_knowledge_edges_to", "to_node_id", "relation_type"),
+        Index("ix_health_knowledge_edges_run", "semantic_run_id"),
+    )
+
+
+class HealthKnowledgeEntityAlias(HealthBase):
+    """Зеркало `KnowledgeEntityAlias` (§14.5) для health."""
+
+    __tablename__ = "knowledge_entity_aliases"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    entity_node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("health.knowledge_nodes.id"), nullable=False)
+    alias: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_alias: Mapped[str] = mapped_column(Text, nullable=False)
+    source_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("health.knowledge_source_private.source_id"))
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("knowledge_user_id", "entity_node_id", "normalized_alias",
+                         name="uq_health_knowledge_entity_aliases_node_alias"),
+        Index("ix_health_knowledge_entity_aliases_lookup",
+              "knowledge_user_id", "normalized_alias"),
     )

@@ -23,7 +23,7 @@ from helm_core.knowledge.atomizer import (
 from helm_core.knowledge.ingest import ingest_text
 from helm_core.knowledge.relations import note_id_for
 from helm_core.knowledge.tenancy import bind_knowledge_user
-from helm_core.models import KnowledgeNote, KnowledgeRelation, KnowledgeUser, KnowledgeUserRole
+from helm_core.models import KnowledgeNote, KnowledgeUser, KnowledgeUserRole
 
 
 @pytest.fixture
@@ -103,79 +103,69 @@ def test_atomize_caps_atoms_per_call():
     assert len(atoms) == atomizer.MAX_ATOMS_PER_CALL
 
 
-# ── atomize_and_store()/store_notes() — доменно-агностичный сквозной путь ─
+# ── atomize_and_store(): заморожен на время rescue (R2) ───────────────────
+#
+# До 02.09.2026 здесь стояли три теста, закреплявшие ровно то поведение,
+# которое v4.0 §14.23 называет нарушением: дозапись текста второго
+# источника в заметку первого по совпадению slug и `explicit_link` у
+# связи, порождённой моделью. Тест, который держит запрещённое свойство,
+# хуже отсутствующего — он мешает его убрать. Заменены на проверку
+# заморозки; сама заморозка снимается в R3 вместе с новым контрактом.
+
 
 @pytest.mark.parametrize("domain", ["personal", "ventures", "simpas/company"])
-def test_atomize_and_store_creates_note_file_and_relation(session, tmp_path, monkeypatch, user, domain):
+def test_atomize_and_store_writes_nothing_during_rescue(
+        session, tmp_path, monkeypatch, user, domain):
+    """Ни строки в `knowledge_notes`, ни файла заметки, ни вызова модели.
+
+    Последнее проверяется отдельно: если бы заморозка стояла ПОСЛЕ
+    `atomize_or_empty()`, ingest всё равно ходил бы в Ollama на каждом
+    источнике — молча и впустую.
+    """
+    called = []
     monkeypatch.setattr(
         atomizer, "atomize_or_empty",
-        lambda text, *, domain: [AtomizedAtom(slug="Иванов", type="PERSON",
-                                              text="Врач Иванов принял пациента.",
-                                              links=("Гастроэнтеролог",))],
+        lambda text, *, domain: called.append(text) or [
+            AtomizedAtom(slug="Иванов", type="PERSON",
+                         text="Врач Иванов принял пациента.", links=("Гастроэнтеролог",))],
     )
 
-    source = ingest_text(session, domain=domain, text="исходный текст про приём",
-                         knowledge_user_id=user.id, vault_root=str(tmp_path))
+    count = atomize_and_store(session, domain=domain, knowledge_user_id=user.id,
+                              source_id=uuid.uuid4(), source_sha256="sha-1",
+                              text="исходный текст про приём", vault_root=str(tmp_path))
     session.flush()
 
-    note = session.scalar(select(KnowledgeNote).where(KnowledgeNote.slug == "Иванов"))
-    assert note.type == "PERSON"
-    assert note.domain == domain
-    assert note.source_ids == [str(source.id)]
-    assert note.source_sha256 == [source.sha256]
-
-    file_text = (tmp_path / "entities" / "Иванов.md").read_text(encoding="utf-8")
-    assert "id: Иванов" in file_text
-    assert "Врач Иванов принял пациента." in file_text
-    assert "[[Гастроэнтеролог]]" in file_text
-
-    relation = session.scalar(select(KnowledgeRelation).where(KnowledgeRelation.from_id == "Иванов"))
-    assert relation.to_id == "Гастроэнтеролог"
-    assert relation.evidence_type == "explicit_link"
-
-
-def test_atomize_and_store_is_fail_open_when_atomizer_unavailable(session, tmp_path, monkeypatch, user):
-    monkeypatch.setattr(atomizer, "atomize_or_empty", lambda text, *, domain: [])
-
-    count = atomize_and_store(session, domain="personal", knowledge_user_id=user.id,
-                              source_id=uuid.uuid4(), source_sha256="abc123",
-                              text="исходный текст", vault_root=str(tmp_path))
-
     assert count == 0
+    assert called == []
     assert session.query(KnowledgeNote).count() == 0
+    assert not (tmp_path / "entities").exists()
 
 
-def test_atomize_and_store_merges_same_slug_across_two_sources_instead_of_duplicating(
-        session, tmp_path, monkeypatch, user):
-    """Тот же врач упомянут в двух РАЗНЫХ документах — одна заметка с
-    двумя source_ids, не UniqueConstraint(knowledge_user_id, slug)."""
+def test_same_slug_from_two_sources_no_longer_merges(session, tmp_path, monkeypatch, user):
+    """§14.6/§14.23: слияние утверждений по совпадению названия.
+
+    Проверяется не «мёржит правильно», а «не пишет вовсе»: пока писателя
+    v2 нет, единственный честный способ не склеивать однофамильцев —
+    ничего не записывать.
+    """
     monkeypatch.setattr(
         atomizer, "atomize_or_empty",
         lambda text, *, domain: [AtomizedAtom(slug="Иванов", type="PERSON", text=text, links=())],
     )
-    source_1, source_2 = uuid.uuid4(), uuid.uuid4()
 
-    atomize_and_store(session, domain="personal", knowledge_user_id=user.id, source_id=source_1,
-                      source_sha256="sha-1", text="Визит 1: приём у Иванова.",
-                      vault_root=str(tmp_path))
-    session.flush()
-    atomize_and_store(session, domain="personal", knowledge_user_id=user.id, source_id=source_2,
-                      source_sha256="sha-2", text="Визит 2: повторный приём у Иванова.",
-                      vault_root=str(tmp_path))
+    for n, sha in ((1, "sha-1"), (2, "sha-2")):
+        atomize_and_store(session, domain="personal", knowledge_user_id=user.id,
+                          source_id=uuid.uuid4(), source_sha256=sha,
+                          text=f"Визит {n}: приём у Иванова.", vault_root=str(tmp_path))
     session.flush()
 
-    notes = session.scalars(select(KnowledgeNote).where(KnowledgeNote.slug == "Иванов")).all()
-    assert len(notes) == 1
-    assert notes[0].source_ids == [str(source_1), str(source_2)]
-
-    file_text = (tmp_path / "entities" / "Иванов.md").read_text(encoding="utf-8")
-    assert "Визит 1" in file_text
-    assert "Визит 2" in file_text  # дописано, не перезаписано поверх
+    assert session.scalars(select(KnowledgeNote).where(KnowledgeNote.slug == "Иванов")).all() == []
 
 
-def test_atomize_and_store_wired_into_ingest_text(session, tmp_path, monkeypatch, user):
-    """Сквозная проверка реальной точки входа — ingest_text() вызывает
-    атомизатор аддитивно, поверх уже существующего store_relations()."""
+def test_ingest_still_works_and_produces_no_l2_notes(session, tmp_path, monkeypatch, user):
+    """Сквозная проверка реальной точки входа. Заморожен L2, не ingest:
+    источник создаётся, слой 1 (`note_id_for()` по самому источнику)
+    продолжает работать, заметки L2 не появляются."""
     monkeypatch.setattr(
         atomizer, "atomize_or_empty",
         lambda text, *, domain: [AtomizedAtom(slug="Проект Симпас", type="ENTITY",
@@ -186,9 +176,8 @@ def test_atomize_and_store_wired_into_ingest_text(session, tmp_path, monkeypatch
                          knowledge_user_id=user.id, vault_root=str(tmp_path))
     session.flush()
 
-    note = session.scalar(select(KnowledgeNote).where(KnowledgeNote.slug == "Проект Симпас"))
-    assert note is not None
-    assert str(source.id) in note.source_ids
+    assert source.id is not None
+    assert session.query(KnowledgeNote).count() == 0
     # Owner-уровня relations (note_id_for самого источника) продолжают
-    # создаваться как раньше — атомизатор не заменяет слой 1, дополняет.
+    # создаваться как раньше — заморожен только L2-слой поверх них.
     assert note_id_for(original_filename=None, source_id=source.id) is not None

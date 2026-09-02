@@ -21,6 +21,11 @@ TENANT_SCOPED_TABLES = (
     "knowledge_ingest_jobs", "knowledge_pending_attachments", "knowledge_ingest_batches",
     "knowledge_batch_items", "knowledge_answer_runs", "knowledge_memories",
     "knowledge_domains",
+    # semantic-v2 (§14.5). Прогоны сюда входят наравне с содержимым:
+    # счётчики окон и покрытие — это тоже «сколько и какие документы у
+    # соседа», а не служебная телеметрия.
+    "knowledge_semantic_runs", "knowledge_nodes", "knowledge_node_mentions",
+    "knowledge_edges", "knowledge_entity_aliases",
 )
 
 POLICY_NAME = "knowledge_tenant_isolation"

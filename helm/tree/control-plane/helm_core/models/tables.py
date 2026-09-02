@@ -29,8 +29,8 @@ from pgvector.sqlalchemy import Vector
 
 from .base import (
     ApprovalStatus, Base, KnowledgeBatchItemStatus, KnowledgeBatchStatus, KnowledgeIngestStatus,
-    KnowledgeMemoryStatus, KnowledgeStatus, KnowledgeUserStatus, TaskStatus, ts_column, utcnow,
-    uuid_pk,
+    KnowledgeMemoryStatus, KnowledgeStatus, KnowledgeUserStatus, SemanticNodeStatus,
+    SemanticRunStatus, TaskStatus, ts_column, utcnow, uuid_pk,
 )
 
 
@@ -393,6 +393,19 @@ class KnowledgeSource(Base):
     sensitivity: Mapped[str] = mapped_column(String(32), default="internal", nullable=False)
     trust: Mapped[str] = mapped_column(String(32), default="extracted", nullable=False)
     status: Mapped[str] = mapped_column(String(16), default=KnowledgeStatus.ACTIVE, nullable=False)
+    #: semantic-v2 (§14.5): какая ревизия разбора считается текущей для
+    #: этого источника. Переключается только на ревизию, дошедшую до
+    #: READY, и только целиком — «revision switch is atomic per source».
+    #: Пока NULL, источник не имеет графа v2; это нормальное состояние
+    #: всего корпуса до R8, а не признак ошибки.
+    #:
+    #: `use_alter=True` — ссылка кольцевая: прогон указывает на источник,
+    #: источник на текущий прогон. Без явного ALTER после создания обеих
+    #: таблиц `create_all()` не может выбрать порядок и падает.
+    current_semantic_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_semantic_runs.id",
+                   name="fk_knowledge_sources_current_semantic_run_id",
+                   use_alter=True))
     created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow, nullable=False)
 
@@ -899,4 +912,247 @@ class KnowledgeCustomDomain(Base):
 
     __table_args__ = (
         UniqueConstraint("knowledge_user_id", "key", name="uq_knowledge_domains_user_key"),
+    )
+
+
+# ── semantic-v2 (v4.0 §14.5) ──────────────────────────────────────────
+#
+# ВНИМАНИЕ на имена: `KnowledgeNote` выше — это semantic-v1, заметка
+# Obsidian со слагом. `KnowledgeNode` ниже — semantic-v2, узел графа с
+# UUID. Разница в одну букву при полностью разном смысле; спутать их
+# легко, поэтому таблицы называются по-разному явно
+# (`knowledge_notes` против `knowledge_nodes`), и ни одна функция не
+# работает с обеими сразу.
+#
+# Обе схемы сосуществуют до R10 (§14.5 «may coexist during rescue»):
+# semantic-v1 не удаляется, но и каноническим не считается.
+
+
+class KnowledgeNode(Base):
+    """§14.5 `knowledge_nodes` — узел семантического графа v2.
+
+    §14.6: ENTITY несёт только личность («врач Безручко Дарья Юрьевна»),
+    а EVENT/FACT/DECISION/CONCEPT — отдельные утверждения со своей
+    привязкой к источнику. Слияние утверждений в сущность по совпадению
+    имени §14.6 запрещает прямо: оно уничтожает происхождение
+    утверждения и склеивает однофамильцев.
+    """
+
+    __tablename__ = "knowledge_nodes"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    #: NOT NULL, в отличие от таблиц v3.8 выше: там поле nullable ради
+    #: аддитивной миграции существовавших строк, здесь мигрировать
+    #: нечего — таблица новая. §14.5 требует NOT NULL, и RLS с NULL всё
+    #: равно не пропустил бы такую строку ни на чтение, ни на запись.
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_users.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: Уточнение внутри вида: PERSON/ORGANIZATION для ENTITY,
+    #: medical_specialty для CONCEPT. Расширяемо намеренно — §14.9
+    #: требует держать доменную специфику здесь, а не в новых типах связей.
+    subtype: Mapped[str | None] = mapped_column(String(64))
+    canonical_label: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Нормализованная форма для точного сопоставления при разрешении
+    #: сущностей (§14.7). NULL для узлов-утверждений: у события нет
+    #: «канонического ключа», по которому его можно слить с другим.
+    normalized_key: Mapped[str | None] = mapped_column(Text)
+    primary_domain_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_domains.id"))
+    security_scope: Mapped[str] = mapped_column(
+        String(32), default="internal", nullable=False)
+    #: §14.8: время — структурные поля, а не строка в тексте. Без них
+    #: «в августе» и «до марта» не могут быть запросом к графу.
+    occurred_at_start: Mapped[datetime | None] = ts_column()
+    occurred_at_end: Mapped[datetime | None] = ts_column()
+    date_precision: Mapped[str | None] = mapped_column(String(8))
+    valid_from: Mapped[datetime | None] = ts_column()
+    valid_to: Mapped[datetime | None] = ts_column()
+    status: Mapped[str] = mapped_column(
+        String(16), default=SemanticNodeStatus.ACTIVE, nullable=False)
+    markdown_path: Mapped[str | None] = mapped_column(Text)
+    #: Ревизия, в которой узел создан. §14.5: запросы не должны видеть
+    #: недописанные узлы идущего backfill — фильтр по ревизии источника.
+    semantic_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_semantic_runs.id"))
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = ts_column(
+        default=utcnow, onupdate=utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_knowledge_nodes_user_kind", "knowledge_user_id", "kind"),
+        #: Разрешение сущностей ищет по нормализованному ключу И виду:
+        #: §14.7 разрешает автослияние только при совпадении обоих.
+        Index("ix_knowledge_nodes_resolution",
+              "knowledge_user_id", "kind", "subtype", "normalized_key"),
+        Index("ix_knowledge_nodes_run", "semantic_run_id"),
+    )
+
+
+class KnowledgeNodeMention(Base):
+    """§14.5 `knowledge_node_mentions` — происхождение на уровне источника.
+
+    Одна каноническая сущность имеет много упоминаний. Это то, чего не
+    было в semantic-v1: там текст из разных источников дописывался в один
+    файл, и ответить «откуда именно это известно» становилось нечем.
+    """
+
+    __tablename__ = "knowledge_node_mentions"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_users.id"), nullable=False)
+    node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_nodes.id"), nullable=False)
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_sources.id"), nullable=False)
+    #: Окно обработки (§14.4.1). Не FK: окна не материализуются в таблицу,
+    #: это позиция в разборе источника, воспроизводимая по нему же.
+    window_id: Mapped[int | None] = mapped_column(Integer)
+    chunk_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_chunks.id"))
+    #: Страница PDF. Для расшифровки звука её нет, для PDF нет времени —
+    #: поэтому оба поля nullable, а не одно «место в источнике».
+    page: Mapped[int | None] = mapped_column(Integer)
+    time_start_ms: Mapped[int | None] = mapped_column(Integer)
+    time_end_ms: Mapped[int | None] = mapped_column(Integer)
+    char_start: Mapped[int | None] = mapped_column(Integer)
+    char_end: Mapped[int | None] = mapped_column(Integer)
+    #: Хэш, а не сам текст: цитата остаётся в чанке, здесь только
+    #: доказательство, что упоминание относится именно к нему. Для health
+    #: это ещё и то, что позволяет держать упоминания рядом с текстом, а
+    #: не дублировать текст.
+    evidence_text_hash: Mapped[str | None] = mapped_column(String(64))
+    evidence_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    #: §14.5: к ревизии привязан каждый узел, ребро И упоминание —
+    #: иначе после отката ревизии упоминания остались бы висеть на
+    #: удалённых узлах.
+    semantic_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_semantic_runs.id"))
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_knowledge_node_mentions_node", "node_id"),
+        Index("ix_knowledge_node_mentions_source", "source_id"),
+        Index("ix_knowledge_node_mentions_run", "semantic_run_id"),
+    )
+
+
+class KnowledgeEdge(Base):
+    """§14.5 `knowledge_edges` — типизированная связь между узлами.
+
+    §14.9: wikilink в Markdown — это ОТОБРАЖЕНИЕ ребра, а не его смысл.
+    Канон здесь.
+    """
+
+    __tablename__ = "knowledge_edges"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_users.id"), nullable=False)
+    from_node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_nodes.id"), nullable=False)
+    to_node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_nodes.id"), nullable=False)
+    relation_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: §14.9: роль уточняет ребро, не плодя типы. INVOLVES(role=doctor)
+    #: вместо отдельного HAS_DOCTOR — иначе реестр разрастётся синонимами.
+    role: Mapped[str | None] = mapped_column(String(64))
+    source_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_sources.id"))
+    mention_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_node_mentions.id"))
+    evidence_node_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_nodes.id"))
+    evidence_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    status: Mapped[str] = mapped_column(
+        String(16), default=SemanticNodeStatus.ACTIVE, nullable=False)
+    semantic_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_semantic_runs.id"))
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_knowledge_edges_from", "from_node_id", "relation_type"),
+        Index("ix_knowledge_edges_to", "to_node_id", "relation_type"),
+        Index("ix_knowledge_edges_run", "semantic_run_id"),
+    )
+
+
+class KnowledgeEntityAlias(Base):
+    """§14.5 `knowledge_entity_aliases` — известные написания сущности.
+
+    Нужен для §14.7: «Безручко Д.Ю.» и «Безручко Дарья Юрьевна» — одна
+    личность только если это подтверждено, а не потому что похоже.
+    Подтверждённый алиас и есть форма такого подтверждения.
+    """
+
+    __tablename__ = "knowledge_entity_aliases"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_users.id"), nullable=False)
+    entity_node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_nodes.id"), nullable=False)
+    alias: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_alias: Mapped[str] = mapped_column(Text, nullable=False)
+    source_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_sources.id"))
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("knowledge_user_id", "entity_node_id", "normalized_alias",
+                         name="uq_knowledge_entity_aliases_node_alias"),
+        Index("ix_knowledge_entity_aliases_lookup",
+              "knowledge_user_id", "normalized_alias"),
+    )
+
+
+class KnowledgeSemanticRun(Base):
+    """§14.5 `knowledge_semantic_runs` — один проход извлечения по источнику.
+
+    Смысл таблицы — атомарность ревизии. §14.5: текущей может стать
+    только ревизия, дошедшая до READY, и запросы не должны видеть
+    полузаписанные узлы идущего прохода. §14.20: последний рабочий граф
+    не уничтожается, пока замена не прошла проверку.
+
+    Здесь нет ни одного поля с содержимым источника — только счётчики,
+    имя модели и её отпечаток. Поэтому таблица живёт в общей схеме даже
+    для health: считать прогресс и не иметь доступа к тексту — ровно то
+    разделение, ради которого заведена health-схема.
+    """
+
+    __tablename__ = "knowledge_semantic_runs"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_users.id"), nullable=False)
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_sources.id"), nullable=False)
+    semantic_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    extractor_model: Mapped[str | None] = mapped_column(String(128))
+    #: Отпечаток модели/промпта. Без него «пересобрать тем же способом»
+    #: недоказуемо: имя модели совпадает, а веса или промпт другие.
+    extractor_digest: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(
+        String(16), default=SemanticRunStatus.PENDING, nullable=False)
+    windows_total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    windows_processed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    windows_failed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    #: Доля покрытия источника. §14.19 требует показывать её отдельно от
+    #: готовности разбора: «94% и один участок требует повторного разбора»
+    #: — честный ответ, «документ готов» на тех же числах — нет.
+    coverage_ratio: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    nodes_created: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    edges_created: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    unresolved_candidates: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    started_at: Mapped[datetime | None] = ts_column()
+    finished_at: Mapped[datetime | None] = ts_column()
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_knowledge_semantic_runs_source", "source_id", "semantic_version"),
     )
