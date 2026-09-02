@@ -27,15 +27,51 @@ sudo docker compose exec -T ollama ollama list
 
 echo
 echo "############ 1. ВОССТАНОВИТЬ ЛИМИТ ПАМЯТИ (4g, как в docker-compose.yml) ############"
+# НАЙДЕНО живым прогоном 02.09.2026 (run 189): снижение лимита, пока
+# qwen2.5:7b (4.7 ГБ) реально загружена в память, мгновенно убивает
+# процесс контейнера ядром (OOM) — docker update не ждёт, что resident
+# memory уже помещается в новый лимит. restart-политика подняла
+# контейнер обратно через ~3 секунды сама, но ПОСЛЕ того, как шаги
+# rm/pull ниже уже упали в мёртвое окно — а старый скрипт этого не
+# проверял и замаскировал обе реальные ошибки под "успех" (exit 0).
+# Раньше: обязательно дождаться, что контейнер реально поднялся и API
+# отвечает, прежде чем что-либо exec'ать в нём.
 sudo docker update --memory=4g --memory-swap=4g "$CID"
+
+wait_for_ollama_ready() {
+  for i in $(seq 1 60); do
+    if [ "$(sudo docker inspect -f '{{.State.Running}}' "$CID" 2>/dev/null)" = "true" ] \
+       && sudo docker compose exec -T ollama curl -sf http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+echo "  жду, пока ollama снова реально отвечает после смены лимита памяти..."
+if ! wait_for_ollama_ready; then
+  echo "::error::ollama не поднялась после docker update --memory=4g (проверь на OOM ещё раз)"
+  exit 1
+fi
+echo "  ollama снова отвечает."
 
 echo
 echo "############ 2. УДАЛИТЬ МОДЕЛИ, КОТОРЫХ НЕ БЫЛО ДО R4 (только qwen2.5:7b) ############"
-sudo docker compose exec -T ollama ollama rm qwen2.5:7b 2>&1 || echo "  (уже нет — ок)"
+current_models=$(sudo docker compose exec -T ollama ollama list)
+echo "$current_models"
+if echo "$current_models" | awk '$1=="qwen2.5:7b" {found=1} END{exit !found}'; then
+  sudo docker compose exec -T ollama ollama rm qwen2.5:7b
+else
+  echo "  (уже нет — ок)"
+fi
 
 echo
 echo "############ 3. ВЕРНУТЬ gemma2:2b (была до R4, боевая для Z2) ############"
-sudo docker compose exec -T ollama ollama pull gemma2:2b
+if ! sudo docker compose exec -T ollama ollama pull gemma2:2b; then
+  echo "::error::ollama pull gemma2:2b не удался — Z2 rephrase остаётся сломан"
+  exit 1
+fi
 
 echo
 echo "############ ПОСЛЕ ############"
@@ -44,7 +80,7 @@ sudo docker compose exec -T ollama ollama list
 
 echo
 echo "############ 4. Z2 REPHRASE SMOKE (должен быть mode=Z2, не Z1) ############"
-sudo docker compose exec -T helm-core python3 <<'PY'
+z2_out=$(sudo docker compose exec -T helm-core python3 <<'PY'
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from helm_core.config import get_settings
@@ -61,6 +97,16 @@ with Session(engine) as s:
     print("answer_text:", repr(result.answer_text))
     s.rollback()
 PY
+)
+echo "$z2_out"
+
+# Раньше скрипт просто печатал результат и выходил 0 независимо от того,
+# что в нём — та же дыра, что и в остальном сценарии: "напечатали —
+# значит проверили". Явно проверяем mode, а не полагаемся на глаз.
+if ! echo "$z2_out" | grep -q "mode: Z2"; then
+  echo "::error::Z2 rephrase всё ещё не работает (ожидался mode: Z2)"
+  exit 1
+fi
 
 echo
 echo "############ EMERGENCY RESTORE DONE ############"
