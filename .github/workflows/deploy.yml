@@ -259,6 +259,18 @@ jobs:
             sudo docker compose ps helm-core helm-knowledge-worker ollama caddy
           '
 
+      - name: Отметить выкаченную ревизию
+        # v4.0 §14.22 требует знать ТОЧНЫЙ выкаченный SHA, а не считать,
+        # что он равен HEAD ветки. Файлы раскладываются как файлы, git на
+        # сервере нет — без этой отметки ревизию приходится восстанавливать
+        # по отпечатку содержимого (scripts/r0-match-deployed-sha.sh).
+        # Пишется ПОСЛЕ успешной пересборки: отметка означает "это работает
+        # сейчас", а не "это пытались выкатить".
+        if: inputs.action == 'deploy'
+        run: |
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
+            "echo '${{ github.sha }}' | sudo tee /opt/helm/DEPLOYED_SHA >/dev/null"
+
       # ── migrate: отдельным шагом, после проверки ревизии ─────────────
       - name: Миграции
         if: inputs.action == 'migrate'
