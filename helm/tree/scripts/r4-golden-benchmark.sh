@@ -27,7 +27,14 @@ set -uo pipefail
 cd /opt/helm/compose
 
 RUN_DIR=/opt/helm-state/benchmarks/r4/run1
+# НАЙДЕНО живым прогоном 02.09.2026: `sudo mkdir -p` создаёт каталог
+# root:root, а `docker compose exec ... > "$out"` ниже открывает файл
+# ОБЫЧНЫМ пользователем helm (sudo относится только к самой команде
+# docker) — редирект падал с Permission denied ДО запуска python,
+# извлечение ни разу не выполнилось. chown сразу после mkdir отдаёт
+# каталог текущему пользователю SSH-сессии.
 sudo mkdir -p "$RUN_DIR"
+sudo chown "$(id -u):$(id -g)" "$RUN_DIR"
 
 OLLAMA_CID() { sudo docker compose ps -q ollama; }
 
@@ -170,3 +177,17 @@ fi
 echo
 echo "############ R4 GOLDEN BENCHMARK DONE ############"
 ls -la "$RUN_DIR"
+
+# `set -uo pipefail` без `-e` намеренно (нужны `|| true`/`|| echo` по
+# ходу скрипта) — но это значит, что джоба зелёная, даже если каждый
+# кандидат молча ничего не записал (найдено живым прогоном 02.09.2026:
+# ровно так и было). Явная проверка на выходе — единственное, что не
+# даёт "recon success" означать "результат есть".
+missing=0
+for f in golden-gemma2_2b.json golden-qwen2_5_3b.json; do
+  [ -s "$RUN_DIR/$f" ] || { echo "::error::нет результата: $RUN_DIR/$f"; missing=$((missing + 1)); }
+done
+if [ "$missing" -gt 0 ]; then
+  echo "::error::$missing обязательных результатов отсутствует — R4 GOLDEN BENCHMARK FAIL"
+  exit 1
+fi
