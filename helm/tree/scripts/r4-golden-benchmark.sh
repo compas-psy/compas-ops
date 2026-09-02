@@ -73,6 +73,13 @@ run_golden() {
 # при keep_alive=0 (веса выгружаются между вызовами).
 run_keepalive_probe() {
   local model="$1" out="$2"
+  # НАЙДЕНО живым прогоном 02.09.2026: с keep_alive=0 gemma2:2b каждый
+  # раз перезагружается с диска — 20 вызовов подряд занимают несколько
+  # минут. Раньше весь вывод уходил ТОЛЬКО в файл (`> "$out"`), и SSH-
+  # сессия несколько минут не видела ни байта — соединение рвалось как
+  # «простаивающее» (client_loop: send disconnect: Broken pipe), хотя
+  # работа шла. `tee` держит поток в терминале живым и одновременно
+  # пишет тот же текст в файл — второй `cat` после вызова не нужен.
   {
     for ka in 0 5m; do
       echo "--- keep_alive=$ka ---"
@@ -88,7 +95,7 @@ run_keepalive_probe() {
         echo "  прогон $i: ${elapsed}с, RSS: $rss"
       done
     done
-  } > "$out" 2>&1
+  } 2>&1 | tee "$out"
 }
 
 run_candidate() {
@@ -131,7 +138,6 @@ print('p50/p95 latency:', d['p50_latency'], d['p95_latency'])
   if [ ! -f "$keepalive_out" ]; then
     echo "=== keep_alive: cold(0) vs warm(5m) на одном кейсе x5 ==="
     run_keepalive_probe "$model" "$keepalive_out"
-    cat "$keepalive_out"
   fi
 
   echo "=== здоровье HELM после кандидата ==="

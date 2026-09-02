@@ -386,7 +386,14 @@ jobs:
           esac
           scp -i ~/.ssh/id_deploy "helm/tree/scripts/${{ inputs.script }}" \
               "$VPS_USER@$VPS_HOST:/tmp/recon.sh"
-          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
+          # НАЙДЕНО живым прогоном R4 02.09.2026: recon-скрипт, несколько
+          # минут пишущий вывод ТОЛЬКО в файл на сервере (например,
+          # замер latency в цикле), не даёт SSH-сессии ни байта трафика
+          # — соединение рвётся как «простаивающее» (client_loop: send
+          # disconnect: Broken pipe), хотя сама работа идёт. Тот же
+          # keepalive, что уже стоит у шага «Локальная точка возврата».
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=12 \
+              -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
             bash /tmp/recon.sh
             rc=$?
             rm -f /tmp/recon.sh
