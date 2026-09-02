@@ -31,8 +31,13 @@ echo
 echo "############ 2. ТАБЛИЦЫ SEMANTIC-V2 И RLS ############"
 for t in knowledge_semantic_runs knowledge_nodes knowledge_node_mentions \
          knowledge_edges knowledge_entity_aliases; do
+  # `boolean::text` даёт `true`, а `has_table_privilege()` ниже печатает
+  # `t` — разные представления одного и того же в одном отчёте читаются
+  # плохо и один раз уже дали ложный FAIL (прогон #168, дефект этого
+  # скрипта, не сервера). Приводим к одной букве явно.
   state=$(psql -c "select coalesce(
-      (select relrowsecurity::text || '/' || relforcerowsecurity::text
+      (select case when relrowsecurity then 't' else 'f' end || '/' ||
+                   case when relforcerowsecurity then 't' else 'f' end
          from pg_class where relname = '$t' and relnamespace = 'public'::regnamespace),
       'НЕТ ТАБЛИЦЫ')")
   want "public.$t (RLS/FORCE)" "$state" "t/t"
