@@ -43,7 +43,7 @@ from .base import (
     SemanticNodeKind, SemanticNodeStatus, SemanticRelationType, SemanticWindowStatus,
     ts_column, utcnow, sql_enum_values,
 )
-from .tables import _KINDS_WITHOUT_RUN_SQL, KNOWLEDGE_EMBED_DIM
+from .tables import _ATOM_KINDS_SQL, _KINDS_WITHOUT_RUN_SQL, KNOWLEDGE_EMBED_DIM
 
 
 class HealthBase(DeclarativeBase):
@@ -206,6 +206,11 @@ class HealthKnowledgeNode(HealthBase):
     knowledge_user_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
     subtype: Mapped[str | None] = mapped_column(String(64))
+    #: R3.1 (см. `tables.py::KnowledgeNode`) — та же пара полей и то же
+    #: исправление: подвид ENTITY и тело утверждения EVENT/FACT/
+    #: DECISION/CONCEPT для health.
+    entity_type: Mapped[str | None] = mapped_column(String(64))
+    statement_text: Mapped[str | None] = mapped_column(Text)
     canonical_label: Mapped[str] = mapped_column(Text, nullable=False)
     normalized_key: Mapped[str | None] = mapped_column(Text)
     #: Без FK на `public.knowledge_domains`: `helm_health` не имеет прав
@@ -240,6 +245,16 @@ class HealthKnowledgeNode(HealthBase):
         CheckConstraint(
             f"semantic_run_id IS NOT NULL OR kind IN ({_KINDS_WITHOUT_RUN_SQL})",
             name="run_required_for_atoms"),
+        CheckConstraint(
+            f"kind NOT IN ({_ATOM_KINDS_SQL}) OR "
+            f"(statement_text IS NOT NULL AND statement_text <> '')",
+            name="statement_text_required_for_atoms"),
+        CheckConstraint(
+            "kind <> 'entity' OR entity_type IS NOT NULL",
+            name="entity_type_required_for_entity"),
+        CheckConstraint(
+            "kind <> 'entity' OR statement_text IS NULL",
+            name="statement_text_null_for_entity"),
         Index("ix_health_knowledge_nodes_user_kind", "knowledge_user_id", "kind"),
         Index("ix_health_knowledge_nodes_resolution",
               "knowledge_user_id", "kind", "subtype", "normalized_key"),

@@ -87,6 +87,85 @@ want "подложный прогон не остался" \
                   where id = '00000000-0000-0000-0000-0000000000ff'")" "0"
 
 echo
+echo "############ 3c. STATEMENT_TEXT/ENTITY_TYPE (R3.1) ############"
+# Найдено владельцем 02.09.2026 при приёмке R3: atom.text не сохранялся
+# вовсе, subtype сущности подменялся её entity_type. Миграция
+# b8e4f1a09c73 добавляет оба поля и три CHECK; здесь — то же самое, что
+# уже доказано тестами, но на живой базе.
+for schema_name in public health; do
+  table="knowledge_nodes"
+  [ "$schema_name" = "health" ] && table="health.knowledge_nodes"
+  want "$schema_name.knowledge_nodes.entity_type существует" \
+       "$(psql -c "select count(*) from information_schema.columns
+                     where table_schema = '$schema_name' and table_name = 'knowledge_nodes'
+                       and column_name = 'entity_type'")" "1"
+  want "$schema_name.knowledge_nodes.statement_text существует" \
+       "$(psql -c "select count(*) from information_schema.columns
+                     where table_schema = '$schema_name' and table_name = 'knowledge_nodes'
+                       and column_name = 'statement_text'")" "1"
+  want "$schema_name: три новых CHECK на knowledge_nodes" \
+       "$(psql -c "select count(*) from pg_constraint c
+                     join pg_class t on t.oid = c.conrelid
+                     join pg_namespace n on n.oid = t.relnamespace
+                    where n.nspname = '$schema_name' and t.relname = 'knowledge_nodes'
+                      and c.contype = 'c'
+                      and c.conname in ('ck_knowledge_nodes_statement_text_required_for_atoms',
+                                        'ck_knowledge_nodes_entity_type_required_for_entity',
+                                        'ck_knowledge_nodes_statement_text_null_for_entity')")" "3"
+done
+
+# Реальная попытка записи мимо каждого из трёх инвариантов, с откатом —
+# в public и в health одинаково. Подложный прогон заводится в той же
+# транзакции (таблицы пусты до R5, опираться не на что) и не остаётся
+# после rollback.
+run_id="00000000-0000-0000-0000-0000000000fe"
+for schema_name in public health; do
+  nodes_tbl="knowledge_nodes"; runs_tbl="knowledge_semantic_runs"
+  [ "$schema_name" = "health" ] && nodes_tbl="health.knowledge_nodes"
+  # health.knowledge_semantic_runs не существует (прогон только в
+  # public) — используем реальный public-прогон и для health-проверки:
+  # health-узлы ссылаются на semantic_run_id без внешнего ключа именно
+  # по этой причине (см. health_tables.py).
+  # security_scope/status без DEFAULT на уровне сервера (значение по
+  # умолчанию применяет ORM при конструировании объекта, не голый SQL)
+  # — оба поля обязательны здесь явно, иначе INSERT падает на NOT NULL
+  # раньше, чем дойдёт до проверяемого CHECK.
+  bogus_entity=$(psql -c "begin;
+    insert into knowledge_semantic_runs
+      (id, knowledge_user_id, source_id, semantic_version, status, windows_total,
+       windows_processed, windows_failed, nodes_created, edges_created,
+       unresolved_candidates, created_at)
+    select '$run_id', s.knowledge_user_id, s.id, 99, 'pending', 0, 0, 0, 0, 0, 0, now()
+      from knowledge_sources s where s.knowledge_user_id is not null limit 1;
+    insert into $nodes_tbl
+      (id, knowledge_user_id, kind, canonical_label, security_scope, status,
+       semantic_run_id, created_at, updated_at)
+    select gen_random_uuid(), s.knowledge_user_id, 'entity', 'x', 'internal', 'active',
+           '$run_id', now(), now()
+      from knowledge_sources s where s.knowledge_user_id is not null limit 1;
+    rollback;" 2>&1 | grep -c 'ck_knowledge_nodes_entity_type_required_for_entity')
+  want "$schema_name: entity без entity_type отвергнута" "$bogus_entity" "1"
+
+  bogus_atom=$(psql -c "begin;
+    insert into knowledge_semantic_runs
+      (id, knowledge_user_id, source_id, semantic_version, status, windows_total,
+       windows_processed, windows_failed, nodes_created, edges_created,
+       unresolved_candidates, created_at)
+    select '$run_id', s.knowledge_user_id, s.id, 99, 'pending', 0, 0, 0, 0, 0, 0, now()
+      from knowledge_sources s where s.knowledge_user_id is not null limit 1;
+    insert into $nodes_tbl
+      (id, knowledge_user_id, kind, canonical_label, security_scope, status,
+       semantic_run_id, created_at, updated_at)
+    select gen_random_uuid(), s.knowledge_user_id, 'fact', 'x', 'internal', 'active',
+           '$run_id', now(), now()
+      from knowledge_sources s where s.knowledge_user_id is not null limit 1;
+    rollback;" 2>&1 | grep -c 'ck_knowledge_nodes_statement_text_required_for_atoms')
+  want "$schema_name: fact без statement_text отвергнут" "$bogus_atom" "1"
+done
+want "подложный прогон R3.1 не остался" \
+     "$(psql -c "select count(*) from knowledge_semantic_runs where id = '$run_id'")" "0"
+
+echo
 echo "############ 4. SEMANTIC-V1 ВСЁ ЕЩЁ ЗАМОРОЖЕН ############"
 want "public.knowledge_notes" "$(psql -c 'select count(*) from knowledge_notes')" "0"
 want "public.knowledge_relations" "$(psql -c 'select count(*) from knowledge_relations')" "0"

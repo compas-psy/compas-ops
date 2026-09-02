@@ -39,6 +39,16 @@ from .base import (
 #: 02.09.2026 про DOCUMENT_REF/MEMORY_REF — разбор в base.py).
 _KINDS_WITHOUT_RUN_SQL = ", ".join(
     f"'{k.value}'" for k in sorted(NODE_KINDS_WITHOUT_RUN))
+_ATOM_KINDS_SQL = ", ".join(
+    f"'{k.value}'" for k in sorted(set(SemanticNodeKind) - NODE_KINDS_WITHOUT_RUN))
+
+#: Виды-утверждения (§14.6): ENTITY несёт только личность, эти четыре —
+#: отдельные факты со своим текстом. R3.1, найдено владельцем 02.09.2026:
+#: `atom.text`, извлечённый моделью, не сохранялся вовсе, а `subtype`
+#: сущности подменялся её `entity_type`. `statement_text`/`entity_type`
+#: ниже — исправление, а список видов — дополнение множества
+#: `NODE_KINDS_WITHOUT_RUN` до полного реестра §14.5, не отдельно
+#: сопровождаемый список: разойдись они, дыра появится молча.
 
 
 class Task(Base):
@@ -960,6 +970,19 @@ class KnowledgeNode(Base):
     #: требует держать доменную специфику здесь, а не в новых типах связей.
     subtype: Mapped[str | None] = mapped_column(String(64))
     canonical_label: Mapped[str] = mapped_column(Text, nullable=False)
+    #: R3.1: подвид ENTITY — PERSON/ORGANIZATION, из `entity_type` модели
+    #: (§14.4.2). Раньше писался в `subtype`, вытесняя настоящий подвид
+    #: (`doctor`, `medical_specialty`) — находка владельца 02.09.2026.
+    #: NULL для утверждений: у EVENT/FACT/DECISION/CONCEPT нет личности,
+    #: которую можно было бы классифицировать этим полем.
+    entity_type: Mapped[str | None] = mapped_column(String(64))
+    #: R3.1: законченный текст утверждения (`atom.text` §14.4.2) —
+    #: `canonical_label` несёт только заголовок (`atom.title`), тело
+    #: раньше нигде не сохранялось и терялось на записи. NULL для
+    #: ENTITY намеренно: складывать сюда текст источника значило бы
+    #: вернуть растущую заметку semantic-v1 (§14.6) — у сущности нет
+    #: своего утверждения, только упоминания в чужих.
+    statement_text: Mapped[str | None] = mapped_column(Text)
     #: Нормализованная форма для точного сопоставления при разрешении
     #: сущностей (§14.7). NULL для узлов-утверждений: у события нет
     #: «канонического ключа», по которому его можно слить с другим.
@@ -1001,6 +1024,26 @@ class KnowledgeNode(Base):
         CheckConstraint(
             f"semantic_run_id IS NOT NULL OR kind IN ({_KINDS_WITHOUT_RUN_SQL})",
             name="run_required_for_atoms"),
+        #: R3.1 DB-инвариант: утверждение обязано нести законченный
+        #: текст — пустая строка запрещена наравне с NULL, иначе
+        #: `atom.text == ""` тихо прошло бы мимо и первого условия.
+        CheckConstraint(
+            f"kind NOT IN ({_ATOM_KINDS_SQL}) OR "
+            f"(statement_text IS NOT NULL AND statement_text <> '')",
+            name="statement_text_required_for_atoms"),
+        #: ENTITY обязана нести классификацию — без неё узел-личность
+        #: не отличить от произвольного текстового ярлыка.
+        CheckConstraint(
+            "kind <> 'entity' OR entity_type IS NOT NULL",
+            name="entity_type_required_for_entity"),
+        #: Обратная сторона того же требования: у ENTITY не может быть
+        #: текста утверждения. Без этого CHECK ничто не мешало бы со
+        #: временем начать дописывать в сущность прозу источника — то
+        #: есть в точности growing-note дефект semantic-v1 (§14.6),
+        #: только через новое поле вместо старого.
+        CheckConstraint(
+            "kind <> 'entity' OR statement_text IS NULL",
+            name="statement_text_null_for_entity"),
         Index("ix_knowledge_nodes_user_kind", "knowledge_user_id", "kind"),
         #: Разрешение сущностей ищет по нормализованному ключу И виду:
         #: §14.7 разрешает автослияние только при совпадении обоих.

@@ -68,12 +68,14 @@ def _make_graph(session, *, user_id, label, source):
     session.flush()
 
     entity = KnowledgeNode(
-        knowledge_user_id=user_id, kind=SemanticNodeKind.ENTITY, subtype="PERSON",
-        canonical_label=label, normalized_key=label.lower(), semantic_run_id=run.id,
+        knowledge_user_id=user_id, kind=SemanticNodeKind.ENTITY, entity_type="person",
+        subtype="PERSON", canonical_label=label, normalized_key=label.lower(),
+        semantic_run_id=run.id,
     )
     event = KnowledgeNode(
         knowledge_user_id=user_id, kind=SemanticNodeKind.EVENT,
-        canonical_label=f"визит к {label}", semantic_run_id=run.id,
+        canonical_label=f"визит к {label}", statement_text=f"Состоялся визит к {label}.",
+        semantic_run_id=run.id,
     )
     session.add_all([entity, event])
     session.flush()
@@ -175,7 +177,7 @@ def test_writing_a_node_for_another_user_is_refused(session, second_user):
     bind_knowledge_user(session, SYSTEM_OWNER_ID)
     session.add(KnowledgeNode(
         knowledge_user_id=second_user.id, kind=SemanticNodeKind.ENTITY,
-        canonical_label="чужая сущность",
+        entity_type="person", canonical_label="чужая сущность",
     ))
     with pytest.raises(Exception) as err:
         session.flush()
@@ -232,7 +234,8 @@ def test_alias_uniqueness_is_scoped_to_one_entity(session, second_user):
         session, user_id=SYSTEM_OWNER_ID, label="Безручко Д.Ю.", source=source)
 
     second_entity = KnowledgeNode(
-        knowledge_user_id=SYSTEM_OWNER_ID, kind=SemanticNodeKind.ENTITY, subtype="PERSON",
+        knowledge_user_id=SYSTEM_OWNER_ID, kind=SemanticNodeKind.ENTITY,
+        entity_type="person", subtype="PERSON",
         canonical_label="Безручко Д.Ю. (другой)", normalized_key="безручко д.ю. (другой)",
     )
     session.add(second_entity)

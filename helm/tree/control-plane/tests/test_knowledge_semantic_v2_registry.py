@@ -107,10 +107,12 @@ def _seed(session):
 
     node_id, other_id = uuid.uuid4(), uuid.uuid4()
     for nid in (node_id, other_id):
+        # entity_type обязателен для kind='entity' (R3.1 DB-инвариант);
+        # statement_text для entity остаётся NULL — не передаётся вовсе.
         session.execute(text(
-            "INSERT INTO knowledge_nodes (id, knowledge_user_id, kind, canonical_label, "
-            "security_scope, status, semantic_run_id, created_at, updated_at) "
-            "VALUES (:id, :u, 'entity', 'проверочная сущность', 'internal', 'active', "
+            "INSERT INTO knowledge_nodes (id, knowledge_user_id, kind, entity_type, "
+            "canonical_label, security_scope, status, semantic_run_id, created_at, updated_at) "
+            "VALUES (:id, :u, 'entity', 'person', 'проверочная сущность', 'internal', 'active', "
             ":r, now(), now())"), {"id": nid, "u": SYSTEM_OWNER_ID, "r": run.id})
     session.flush()
     return {"source": source, "run": run, "node": node_id, "other": other_id,
@@ -118,18 +120,33 @@ def _seed(session):
 
 
 _INSERTS = {
+    # R3.1: entity_type/statement_text обязательны в зависимости от
+    # kind — при переборе всех значений реестра (accept-тест) значение
+    # kind меняется, поэтому оба поля вычисляются CASE-выражением по
+    # :value, а не задаются константой.
     ("knowledge_nodes", "kind"): (
-        "INSERT INTO knowledge_nodes (id, knowledge_user_id, kind, canonical_label, "
-        "security_scope, status, semantic_run_id, created_at, updated_at) "
-        "VALUES (gen_random_uuid(), :user, :value, 'x', 'internal', 'active', :run, now(), now())"),
+        # CAST(:value AS text) явно у каждого вхождения: без приведения
+        # типа postgres не может согласовать один и тот же именованный
+        # параметр, использованный и как значение колонки, и внутри CASE
+        # ("inconsistent types deduced for parameter"); `:value::text`
+        # слитно с двоеточием SQLAlchemy не распознаёт как bind-параметр.
+        "INSERT INTO knowledge_nodes (id, knowledge_user_id, kind, entity_type, "
+        "canonical_label, statement_text, security_scope, status, semantic_run_id, "
+        "created_at, updated_at) "
+        "VALUES (gen_random_uuid(), :user, CAST(:value AS text), "
+        "CASE WHEN CAST(:value AS text) = 'entity' THEN 'person' END, 'x', "
+        "CASE WHEN CAST(:value AS text) IN ('event', 'fact', 'decision', 'concept') "
+        "THEN 'тело' END, 'internal', 'active', :run, now(), now())"),
     ("knowledge_nodes", "status"): (
         "INSERT INTO knowledge_nodes (id, knowledge_user_id, kind, canonical_label, "
-        "security_scope, status, semantic_run_id, created_at, updated_at) "
-        "VALUES (gen_random_uuid(), :user, 'fact', 'x', 'internal', :value, :run, now(), now())"),
+        "statement_text, security_scope, status, semantic_run_id, created_at, updated_at) "
+        "VALUES (gen_random_uuid(), :user, 'fact', 'x', 'тело', 'internal', :value, "
+        ":run, now(), now())"),
     ("knowledge_nodes", "date_precision"): (
         "INSERT INTO knowledge_nodes (id, knowledge_user_id, kind, canonical_label, "
-        "security_scope, status, date_precision, semantic_run_id, created_at, updated_at) "
-        "VALUES (gen_random_uuid(), :user, 'fact', 'x', 'internal', 'active', :value, "
+        "statement_text, security_scope, status, date_precision, semantic_run_id, "
+        "created_at, updated_at) "
+        "VALUES (gen_random_uuid(), :user, 'fact', 'x', 'тело', 'internal', 'active', :value, "
         ":run, now(), now())"),
     ("knowledge_node_mentions", "evidence_type"): (
         "INSERT INTO knowledge_node_mentions (id, knowledge_user_id, node_id, source_id, "
@@ -203,11 +220,14 @@ def test_identity_nodes_may_have_no_run(session, kind) -> None:
     устранения которого semantic-v2 и заводится.
     """
     seed = _seed(session)
+    # entity_type обязателен только для kind='entity' (R3.1); для
+    # document_ref/memory_ref остаётся NULL.
+    entity_type = "person" if kind == SemanticNodeKind.ENTITY else None
     session.execute(text(
-        "INSERT INTO knowledge_nodes (id, knowledge_user_id, kind, canonical_label, "
-        "security_scope, status, semantic_run_id, created_at, updated_at) "
-        "VALUES (gen_random_uuid(), :u, :k, 'личность', 'internal', 'active', NULL, "
-        "now(), now())"), {"u": seed["user"], "k": kind.value})
+        "INSERT INTO knowledge_nodes (id, knowledge_user_id, kind, entity_type, "
+        "canonical_label, security_scope, status, semantic_run_id, created_at, updated_at) "
+        "VALUES (gen_random_uuid(), :u, :k, :et, 'личность', 'internal', 'active', NULL, "
+        "now(), now())"), {"u": seed["user"], "k": kind.value, "et": entity_type})
     session.flush()
 
 

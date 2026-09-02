@@ -193,6 +193,11 @@ CREATE TABLE IF NOT EXISTS health.knowledge_nodes (
   knowledge_user_id uuid NOT NULL,
   kind varchar(16) NOT NULL,
   subtype varchar(64),
+  -- R3.1, найдено владельцем 02.09.2026: entity_type (подвид ENTITY) и
+  -- statement_text (тело утверждения EVENT/FACT/DECISION/CONCEPT) —
+  -- обе колонки терялись на записи, см. tables.py::KnowledgeNode.
+  entity_type varchar(64),
+  statement_text text,
   canonical_label text NOT NULL,
   normalized_key text,
   primary_domain_id uuid,
@@ -208,6 +213,13 @@ CREATE TABLE IF NOT EXISTS health.knowledge_nodes (
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL
 );
+-- Сервер, где эта таблица уже создана прошлым прогоном (до R3.1), не
+-- получит новых колонок от CREATE TABLE IF NOT EXISTS выше — оно не
+-- трогает существующую таблицу. ADD COLUMN IF NOT EXISTS идемпотентен
+-- в обе стороны: и на свежей таблице (колонки уже есть — no-op), и на
+-- старой (колонки появляются).
+ALTER TABLE health.knowledge_nodes ADD COLUMN IF NOT EXISTS entity_type varchar(64);
+ALTER TABLE health.knowledge_nodes ADD COLUMN IF NOT EXISTS statement_text text;
 CREATE INDEX IF NOT EXISTS ix_health_knowledge_nodes_user_kind
   ON health.knowledge_nodes (knowledge_user_id, kind);
 CREATE INDEX IF NOT EXISTS ix_health_knowledge_nodes_resolution
@@ -342,7 +354,14 @@ DECLARE
     ['knowledge_semantic_windows', 'ck_knowledge_semantic_windows_status',
      'status IN (''pending'', ''processed'', ''no_knowledge'', ''split'', ''failed'')'],
     ['knowledge_semantic_windows', 'ck_knowledge_semantic_windows_span_not_empty',
-     'char_end > char_start']
+     'char_end > char_start'],
+    -- R3.1: те же три инварианта, что в public (tables.py::KnowledgeNode).
+    ['knowledge_nodes', 'ck_knowledge_nodes_statement_text_required_for_atoms',
+     'kind NOT IN (''event'', ''fact'', ''decision'', ''concept'') OR (statement_text IS NOT NULL AND statement_text <> '''')'],
+    ['knowledge_nodes', 'ck_knowledge_nodes_entity_type_required_for_entity',
+     'kind <> ''entity'' OR entity_type IS NOT NULL'],
+    ['knowledge_nodes', 'ck_knowledge_nodes_statement_text_null_for_entity',
+     'kind <> ''entity'' OR statement_text IS NULL']
   ];
   i int;
 BEGIN

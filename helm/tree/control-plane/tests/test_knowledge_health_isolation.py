@@ -36,13 +36,15 @@ from helm_core.knowledge.offboarding import delete_user_permanently
 from helm_core.knowledge import ingest as ingest_module
 from helm_core.knowledge.ingest import ingest_text, register_file_for_ingest
 from helm_core.knowledge.probe import probe
+from helm_core.knowledge.semantic_extract import ExtractedAtom, ExtractedEntity, WindowExtraction
+from helm_core.knowledge.semantic_publish import publish_semantic_run
 from helm_core.knowledge.worker import process_job
 from helm_core.models import (
     HealthKnowledgeChunk, HealthKnowledgeEdge, HealthKnowledgeEntityAlias,
     HealthKnowledgeNode, HealthKnowledgeNodeMention,
     HealthKnowledgeNote, HealthKnowledgeRelation, HealthKnowledgeSourcePrivate,
     KnowledgeChunk, KnowledgeIngestStatus, KnowledgeNote, KnowledgeRelation, KnowledgeSource,
-    KnowledgeUser, KnowledgeUserRole, KnowledgeUserStatus, OutboxMessage,
+    KnowledgeUser, KnowledgeUserRole, KnowledgeUserStatus, OutboxMessage, SemanticRunStatus,
 )
 from helm_core.models.health_tables import HealthBase
 from conftest import DB_URL
@@ -564,11 +566,11 @@ def _health_graph(user_id, *, label):
             original_filename=f"{label}.pdf", created_at=datetime.now(timezone.utc)))
         hs.flush()
         entity = HealthKnowledgeNode(
-            knowledge_user_id=user_id, kind="entity", subtype="PERSON",
+            knowledge_user_id=user_id, kind="entity", entity_type="person", subtype="PERSON",
             canonical_label=label, normalized_key=label.lower(), semantic_run_id=run_id)
         event = HealthKnowledgeNode(
             knowledge_user_id=user_id, kind="event", canonical_label=f"визит к {label}",
-            semantic_run_id=run_id)
+            statement_text=f"Состоялся визит к {label}.", semantic_run_id=run_id)
         hs.add_all([entity, event])
         hs.flush()
         mention = HealthKnowledgeNodeMention(
@@ -625,6 +627,45 @@ def test_health_semantic_v2_is_isolated_between_tenants(session, health_configur
         hs.execute(text("SET LOCAL app.current_knowledge_user_id = ''"))
         for model in HEALTH_SEMANTIC_MODELS:
             assert hs.scalars(select(model)).all() == [], model.__name__
+
+
+def test_health_writer_preserves_entity_type_and_statement_text(session, health_configured, user):
+    """R3.1 round-trip через ЗДОРОВЬЕ-путь публикации, не только public.
+
+    Владелец потребовал минимум один такой тест: health пишет через
+    отдельную роль по отдельному соединению (`health_session()`), и «в
+    public проверено» этого пути не касается — тот же класс дефекта мог
+    остаться именно здесь, если бы фикс тронул только public-ветку кода
+    (а `_write_extraction()` — общая для обеих схем функция, так что
+    падение здесь означало бы, что общий код и общая модель разошлись).
+    """
+    source = ingest_text(session, domain="health", text="Приём эндокринолога.",
+                         knowledge_user_id=user.id)
+    session.flush()
+
+    extraction = WindowExtraction(
+        entities=[ExtractedEntity(local_id="e1", entity_type="PERSON", subtype="doctor",
+                                  label="Бокова Мария Николаевна")],
+        atoms=[ExtractedAtom(local_id="a1", kind="fact", title="Диагноз",
+                             text="Выявлен дефицит железа, назначена терапия.")],
+    )
+    result = publish_semantic_run(
+        session, source=source, text="Приём эндокринолога.",
+        extract=lambda *a, **kw: extraction)
+    session.commit()
+    assert result.status == SemanticRunStatus.READY
+
+    with health_schema.health_session(user.id) as hs:
+        nodes = {n.kind: n for n in hs.scalars(
+            select(HealthKnowledgeNode).where(
+                HealthKnowledgeNode.semantic_run_id == result.run_id)).all()}
+
+    assert nodes["entity"].entity_type == "person"
+    assert nodes["entity"].subtype == "doctor"
+    assert nodes["entity"].statement_text is None
+    assert nodes["fact"].statement_text == "Выявлен дефицит железа, назначена терапия."
+    assert nodes["fact"].canonical_label == "Диагноз"
+    assert nodes["fact"].entity_type is None
 
 
 def test_health_semantic_v2_registry_is_closed(session, health_configured, user):

@@ -176,9 +176,15 @@ def _write_extraction(graph, models: _Models, *, extraction: WindowExtraction,
     nodes = 0
 
     for entity in extraction.entities:
+        # R3.1, найдено владельцем 02.09.2026: `subtype` здесь подменялся
+        # `entity_type.lower()`, и настоящий subtype (`doctor`,
+        # `medical_specialty`) терялся молча. `entity_type` — своё поле;
+        # `statement_text` у ENTITY нет намеренно (§14.6, см. докстринг
+        # модели) — складывать сюда прозу источника значило бы вернуть
+        # растущую заметку semantic-v1.
         node = models.node(
             knowledge_user_id=tenant_id, kind=SemanticNodeKind.ENTITY,
-            subtype=entity.entity_type.lower() or None,
+            entity_type=entity.entity_type.lower() or None, subtype=entity.subtype,
             canonical_label=entity.label, normalized_key=normalize_key(entity.label),
             semantic_run_id=run_id,
         )
@@ -192,11 +198,15 @@ def _write_extraction(graph, models: _Models, *, extraction: WindowExtraction,
                 normalized_alias=normalize_key(alias), source_id=source_id))
 
     for atom in extraction.atoms:
+        # R3.1: `atom.text` — законченное утверждение модели (§14.4.2) —
+        # раньше не записывался вовсе; сохранялся только `atom.title` в
+        # `canonical_label`. `entity_type` у утверждения нет: у него нет
+        # личности, есть только текст и дата.
         occurred_at, precision = parse_occurred_at(atom.occurred_at, atom.date_precision)
         node = models.node(
             knowledge_user_id=tenant_id, kind=atom.kind, subtype=atom.subtype,
-            canonical_label=atom.title, occurred_at_start=occurred_at,
-            date_precision=precision, semantic_run_id=run_id,
+            canonical_label=atom.title, statement_text=atom.text,
+            occurred_at_start=occurred_at, date_precision=precision, semantic_run_id=run_id,
         )
         graph.add(node)
         graph.flush()
@@ -206,6 +216,15 @@ def _write_extraction(graph, models: _Models, *, extraction: WindowExtraction,
     # Упоминание на КАЖДЫЙ узел окна: §14.5 требует происхождения на
     # уровне источника, а не «где-то в этом документе». Без него ответ
     # нельзя проследить до места в тексте (§30.8.5 F).
+    #
+    # ДОЛГ, зафиксированный владельцем 02.09.2026 (R3.1, не блокирует R3):
+    # диапазон здесь — границы ВСЕГО окна (до WINDOW_MAX_CHARS символов),
+    # не точный фрагмент внутри него, где на самом деле стоит узел. Для
+    # приёмки R5 (§30.8.5 F «точное происхождение») этого недостаточно —
+    # нужен диапазон внутри окна, который модель пока не отдаёт. Разбор
+    # результата от исходного текста уже дал бы точные смещения; здесь
+    # сознательно не делается, чтобы не расширять R3.1 сверх найденных
+    # владельцем двух потерь данных.
     for node_id in by_local.values():
         graph.add(models.mention(
             knowledge_user_id=tenant_id, node_id=node_id, source_id=source_id,
