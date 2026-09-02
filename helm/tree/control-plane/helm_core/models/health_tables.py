@@ -31,14 +31,19 @@ from datetime import datetime
 from decimal import Decimal
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import ForeignKey, Index, Integer, MetaData, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint, ForeignKey, Index, Integer, MetaData, Numeric, String, Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from .base import (
-    NAMING_CONVENTION, KnowledgeStatus, SemanticNodeStatus, ts_column, utcnow,
+    NAMING_CONVENTION, KnowledgeStatus, SemanticDatePrecision, SemanticEvidenceType,
+    SemanticNodeKind, SemanticNodeStatus, SemanticRelationType, ts_column, utcnow,
+    sql_enum_values,
 )
-from .tables import KNOWLEDGE_EMBED_DIM
+from .tables import _KINDS_WITHOUT_RUN_SQL, KNOWLEDGE_EMBED_DIM
 
 
 class HealthBase(DeclarativeBase):
@@ -222,6 +227,19 @@ class HealthKnowledgeNode(HealthBase):
     updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow, nullable=False)
 
     __table_args__ = (
+        # Те же реестры, что в public. Зеркало без ограничений было бы
+        # дырой ровно там, где данные чувствительнее: health-путь пишет
+        # отдельная роль по отдельному соединению, и «в public проверим»
+        # его не касается.
+        CheckConstraint(f"kind IN ({sql_enum_values(SemanticNodeKind)})", name="kind"),
+        CheckConstraint(f"status IN ({sql_enum_values(SemanticNodeStatus)})", name="status"),
+        CheckConstraint(
+            f"date_precision IS NULL OR date_precision IN "
+            f"({sql_enum_values(SemanticDatePrecision)})",
+            name="date_precision"),
+        CheckConstraint(
+            f"semantic_run_id IS NOT NULL OR kind IN ({_KINDS_WITHOUT_RUN_SQL})",
+            name="run_required_for_atoms"),
         Index("ix_health_knowledge_nodes_user_kind", "knowledge_user_id", "kind"),
         Index("ix_health_knowledge_nodes_resolution",
               "knowledge_user_id", "kind", "subtype", "normalized_key"),
@@ -257,10 +275,12 @@ class HealthKnowledgeNodeMention(HealthBase):
     evidence_text_hash: Mapped[str | None] = mapped_column(String(64))
     evidence_type: Mapped[str] = mapped_column(String(16), nullable=False)
     confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
-    semantic_run_id: Mapped[uuid.UUID | None] = mapped_column()
+    semantic_run_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
     created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
 
     __table_args__ = (
+        CheckConstraint(f"evidence_type IN ({sql_enum_values(SemanticEvidenceType)})",
+                        name="evidence_type"),
         Index("ix_health_knowledge_node_mentions_node", "node_id"),
         Index("ix_health_knowledge_node_mentions_source", "source_id"),
         Index("ix_health_knowledge_node_mentions_run", "semantic_run_id"),
@@ -294,6 +314,15 @@ class HealthKnowledgeEdge(HealthBase):
     created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
 
     __table_args__ = (
+        CheckConstraint(f"relation_type IN ({sql_enum_values(SemanticRelationType)})",
+                        name="relation_type"),
+        CheckConstraint(f"evidence_type IN ({sql_enum_values(SemanticEvidenceType)})",
+                        name="evidence_type"),
+        CheckConstraint(f"status IN ({sql_enum_values(SemanticNodeStatus)})", name="status"),
+        CheckConstraint(
+            f"semantic_run_id IS NOT NULL OR evidence_type = "
+            f"'{SemanticEvidenceType.OWNER_EXPLICIT.value}'",
+            name="run_required_for_derived"),
         Index("ix_health_knowledge_edges_from", "from_node_id", "relation_type"),
         Index("ix_health_knowledge_edges_to", "to_node_id", "relation_type"),
         Index("ix_health_knowledge_edges_run", "semantic_run_id"),

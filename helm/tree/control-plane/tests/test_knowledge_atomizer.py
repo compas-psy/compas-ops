@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select
@@ -23,7 +24,7 @@ from helm_core.knowledge.atomizer import (
 from helm_core.knowledge.ingest import ingest_text
 from helm_core.knowledge.relations import note_id_for
 from helm_core.knowledge.tenancy import bind_knowledge_user
-from helm_core.models import KnowledgeNote, KnowledgeUser, KnowledgeUserRole
+from helm_core.models import KnowledgeNote, KnowledgeRelation, KnowledgeUser, KnowledgeUserRole
 
 
 @pytest.fixture
@@ -181,3 +182,60 @@ def test_ingest_still_works_and_produces_no_l2_notes(session, tmp_path, monkeypa
     # Owner-уровня relations (note_id_for самого источника) продолжают
     # создаваться как раньше — заморожен только L2-слой поверх них.
     assert note_id_for(original_filename=None, source_id=source.id) is not None
+
+
+# ── LEGACY_SEMANTIC_V1: заморозка держится на реальном ingest ────────────
+
+def test_ingest_adds_no_v1_rows_and_makes_no_model_call(session, tmp_path, monkeypatch, user):
+    """Регрессия на заморозку целиком, по требованию владельца 02.09.2026.
+
+    Три дельты за настоящий ingest: заметок v1 ноль, связей v1 ноль,
+    обращений к модели ноль. Раньше здесь на каждом источнике
+    происходило по одному вызову Ollama и по одной растущей заметке —
+    то самое, что §14.23 называет нарушением.
+
+    Ноль вызовов проверяется на транспорте (`urlopen`), а не на обёртке
+    `atomize_or_empty`: подменив обёртку, тест доказал бы только то, что
+    не зовут подменённое. Заморозка обязана стоять ДО того, как
+    собирается HTTP-запрос, иначе ingest продолжал бы ходить в модель
+    впустую и молча.
+    """
+    # Считаются обращения ИМЕННО к Ollama: `urllib.request` один на весь
+    # процесс, и через него же ходит `embeddings.py`. Подмена «любого
+    # urlopen» ловила бы вызов эмбеддера и падала бы на нём — не на том,
+    # что проверяется.
+    calls = []
+    real_urlopen = atomizer.urllib.request.urlopen
+
+    def counting_urlopen(req, *args, **kwargs):
+        url = getattr(req, "full_url", req)
+        if isinstance(url, str) and url == atomizer.OLLAMA_URL:
+            calls.append(url)
+        return real_urlopen(req, *args, **kwargs)
+
+    monkeypatch.setattr(atomizer.urllib.request, "urlopen", counting_urlopen)
+
+    before_notes = session.query(KnowledgeNote).count()
+    before_relations = session.query(KnowledgeRelation).count()
+
+    ingest_text(session, domain="ventures", text="Встреча по проекту Симпас.",
+                knowledge_user_id=user.id, vault_root=str(tmp_path))
+    session.flush()
+
+    assert session.query(KnowledgeNote).count() - before_notes == 0
+    assert session.query(KnowledgeRelation).count() - before_relations == 0
+    assert calls == []
+    assert not (tmp_path / "entities").exists()
+
+
+def test_frozen_v1_code_is_marked(session) -> None:
+    """`grep -rn LEGACY_SEMANTIC_V1` обязан показывать границу v1
+    целиком. Метка — не украшение: она единственное, что отличает
+    «замороженный до R3 код» от «мёртвого кода, который можно удалить»,
+    и без неё первый же наводящий порядок удалит то, что R3 переписывает.
+    """
+    source = Path(atomizer.__file__).read_text(encoding="utf-8")
+    assert "LEGACY_SEMANTIC_V1" in source.split('"""')[1], "метки нет в докстринге модуля"
+    for name in ("def atomize(", "def atomize_or_empty(", "def store_notes("):
+        body = source[source.index(name):source.index(name) + 400]
+        assert "LEGACY_SEMANTIC_V1" in body, f"{name} не помечена"

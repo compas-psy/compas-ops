@@ -11,21 +11,16 @@ from sqlalchemy import select
 from helm_core.api.security import sign
 from helm_core.app import create_app
 from helm_core.config import Settings
-from helm_core.knowledge.rls import apply_rls
-from helm_core.models import Base, Task
+from helm_core.models import Task
 
-from conftest import DB_URL, OWNER_ID, POLICY_PATH, seed_system_owner
+from conftest import DB_URL, OWNER_ID, POLICY_PATH, rebuild_schema
 
 SERVICE_SECRET = "test-service-secret"
 
 
 @pytest.fixture
 def client(engine, tmp_path, monkeypatch):
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
-    with engine.begin() as conn:
-        apply_rls(conn)
-    seed_system_owner(engine)
+    rebuild_schema(engine)
     settings = Settings(database_url=DB_URL, policy_path=POLICY_PATH, owner_id=OWNER_ID)
     # /internal/knowledge/attachment/* (P8.5.7, Telegram) зовёт stage_
     # attachment()/resolve_pending_domain() без spool_root/vault_root —

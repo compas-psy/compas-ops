@@ -29,9 +29,16 @@ from pgvector.sqlalchemy import Vector
 
 from .base import (
     ApprovalStatus, Base, KnowledgeBatchItemStatus, KnowledgeBatchStatus, KnowledgeIngestStatus,
-    KnowledgeMemoryStatus, KnowledgeStatus, KnowledgeUserStatus, SemanticNodeStatus,
-    SemanticRunStatus, TaskStatus, ts_column, utcnow, uuid_pk,
+    KnowledgeMemoryStatus, KnowledgeStatus, KnowledgeUserStatus, NODE_KINDS_WITHOUT_RUN,
+    SemanticDatePrecision, SemanticEvidenceType, SemanticNodeKind, SemanticNodeStatus,
+    SemanticRelationType, SemanticRunStatus, TaskStatus, sql_enum_values, ts_column, utcnow,
+    uuid_pk,
 )
+
+#: Виды узлов, которым ревизия не обязательна (§14.5 + решение
+#: 02.09.2026 про DOCUMENT_REF/MEMORY_REF — разбор в base.py).
+_KINDS_WITHOUT_RUN_SQL = ", ".join(
+    f"'{k.value}'" for k in sorted(NODE_KINDS_WITHOUT_RUN))
 
 
 class Task(Base):
@@ -980,6 +987,20 @@ class KnowledgeNode(Base):
         default=utcnow, onupdate=utcnow, nullable=False)
 
     __table_args__ = (
+        CheckConstraint(f"kind IN ({sql_enum_values(SemanticNodeKind)})",
+                        name="kind"),
+        CheckConstraint(f"status IN ({sql_enum_values(SemanticNodeStatus)})",
+                        name="status"),
+        CheckConstraint(
+            f"date_precision IS NULL OR date_precision IN "
+            f"({sql_enum_values(SemanticDatePrecision)})",
+            name="date_precision"),
+        #: §14.5 + решение 02.09.2026: утверждение обязано знать свою
+        #: ревизию, личность — нет. Без этого откат ревизии не знает,
+        #: что убирать.
+        CheckConstraint(
+            f"semantic_run_id IS NOT NULL OR kind IN ({_KINDS_WITHOUT_RUN_SQL})",
+            name="run_required_for_atoms"),
         Index("ix_knowledge_nodes_user_kind", "knowledge_user_id", "kind"),
         #: Разрешение сущностей ищет по нормализованному ключу И виду:
         #: §14.7 разрешает автослияние только при совпадении обоих.
@@ -1027,12 +1048,15 @@ class KnowledgeNodeMention(Base):
     confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
     #: §14.5: к ревизии привязан каждый узел, ребро И упоминание —
     #: иначе после отката ревизии упоминания остались бы висеть на
-    #: удалённых узлах.
-    semantic_run_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("knowledge_semantic_runs.id"))
+    #: удалённых узлах. Здесь NOT NULL, а не CHECK с оговорками:
+    #: упоминание всегда продукт прохода, исключений у него нет.
+    semantic_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_semantic_runs.id"), nullable=False)
     created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
 
     __table_args__ = (
+        CheckConstraint(f"evidence_type IN ({sql_enum_values(SemanticEvidenceType)})",
+                        name="evidence_type"),
         Index("ix_knowledge_node_mentions_node", "node_id"),
         Index("ix_knowledge_node_mentions_source", "source_id"),
         Index("ix_knowledge_node_mentions_run", "semantic_run_id"),
@@ -1074,6 +1098,22 @@ class KnowledgeEdge(Base):
     created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
 
     __table_args__ = (
+        #: §14.9 «Minimum core» — реестр закрыт. Закрыт и в базе:
+        #: неизвестный тип связи не должен появляться ни миграцией, ни
+        #: через psql, ни в обход модели.
+        CheckConstraint(f"relation_type IN ({sql_enum_values(SemanticRelationType)})",
+                        name="relation_type"),
+        CheckConstraint(f"evidence_type IN ({sql_enum_values(SemanticEvidenceType)})",
+                        name="evidence_type"),
+        CheckConstraint(f"status IN ({sql_enum_values(SemanticNodeStatus)})",
+                        name="status"),
+        #: Связь, порождённая моделью, обязана знать свой проход. У
+        #: OWNER_EXPLICIT прохода может не быть: её написал владелец, а
+        #: не извлекла модель.
+        CheckConstraint(
+            f"semantic_run_id IS NOT NULL OR evidence_type = "
+            f"'{SemanticEvidenceType.OWNER_EXPLICIT.value}'",
+            name="run_required_for_derived"),
         Index("ix_knowledge_edges_from", "from_node_id", "relation_type"),
         Index("ix_knowledge_edges_to", "to_node_id", "relation_type"),
         Index("ix_knowledge_edges_run", "semantic_run_id"),
@@ -1154,5 +1194,7 @@ class KnowledgeSemanticRun(Base):
     created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
 
     __table_args__ = (
+        CheckConstraint(f"status IN ({sql_enum_values(SemanticRunStatus)})",
+                        name="status"),
         Index("ix_knowledge_semantic_runs_source", "source_id", "semantic_version"),
     )

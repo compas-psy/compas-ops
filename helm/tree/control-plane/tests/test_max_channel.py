@@ -27,15 +27,14 @@ from helm_core.config import Settings
 from helm_core.dispatch import BACKOFF, MAX_ATTEMPTS, deliver_pending
 from helm_core.hermes_bridge import HermesUnavailable
 from helm_core.ingest import CROSS_CHANNEL_WINDOW, strip_force_prefix
-from helm_core.knowledge.rls import apply_rls
 from helm_core.knowledge.tenancy import bind_knowledge_user
 from helm_core.models import (
-    Base, ChannelEvent, KnowledgeBatchItem, KnowledgeIngestBatch, KnowledgePendingAttachment,
+    ChannelEvent, KnowledgeBatchItem, KnowledgeIngestBatch, KnowledgePendingAttachment,
     KnowledgeSource, OutboxMessage, Task, utcnow,
 )
 from helm_core.outbox import enqueue
 
-from conftest import DB_URL, OWNER_ID, POLICY_PATH, seed_system_owner
+from conftest import DB_URL, OWNER_ID, POLICY_PATH, rebuild_schema
 
 SERVICE_SECRET = "test-service-secret"
 WEBHOOK_SECRET = "test-max-webhook-secret"
@@ -288,11 +287,7 @@ class FakeBridge:
 
 @pytest.fixture
 def app(engine, tmp_path, monkeypatch):
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
-    with engine.begin() as conn:
-        apply_rls(conn)
-    seed_system_owner(engine)
+    rebuild_schema(engine)
     settings = Settings(database_url=DB_URL, policy_path=POLICY_PATH, owner_id=OWNER_ID,
                         max_owner_id=MAX_OWNER_ID)
     application = create_app(settings, service_secret=SERVICE_SECRET)

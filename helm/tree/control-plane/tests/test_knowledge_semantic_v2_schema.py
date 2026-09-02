@@ -122,34 +122,51 @@ def test_rls_is_forced_on_semantic_v2_tables(session, table) -> None:
     assert row.relforcerowsecurity is True
 
 
-def test_semantic_v2_rows_of_another_user_are_invisible(engine, session, second_user):
-    """Главное свойство: граф соседа не виден ни одной строкой.
+def test_two_tenants_see_only_their_own_semantic_graph(engine, session, second_user):
+    """Поведенческая проверка, а не «RLS/FORCE = t».
 
-    Проверяется через ДВЕ сессии, а не сменой GUC в одной: политика
-    читает `app.current_knowledge_user_id` текущей транзакции, и вся
-    ошибка, которую тест ловит, — это забытая таблица в списке, то есть
-    отсутствие политики, а не неверный предикат.
+    Включённая политика и работающая изоляция — разные утверждения:
+    политика с неверным предикатом тоже показывает `t`. Поэтому здесь
+    два реальных владельца, строки во ВСЕХ пяти таблицах у каждого, и
+    три счётчика: A→B, B→A и «тенант не выставлен».
     """
-    other_id = second_user.id
-    bind_knowledge_user(session, other_id)
-    source = ingest_text(session, domain="health", text="приём у врача",
-                         knowledge_user_id=other_id)
-    session.flush()
-    _make_graph(session, user_id=other_id, label="Безручко Дарья Юрьевна", source=source)
+    first_id, second_id = SYSTEM_OWNER_ID, second_user.id
     session.commit()
 
-    with Session(engine) as owner_session:
-        bind_knowledge_user(owner_session, SYSTEM_OWNER_ID)
-        assert owner_session.scalars(select(KnowledgeNode)).all() == []
-        assert owner_session.scalars(select(KnowledgeEdge)).all() == []
-        assert owner_session.scalars(select(KnowledgeNodeMention)).all() == []
-        assert owner_session.scalars(select(KnowledgeEntityAlias)).all() == []
-        assert owner_session.scalars(select(KnowledgeSemanticRun)).all() == []
+    made = {}
+    for user_id, label in ((first_id, "Первый врач"), (second_id, "Второй врач")):
+        with Session(engine) as s:
+            bind_knowledge_user(s, user_id)
+            source = ingest_text(s, domain="health", text=f"приём, {label}",
+                                 knowledge_user_id=user_id)
+            s.flush()
+            _make_graph(s, user_id=user_id, label=label, source=source)
+            s.commit()
+        made[user_id] = label
 
-    with Session(engine) as their_session:
-        bind_knowledge_user(their_session, other_id)
-        assert len(their_session.scalars(select(KnowledgeNode)).all()) == 2
-        assert len(their_session.scalars(select(KnowledgeEdge)).all()) == 1
+    for mine, theirs in ((first_id, second_id), (second_id, first_id)):
+        with Session(engine) as s:
+            bind_knowledge_user(s, mine)
+            for model in (KnowledgeSemanticRun, KnowledgeNode, KnowledgeNodeMention,
+                          KnowledgeEdge, KnowledgeEntityAlias):
+                rows = s.scalars(select(model)).all()
+                assert rows, f"{model.__name__}: свои строки не видны — тест ничего не проверяет"
+                foreign = [r for r in rows if r.knowledge_user_id != mine]
+                assert not foreign, (
+                    f"{model.__name__}: видно {len(foreign)} строк владельца {theirs}")
+            labels = {n.canonical_label for n in s.scalars(select(KnowledgeNode)).all()}
+            assert made[theirs] not in " ".join(labels)
+
+    # Тенант не выставлен — ноль строк везде, а не «всё подряд».
+    # Пустая строка проверяется отдельно от «GUC не трогали»: на пуле
+    # соединений Postgres оставляет placeholder со значением '', и
+    # именно этот случай когда-то ронял запрос вместо того, чтобы
+    # вернуть ноль строк (см. PREDICATE в rls.py).
+    with Session(engine) as s:
+        s.execute(text("SET LOCAL app.current_knowledge_user_id = ''"))
+        for model in (KnowledgeSemanticRun, KnowledgeNode, KnowledgeNodeMention,
+                      KnowledgeEdge, KnowledgeEntityAlias):
+            assert s.scalars(select(model)).all() == [], model.__name__
 
 
 def test_writing_a_node_for_another_user_is_refused(session, second_user):

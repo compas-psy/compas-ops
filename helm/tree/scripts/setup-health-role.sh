@@ -278,6 +278,57 @@ CREATE TABLE IF NOT EXISTS health.knowledge_entity_aliases (
 CREATE INDEX IF NOT EXISTS ix_health_knowledge_entity_aliases_lookup
   ON health.knowledge_entity_aliases (knowledge_user_id, normalized_alias);
 
+-- Закрытые реестры и цикл ревизии — те же, что в public (R2-hardening,
+-- §14.5/§14.9). Отдельным блоком, а не в CREATE TABLE выше: таблицы уже
+-- созданы прошлым прогоном без ограничений, а `CREATE TABLE IF NOT
+-- EXISTS` к существующей таблице ничего не добавляет. `ADD CONSTRAINT
+-- IF NOT EXISTS` в Postgres нет, поэтому проверяем каталог сами.
+--
+-- Значения выписаны буквально и обязаны совпадать с public: расхождение
+-- ловит tests/test_knowledge_semantic_v2_registry.py, сверяющий обе
+-- схемы с перечислениями Python.
+DO $$
+DECLARE
+  spec text[][] := ARRAY[
+    ['knowledge_nodes', 'ck_knowledge_nodes_kind',
+     'kind IN (''entity'', ''event'', ''fact'', ''decision'', ''concept'', ''document_ref'', ''memory_ref'')'],
+    ['knowledge_nodes', 'ck_knowledge_nodes_status',
+     'status IN (''active'', ''disabled'', ''superseded'', ''quarantine'', ''deleted'')'],
+    ['knowledge_nodes', 'ck_knowledge_nodes_date_precision',
+     'date_precision IS NULL OR date_precision IN (''day'', ''month'', ''year'', ''unknown'')'],
+    ['knowledge_nodes', 'ck_knowledge_nodes_run_required_for_atoms',
+     'semantic_run_id IS NOT NULL OR kind IN (''document_ref'', ''entity'', ''memory_ref'')'],
+    ['knowledge_node_mentions', 'ck_knowledge_node_mentions_evidence_type',
+     'evidence_type IN (''owner_explicit'', ''extracted'', ''inferred'')'],
+    ['knowledge_edges', 'ck_knowledge_edges_relation_type',
+     'relation_type IN (''involves'', ''has_role'', ''about'', ''located_at'', ''part_of'', ''created_by'', ''owned_by'', ''resulted_in'', ''reason_for'', ''supports'', ''contradicts'', ''supersedes'', ''derived_from'', ''refers_to'', ''related_to'')'],
+    ['knowledge_edges', 'ck_knowledge_edges_evidence_type',
+     'evidence_type IN (''owner_explicit'', ''extracted'', ''inferred'')'],
+    ['knowledge_edges', 'ck_knowledge_edges_status',
+     'status IN (''active'', ''disabled'', ''superseded'', ''quarantine'', ''deleted'')'],
+    ['knowledge_edges', 'ck_knowledge_edges_run_required_for_derived',
+     'semantic_run_id IS NOT NULL OR evidence_type = ''owner_explicit''']
+  ];
+  i int;
+BEGIN
+  FOR i IN 1 .. array_length(spec, 1) LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+       WHERE n.nspname = 'health' AND t.relname = spec[i][1] AND c.conname = spec[i][2]
+    ) THEN
+      EXECUTE format('ALTER TABLE health.%I ADD CONSTRAINT %I CHECK (%s)',
+                     spec[i][1], spec[i][2], spec[i][3]);
+    END IF;
+  END LOOP;
+END
+$$;
+
+-- Упоминание всегда продукт прохода — исключений нет, поэтому NOT NULL,
+-- а не CHECK с оговорками. Таблица пуста, бэкафилл не нужен.
+ALTER TABLE health.knowledge_node_mentions ALTER COLUMN semantic_run_id SET NOT NULL;
+
 RESET ROLE;
 SQL
 

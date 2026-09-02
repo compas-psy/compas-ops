@@ -71,6 +71,55 @@ mirrored=$(psql -c "select count(*) from pg_tables
 want "health.knowledge_semantic_runs НЕ зеркалится" "$mirrored" "0"
 
 echo
+echo "############ 3a. ГЕЙТ ТЕКУЩЕЙ РЕВИЗИИ (R2-hardening) ############"
+# §14.5: current_semantic_run_id может указывать только на READY-ревизию
+# того же источника и того же владельца, и такая ревизия не может
+# испортиться, пока остаётся текущей. Внешний ключ этого не даёт — он
+# одинаково пропустит FAILED, чужой документ и чужого владельца.
+for trg in knowledge_sources_current_semantic_run_guard \
+           knowledge_semantic_runs_current_guard; do
+  want "триггер $trg" \
+       "$(psql -c "select count(*) from pg_trigger where tgname = '$trg' and not tgisinternal")" "1"
+done
+
+echo
+echo "############ 3b. ЗАКРЫТЫЕ РЕЕСТРЫ В БАЗЕ ############"
+# Реестр §14.9 назван закрытым — значит закрыт не только Python-enum:
+# мимо enum ходят миграции, backfill и psql руками.
+want "CHECK в public" \
+     "$(psql -c "select count(*) from pg_constraint c
+                   join pg_class t on t.oid = c.conrelid
+                   join pg_namespace n on n.oid = t.relnamespace
+                  where n.nspname = 'public' and c.contype = 'c'
+                    and c.conname like 'ck_knowledge_%'")" "10"
+want "CHECK в health" \
+     "$(psql -c "select count(*) from pg_constraint c
+                   join pg_class t on t.oid = c.conrelid
+                   join pg_namespace n on n.oid = t.relnamespace
+                  where n.nspname = 'health' and c.contype = 'c'
+                    and c.conname like 'ck_knowledge_%'")" "9"
+for schema in public health; do
+  want "$schema.mention.semantic_run_id NOT NULL" \
+       "$(psql -c "select is_nullable from information_schema.columns
+                     where table_schema = '$schema'
+                       and table_name = 'knowledge_node_mentions'
+                       and column_name = 'semantic_run_id'")" "NO"
+done
+# Реальная попытка записи мимо реестра — не только наличие ограничения.
+# Транзакция откатывается, ничего не остаётся.
+#
+# Нарушается РОВНО ОДНО ограничение: kind = entity (личности ревизия не
+# обязательна), владелец настоящий, поддельный только status. Иначе
+# Postgres назвал бы любое из нарушенных, и проверка стала бы гадательной.
+bogus=$(psql -c "begin;
+  insert into knowledge_nodes (id, knowledge_user_id, kind, canonical_label,
+                               security_scope, status, created_at, updated_at)
+  values (gen_random_uuid(), (select id from knowledge_users order by created_at limit 1),
+          'entity', 'проверка реестра', 'internal', 'нет', now(), now());
+  rollback;" 2>&1 | grep -c 'ck_knowledge_nodes_status')
+want "неизвестный status отвергнут" "$bogus" "1"
+
+echo
 echo "############ 4. SEMANTIC-V1 НА МЕСТЕ, НО ЗАМОРОЖЕН ############"
 # §14.5: аддитивно и обратимо до R10 — старые таблицы не удаляются.
 for t in knowledge_notes knowledge_relations; do

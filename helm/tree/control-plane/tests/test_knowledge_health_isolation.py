@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import pytest
+import sqlalchemy.exc
 from sqlalchemy import func, select, text
 
 from helm_core.config import get_settings
@@ -36,7 +38,9 @@ from helm_core.knowledge.ingest import ingest_text, register_file_for_ingest
 from helm_core.knowledge.probe import probe
 from helm_core.knowledge.worker import process_job
 from helm_core.models import (
-    HealthKnowledgeChunk, HealthKnowledgeNote, HealthKnowledgeRelation, HealthKnowledgeSourcePrivate,
+    HealthKnowledgeChunk, HealthKnowledgeEdge, HealthKnowledgeEntityAlias,
+    HealthKnowledgeNode, HealthKnowledgeNodeMention,
+    HealthKnowledgeNote, HealthKnowledgeRelation, HealthKnowledgeSourcePrivate,
     KnowledgeChunk, KnowledgeIngestStatus, KnowledgeNote, KnowledgeRelation, KnowledgeSource,
     KnowledgeUser, KnowledgeUserRole, KnowledgeUserStatus, OutboxMessage,
 )
@@ -72,9 +76,15 @@ def _health_schema_ddl(engine):
 def _clean_health_tables(engine):
     yield
     with engine.begin() as conn:
+        # knowledge_nodes перечислена ЯВНО: внешнего ключа на сайдкар у
+        # неё нет, и CASCADE от него до неё не доходит — узлы пережили бы
+        # чистку и попали в следующий тест.
         conn.execute(text(
             "TRUNCATE health.knowledge_relations, health.knowledge_chunks, "
-            "health.knowledge_notes, health.knowledge_source_private RESTART IDENTITY CASCADE"
+            "health.knowledge_notes, health.knowledge_nodes, "
+            "health.knowledge_node_mentions, health.knowledge_edges, "
+            "health.knowledge_entity_aliases, health.knowledge_source_private "
+            "RESTART IDENTITY CASCADE"
         ))
 
 
@@ -533,3 +543,104 @@ def test_read_original_uses_sidecar_filename_for_health_document(
     original = read_original(session, result.source.id, knowledge_user_id=user.id)
 
     assert original.filename == "Консультация уролога.pdf"
+
+
+# ── semantic-v2 в health: изоляция проверяется поведением ─────────────────
+
+def _health_graph(user_id, *, label):
+    """Кусок графа v2 целиком внутри health — по штатному пути записи
+    (`health_session()`), а не прямым SQL: проверяется то, чем health
+    пользуется на самом деле.
+
+    `semantic_run_id` заполняется, но без внешнего ключа: сам прогон
+    живёт в public, куда `helm_health` не имеет никаких прав (см.
+    докстринг `health_tables.py`).
+    """
+    run_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    with health_schema.health_session(user_id) as hs:
+        hs.add(HealthKnowledgeSourcePrivate(
+            source_id=source_id, knowledge_user_id=user_id,
+            original_filename=f"{label}.pdf", created_at=datetime.now(timezone.utc)))
+        hs.flush()
+        entity = HealthKnowledgeNode(
+            knowledge_user_id=user_id, kind="entity", subtype="PERSON",
+            canonical_label=label, normalized_key=label.lower(), semantic_run_id=run_id)
+        event = HealthKnowledgeNode(
+            knowledge_user_id=user_id, kind="event", canonical_label=f"визит к {label}",
+            semantic_run_id=run_id)
+        hs.add_all([entity, event])
+        hs.flush()
+        mention = HealthKnowledgeNodeMention(
+            knowledge_user_id=user_id, node_id=entity.id, source_id=source_id,
+            evidence_type="extracted", semantic_run_id=run_id)
+        hs.add(mention)
+        hs.flush()
+        hs.add_all([
+            HealthKnowledgeEdge(
+                knowledge_user_id=user_id, from_node_id=event.id, to_node_id=entity.id,
+                relation_type="involves", role="doctor", source_id=source_id,
+                mention_id=mention.id, evidence_type="extracted", semantic_run_id=run_id),
+            HealthKnowledgeEntityAlias(
+                knowledge_user_id=user_id, entity_node_id=entity.id,
+                alias=label, normalized_alias=label.lower(), source_id=source_id),
+        ])
+
+
+HEALTH_SEMANTIC_MODELS = (
+    HealthKnowledgeNode, HealthKnowledgeNodeMention,
+    HealthKnowledgeEdge, HealthKnowledgeEntityAlias,
+)
+
+
+def test_health_semantic_v2_is_isolated_between_tenants(session, health_configured, user):
+    """То же поведенческое требование, что и в public, но по health-пути.
+
+    Проверяется не «политика включена», а «сосед не виден»: политика с
+    неверным предикатом тоже показывает `t`. Здесь два владельца, строки
+    во всех четырёх health-таблицах semantic-v2 у каждого, и три
+    счётчика — A→B, B→A и «тенант не выставлен».
+    """
+    second = KnowledgeUser(role=KnowledgeUserRole.KNOWLEDGE_USER)
+    session.add(second)
+    session.flush()
+    first_id, second_id = user.id, second.id
+    session.commit()
+
+    labels = {first_id: "Безручко Дарья Юрьевна", second_id: "Бокова Мария Николаевна"}
+    for user_id, label in labels.items():
+        _health_graph(user_id, label=label)
+
+    for mine, theirs in ((first_id, second_id), (second_id, first_id)):
+        with health_schema.health_session(mine) as hs:
+            for model in HEALTH_SEMANTIC_MODELS:
+                rows = hs.scalars(select(model)).all()
+                assert rows, f"{model.__name__}: свои строки не видны, тест ничего не проверяет"
+                assert not [r for r in rows if r.knowledge_user_id != mine], (
+                    f"{model.__name__}: виден граф владельца {theirs}")
+            seen = {n.canonical_label for n in hs.scalars(select(HealthKnowledgeNode)).all()}
+            assert labels[theirs] not in " ".join(seen)
+
+    with health_schema.health_session(first_id) as hs:
+        hs.execute(text("SET LOCAL app.current_knowledge_user_id = ''"))
+        for model in HEALTH_SEMANTIC_MODELS:
+            assert hs.scalars(select(model)).all() == [], model.__name__
+
+
+def test_health_semantic_v2_registry_is_closed(session, health_configured, user):
+    """Реестр §14.9 закрыт и в health-схеме тоже. Отдельная роль, отдельное
+    соединение — «в public проверим» её не касается."""
+    source_id = uuid.uuid4()
+    with health_schema.health_session(user.id) as hs:
+        hs.add(HealthKnowledgeSourcePrivate(
+            source_id=source_id, knowledge_user_id=user.id,
+            original_filename="приём.pdf", created_at=datetime.now(timezone.utc)))
+        hs.flush()
+
+    with pytest.raises(sqlalchemy.exc.IntegrityError) as err:
+        with health_schema.health_session(user.id) as hs:
+            hs.add(HealthKnowledgeNode(
+                knowledge_user_id=user.id, kind="нет", canonical_label="x",
+                semantic_run_id=uuid.uuid4()))
+            hs.flush()
+    assert "ck_knowledge_nodes_kind" in str(err.value)

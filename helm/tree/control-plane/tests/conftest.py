@@ -16,6 +16,7 @@ from helm_core.actions.fixtures import build_registry
 from helm_core.approvals.service import ApprovalService
 from helm_core.ingest import IngestService
 from helm_core.knowledge.rls import apply_rls
+from helm_core.knowledge.semantic_guards import apply_semantic_guards
 from helm_core.knowledge.style import OWNER_STYLE_VERSION
 from helm_core.models import Base, KnowledgeUser, KnowledgeUserRole
 
@@ -83,18 +84,36 @@ def refuse_rls_bypassing_role(eng) -> None:
     )
 
 
+def rebuild_schema(engine) -> None:
+    """Пересоздать схему целиком — ЕДИНСТВЕННЫЙ рецепт на весь набор.
+
+    `create_all()` строит только ORM-метаданные. Всё, что живёт рядом со
+    схемой, но не входит в неё, приходится ставить отдельно: RLS-политики
+    (`helm_core/knowledge/rls.py`) и гейт текущей семантической ревизии
+    (`helm_core/knowledge/semantic_guards.py`). Плюс строка SYSTEM_OWNER,
+    без которой не работает `resolve_system_owner_id()`.
+
+    Функция появилась 02.09.2026 (R2-hardening), когда рецепт был
+    скопирован в трёх местах — здесь, в `test_api.py::client` и в
+    `test_max_channel.py::app` — и новый шаг (триггеры) попал только в
+    одно. Набор при этом остался зелёным поодиночке и рассыпался на
+    полном прогоне: фикстуры пересоздают схему на ТОМ ЖЕ engine, роняя
+    триггеры для всех последующих тестов. Копия рецепта, отставшая на
+    один шаг, опаснее отсутствующей — она выглядит рабочей.
+    """
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        apply_rls(conn)
+        apply_semantic_guards(conn)
+    seed_system_owner(engine)
+
+
 @pytest.fixture(scope="session")
 def engine():
     eng = create_engine(DB_URL)
     refuse_rls_bypassing_role(eng)
-    Base.metadata.drop_all(eng)
-    Base.metadata.create_all(eng)
-    # v3.8: RLS-политики не часть SQLAlchemy metadata — create_all() их не
-    # заводит. Без этого вызова pytest тестировал бы только ORM-схему и
-    # explicit-предикаты в коде, никогда сами RLS-политики (второй слой
-    # defense-in-depth, helm_core/knowledge/rls.py).
-    with eng.begin() as conn:
-        apply_rls(conn)
+    rebuild_schema(eng)
     return eng
 
 

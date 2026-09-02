@@ -1,4 +1,22 @@
-"""Semantic atomizer — L1 SOURCE → L2 KNOWLEDGE notes (ADR-019, §14.1/§14.3).
+"""LEGACY_SEMANTIC_V1 — semantic atomizer, L1 SOURCE → L2 notes (ADR-019).
+
+ЗАМОРОЖЕН 02.09.2026, шаг R2 v4.0: «legacy semantic-v1 remains
+quarantined/read-only during migration». Точка входа
+`atomize_and_store()` возвращает 0 и не зовёт модель; всё, что ниже неё
+(`atomize()`, `atomize_or_empty()`, `_parse_atoms()`, `store_notes()`,
+рендер Markdown), из рабочего кода НЕДОСТИЖИМО и оставлено намеренно —
+R3 заменяет контракт вывода этого модуля (§14.24), и разбор JSON, промпт
+и раскладку файлов ему предстоит переписывать, а не сочинять заново.
+
+Метка `LEGACY_SEMANTIC_V1` стоит здесь и на каждой замороженной
+функции: `grep -rn LEGACY_SEMANTIC_V1` показывает границу v1 целиком, и
+ни одна из этих функций не должна получить нового вызывающего до R3.
+
+Ниже — исходный докстринг v1, он описывает то, как модуль работал.
+
+---
+
+Semantic atomizer — L1 SOURCE → L2 KNOWLEDGE notes (ADR-019, §14.1/§14.3).
 
 Домено-агностично по конструкции: этот модуль не содержит ни одной ветки
 "если domain == health" или похожей — маршрутизация записи (public vs
@@ -200,7 +218,9 @@ def _parse_atoms(raw_json: str) -> list[AtomizedAtom]:
 
 
 def atomize(text: str, *, domain: str) -> list[AtomizedAtom]:
-    """Поднимает `AtomizerUnavailable` при сбое — вызывающая сторона решает,
+    """LEGACY_SEMANTIC_V1 (заморожен, см. докстринг модуля).
+
+    Поднимает `AtomizerUnavailable` при сбое — вызывающая сторона решает,
     деградировать на "без L2-слоя" (fail-open) или нет. `domain` уходит в
     промпт только как контекст для модели, не меняет логику извлечения —
     один и тот же промпт для всех доменов (домено-агностичность)."""
@@ -247,7 +267,9 @@ def atomize(text: str, *, domain: str) -> list[AtomizedAtom]:
 
 
 def atomize_or_empty(text: str, *, domain: str) -> list[AtomizedAtom]:
-    """Fail-open обёртка для `ingest.py`/`worker.py` — недоступность
+    """LEGACY_SEMANTIC_V1 (заморожен, см. докстринг модуля).
+
+    Fail-open обёртка для `ingest.py`/`worker.py` — недоступность
     атомизатора не должна ронять ingest, L1 SOURCE/chunks/слой-1-relations
     создаются как раньше, просто без L2-слоя."""
     try:
@@ -298,7 +320,9 @@ def _note_file_path(*, vault_root: str, atom: AtomizedAtom) -> str:
 def store_notes(session: Session, *, domain: str, knowledge_user_id: uuid.UUID | None,
                 source_id: uuid.UUID, source_sha256: str, atoms: list[AtomizedAtom],
                 vault_root: str) -> int:
-    """Записать атомы как L2 `KnowledgeNote` + relations слоя 1 (через уже
+    """LEGACY_SEMANTIC_V1 (заморожен, см. докстринг модуля).
+
+    Записать атомы как L2 `KnowledgeNote` + relations слоя 1 (через уже
     существующий `store_relations()`, без изменений в нём). Идемпотентно
     по slug: повторный атом с тем же `(knowledge_user_id, slug)` дополняет
     существующую заметку (`source_ids`/файл на диске растут), не дублирует
@@ -349,8 +373,9 @@ def store_notes(session: Session, *, domain: str, knowledge_user_id: uuid.UUID |
 def atomize_and_store(session: Session, *, domain: str, knowledge_user_id: uuid.UUID | None,
                       source_id: uuid.UUID, source_sha256: str, text: str,
                       vault_root: str) -> int:
-    """Точка входа для `ingest.py`/`worker.py`. На время rescue не пишет
-    ничего и возвращает 0.
+    """Единственная НЕ замороженная функция модуля: точка входа для
+    `ingest.py`/`worker.py`. На время rescue не пишет ничего и
+    возвращает 0.
 
     v4.0, шаг R2: «Legacy semantic-v1 remains quarantined/read-only
     during migration». Причина не в том, что слой v1 плох в целом, а в
