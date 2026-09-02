@@ -66,9 +66,15 @@ echo "############ 4. ТОЧКА ВОЗВРАТА ЧИТАЕТСЯ ############"
 sudo /opt/helm/scripts/local-rescue-checkpoint.sh verify
 
 echo
+echo "--- состав точки возврата ---"
+sudo ls -lh "$(sudo ls -1d /opt/helm-rescue-checkpoints/*/ | sort | tail -1)"
+
+echo
 echo "--- отметки страховок ---"
+# sudo обязателен: /var/lib/helm-guardian роли helm не читается, и без
+# него проверка отвечает «отметки нет» на существующую отметку.
 for m in last-local-checkpoint last-backup last-restore-test; do
-  stat -c "  $m: %y" "/var/lib/helm-guardian/$m" 2>/dev/null || echo "  $m: отметки нет"
+  sudo stat -c "  $m: %y" "/var/lib/helm-guardian/$m" 2>/dev/null || echo "  $m: отметки нет"
 done
 
 echo

@@ -48,7 +48,7 @@ if [ "${1:-create}" = "verify" ]; then
     gzip -t "$archive" || die "архив повреждён: $latest$archive"
   done
   echo "точка возврата читается: $latest"
-  sed -n '1,12p' MANIFEST.txt
+  cat MANIFEST.txt
   exit 0
 fi
 
