@@ -31,6 +31,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 
+from ..config import get_settings
 from ..models.base import (
     SemanticDatePrecision, SemanticNodeKind, SemanticRelationType,
 )
@@ -41,7 +42,6 @@ OLLAMA_URL = "http://ollama:11434/api/generate"
 #: Временное значение, не выбор. Решает R4 (§14.18).
 DEFAULT_MODEL = "gemma2:2b"
 REQUEST_TIMEOUT = 120
-KEEP_ALIVE = "0"
 
 #: Потолок на ОКНО, а не на источник. Упёрлись — окно делится и
 #: перезапускается (§14.4.1); молча отбросить остаток нельзя, и именно
@@ -210,13 +210,13 @@ def _prompt(window_text: str, *, domain: str, heading_path: tuple[str, ...],
     return "\n\n".join(parts)
 
 
-def _call_ollama(prompt: str, *, model: str) -> str:
+def _call_ollama(prompt: str, *, model: str, keep_alive: str | None = None) -> str:
     body = {
         "model": model,
         "system": SYSTEM_PROMPT,
         "prompt": prompt,
         "stream": False,
-        "keep_alive": KEEP_ALIVE,
+        "keep_alive": keep_alive if keep_alive is not None else get_settings().knowledge_semantic_keep_alive,
         "format": RESPONSE_SCHEMA,
     }
     request = urllib.request.Request(
@@ -332,20 +332,24 @@ def validate(raw: str) -> WindowExtraction:
 
 
 def extract_window(window_text: str, *, domain: str, heading_path: tuple[str, ...] = (),
-                   model: str = DEFAULT_MODEL,
+                   model: str = DEFAULT_MODEL, keep_alive: str | None = None,
                    attempts: int = MAX_REPAIR_ATTEMPTS) -> WindowExtraction:
     """Разобрать одно окно с ограниченным числом попыток починки.
 
     `WindowTruncated` НЕ ловится: это не сбой модели, а сигнал звену
     выше поделить окно. Попытка «починить» переполнение повтором дала бы
     ровно тот же результат, только медленнее.
+
+    `keep_alive=None` (по умолчанию) означает «взять production policy из
+    Settings» (R4, §14.18) — параметр существует явно, чтобы бенчмарк R4
+    мог перебирать политику, не трогая Settings процесса.
     """
     complaint: str | None = None
     for attempt in range(1, attempts + 1):
         prompt = _prompt(window_text, domain=domain, heading_path=heading_path,
                          complaint=complaint)
         try:
-            return validate(_call_ollama(prompt, model=model))
+            return validate(_call_ollama(prompt, model=model, keep_alive=keep_alive))
         except WindowTruncated:
             raise
         except ExtractionFailed as exc:

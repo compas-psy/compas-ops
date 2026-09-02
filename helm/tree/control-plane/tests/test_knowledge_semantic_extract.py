@@ -162,7 +162,7 @@ def test_repair_attempts_are_bounded_and_then_the_window_fails() -> None:
     жалобу на первую — повтор того же промпта дал бы тот же ответ."""
     seen = []
 
-    def broken(prompt, *, model):
+    def broken(prompt, *, model, keep_alive=None):
         seen.append(prompt)
         return "не json"
 

@@ -106,6 +106,20 @@ class Settings(BaseSettings):
 
     environment: str = "production"
 
+    #: R4 (§14.18): раньше модель извлекателя была вшита в код как
+    #: `DEFAULT_MODEL = "gemma2:2b"` — неявным архитектурным решением, а не
+    #: явным выбором. Победитель бенчмарка R4 задаётся здесь, а не правкой
+    #: `semantic_extract.py`.
+    knowledge_semantic_model: str = "gemma2:2b"
+
+    #: R4 (§14.18): `OLLAMA_KEEP_ALIVE=0` в compose выгружает модель после
+    #: каждого запроса — годится для редких ручных вызовов, но не измерено
+    #: для семантического извлечения по окнам, идущим одно за другим.
+    #: Значение здесь — production policy, выбранная замером RAM/latency в
+    #: R4, а не вкусом; формат — как принимает Ollama `keep_alive`
+    #: (`"0"`, `"5m"`, ...).
+    knowledge_semantic_keep_alive: str = "0"
+
 
 @lru_cache
 def get_settings() -> Settings:

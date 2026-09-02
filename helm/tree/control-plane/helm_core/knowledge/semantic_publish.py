@@ -40,10 +40,11 @@ from sqlalchemy.orm import Session
 
 from .health_schema import health_schema_configured, health_session, is_health_domain
 from .semantic_extract import (
-    DEFAULT_MODEL, ExtractionFailed, MAX_ATOMS_PER_WINDOW, WindowExtraction, WindowTruncated,
+    ExtractionFailed, MAX_ATOMS_PER_WINDOW, WindowExtraction, WindowTruncated,
     extract_window,
 )
 from .semantic_windows import SemanticWindow, build_windows, split_window
+from ..config import get_settings
 from ..models import (
     HealthKnowledgeEdge, HealthKnowledgeEntityAlias, HealthKnowledgeNode,
     HealthKnowledgeNodeMention, HealthKnowledgeSemanticWindow,
@@ -320,7 +321,7 @@ def _process(graph, models: _Models, *, window: SemanticWindow, ordinal: int,
 
 
 def publish_semantic_run(session: Session, *, source: KnowledgeSource, text: str,
-                         model: str = DEFAULT_MODEL, extract=extract_window,
+                         model: str | None = None, extract=extract_window,
                          semantic_version: int = 2) -> PublishResult:
     """Разобрать источник целиком и опубликовать ревизию, если она годна.
 
@@ -331,10 +332,15 @@ def publish_semantic_run(session: Session, *, source: KnowledgeSource, text: str
     провал разбора не должен ронять ingest. L1 остаётся доступен поиску
     даже когда семантика деградировала (§14.19, §14.25: «A source may
     remain L1_READY + SEMANTIC_DEGRADED»).
+
+    `model=None` (по умолчанию) означает «взять production-модель из
+    Settings» (R4, §14.18) — код по-прежнему принимает модель извне
+    (явный аргумент для бенчмарка/теста), а не только через конфиг.
     """
     tenant_id = source.knowledge_user_id
     if tenant_id is None:
         raise ValueError("источник без владельца не может иметь семантической ревизии")
+    model = model or get_settings().knowledge_semantic_model
 
     run = KnowledgeSemanticRun(
         knowledge_user_id=tenant_id, source_id=source.id, semantic_version=semantic_version,
