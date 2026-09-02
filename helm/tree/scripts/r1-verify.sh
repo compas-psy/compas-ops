@@ -22,7 +22,13 @@ select count(*) as всего_health,
 from knowledge_sources s where s.domain = 'health'"
 
 echo
-echo "############ 2. ЧАНКИ: public против health ############"
+echo "############ 2. ЧАНКИ: public пуст, health полон ############"
+# ПЕРЕПИСАНО 02.09.2026 после снятия копии (прогон #156). До него смысл
+# был «сошлись ли схемы», и сравнение public с health было верным. Теперь
+# копии в public нет по замыслу, и прежний запрос печатал бы 90
+# «расхождений» на полностью здоровой системе. Проверка, кричащая на
+# ожидаемом состоянии, перестаёт читаться — и однажды промолчит на
+# настоящем.
 psql -c "
 select 'public' as где, count(*) as чанков, count(c.embedding) as с_вектором,
        sum(length(c.text)) as символов,
@@ -36,7 +42,17 @@ select 'health' as где, count(*) as чанков, count(embedding) as с_ве
 from health.knowledge_chunks"
 
 echo
-echo "############ 3. ИСТОЧНИКИ, ГДЕ ОТПЕЧАТКИ РАЗОШЛИСЬ (ожидается пусто) ############"
+echo "############ 3. ИСТОЧНИКИ БЕЗ ЧАНКОВ В HEALTH (ожидается пусто) ############"
+# После снятия копии сверять public с health нечем. Осмысленный вопрос
+# теперь другой: остался ли health-источник, чьи чанки не доехали.
+psql -c "
+select s.id as source_id, s.domain
+from knowledge_sources s
+where s.domain = 'health'
+  and not exists (select 1 from health.knowledge_chunks c where c.source_id = s.id)"
+
+echo
+echo "--- старая сверка public/health (после снятия копии всегда пусто слева) ---"
 psql -c "
 with p as (
   select c.source_id, count(*) n, count(c.embedding) v,
@@ -116,8 +132,13 @@ echo
 echo "############ 7. ТОЧКА ВОЗВРАТА ############"
 # backup.sh трогает этот файл ТОЛЬКО после успешного снапшота — это
 # единственная отметка, по которой видно, снялась ли она на самом деле.
-stat -c 'последний успешный бэкап: %y' /var/lib/helm-guardian/last-backup 2>/dev/null \
-  || echo "отметки об успешном бэкапе нет"
+# sudo обязателен: /var/lib/helm-guardian роли helm не читается, и без
+# него проверка отвечает «отметки нет» на существующую отметку. Ровно эта
+# ошибка 02.09.2026 дала вывод «бэкапа никогда не было» при живом бэкапе.
+for m in last-backup last-restore-test last-local-checkpoint; do
+  sudo stat -c "  $m: %y" "/var/lib/helm-guardian/$m" 2>/dev/null \
+    || echo "  $m: отметки нет"
+done
 
 echo
 echo "############ ГОТОВО ############"
