@@ -23,12 +23,14 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import hashlib
+import inspect
 import json
 import logging
 import statistics
 import time
 from dataclasses import dataclass, field
 
+from . import semantic_extract as semantic_extract_module
 from .semantic_benchmark_fixtures import GOLDEN_CASES, GoldenCase
 from .semantic_benchmark_metrics import AggregateMetrics, CaseScore, aggregate, evaluate_case
 from .semantic_extract import (
@@ -361,6 +363,95 @@ def golden_report_from_dict(data: dict) -> GoldenBenchmarkReport:
     )
 
 
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _sha256_of_module_source(module) -> str:
+    with open(inspect.getsourcefile(module), "rb") as f:
+        return _sha256_bytes(f.read())
+
+
+def compute_fingerprint(*, git_sha: str, model_tag: str, model_digest: str,
+                        keep_alive: str | None, run_id: str) -> dict:
+    """R4 retraction п.4: старый результат переиспользуется ТОЛЬКО при
+    полном совпадении. Каждый вход, который может изменить, что именно
+    измеряется, — своим полем: код извлечения, промпт, схема ответа,
+    сами фикстуры и харнесс могут разойтись с закоммиченным состоянием
+    независимо друг от друга, и любое расхождение должно быть видно, а
+    не молчаливо проигнорировано."""
+    import helm_core.knowledge.semantic_benchmark_fixtures as fixtures_module
+
+    fingerprint = {
+        "git_sha": git_sha,
+        "semantic_extract_sha256": _sha256_of_module_source(semantic_extract_module),
+        "system_prompt_sha256": _sha256_bytes(semantic_extract_module.SYSTEM_PROMPT.encode()),
+        "response_schema_sha256": _sha256_bytes(
+            json.dumps(semantic_extract_module.RESPONSE_SCHEMA, sort_keys=True).encode()),
+        "golden_fixtures_sha256": _sha256_of_module_source(fixtures_module),
+        "benchmark_harness_sha256": _sha256_of_module_source(
+            __import__("sys").modules[__name__]),
+        "seed": semantic_extract_module.DETERMINISTIC_SEED,
+        "model_tag": model_tag,
+        "model_digest": model_digest,
+        "keep_alive": keep_alive,
+        "run_id": run_id,
+    }
+    fingerprint["fingerprint_hash"] = _sha256_bytes(
+        json.dumps(fingerprint, sort_keys=True).encode())
+    return fingerprint
+
+
+def _cli_fingerprint(args: argparse.Namespace) -> None:
+    fp = compute_fingerprint(git_sha=args.git_sha, model_tag=args.model,
+                             model_digest=args.model_digest, keep_alive=args.keep_alive,
+                             run_id=args.run_id)
+    print(json.dumps(fp, ensure_ascii=False, indent=2))
+
+
+def _cli_validate(args: argparse.Namespace) -> None:
+    """R4 retraction п.3: частичный/невалидный JSON никогда не считается
+    завершённым результатом. Вызывается ПЕРЕД atomic `mv result.json.tmp
+    result.json` — падение здесь означает, что временный файл отбрасывается,
+    а не публикуется под финальным именем."""
+    errors: list[str] = []
+    try:
+        with open(args.file, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"INVALID: не удалось прочитать/разобрать JSON: {exc}")
+        raise SystemExit(1) from exc
+
+    if data.get("model") != args.expect_model:
+        errors.append(f"model: ожидали {args.expect_model!r}, получили {data.get('model')!r}")
+
+    case_ids = [r.get("case_id") for r in data.get("runs", [])]
+    if len(case_ids) != len(set(case_ids)):
+        errors.append("runs содержит повторяющийся case_id")
+    expected_ids = {c.case_id for c in GOLDEN_CASES}
+    if set(case_ids) != expected_ids:
+        errors.append(
+            f"набор case_id не совпадает с golden fixtures: "
+            f"нет {sorted(expected_ids - set(case_ids))}, лишние {sorted(set(case_ids) - expected_ids)}")
+    if data.get("schema_stats", {}).get("cases_total") != len(GOLDEN_CASES):
+        errors.append(
+            f"schema_stats.cases_total={data.get('schema_stats', {}).get('cases_total')!r}, "
+            f"ожидали {len(GOLDEN_CASES)}")
+
+    if args.expect_fingerprint_hash:
+        actual_hash = (data.get("fingerprint") or {}).get("fingerprint_hash")
+        if actual_hash != args.expect_fingerprint_hash:
+            errors.append(
+                f"fingerprint_hash не совпадает: ожидали {args.expect_fingerprint_hash!r}, "
+                f"в файле {actual_hash!r}")
+
+    if errors:
+        for e in errors:
+            print(f"INVALID: {e}")
+        raise SystemExit(1)
+    print("VALID")
+
+
 def _cli_golden(args: argparse.Namespace) -> None:
     cases = GOLDEN_CASES
     if args.case:
@@ -370,7 +461,12 @@ def _cli_golden(args: argparse.Namespace) -> None:
             raise SystemExit(f"неизвестные case_id: {sorted(missing)}")
     report = run_golden_benchmark(model=args.model, keep_alive=args.keep_alive,
                                   stability_repeats=args.stability_repeats, cases=cases)
-    print(json.dumps(golden_report_to_dict(report), ensure_ascii=False, indent=2))
+    data = golden_report_to_dict(report)
+    if args.git_sha and args.model_digest:
+        data["fingerprint"] = compute_fingerprint(
+            git_sha=args.git_sha, model_tag=args.model, model_digest=args.model_digest,
+            keep_alive=args.keep_alive, run_id=args.run_id or "")
+    print(json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def main() -> None:
@@ -383,10 +479,31 @@ def main() -> None:
     golden.add_argument("--stability-repeats", type=int, default=3)
     golden.add_argument("--case", action="append", default=None,
                         help="Ограничить прогон конкретными case_id (можно несколько раз)")
+    golden.add_argument("--git-sha", default=None,
+                        help="Вместе с --model-digest включает fingerprint в вывод (R4 п.4)")
+    golden.add_argument("--model-digest", default=None)
+    golden.add_argument("--run-id", default=None)
+
+    fingerprint = sub.add_parser("fingerprint",
+                                 help="Только fingerprint, без обращения к Ollama (для решения reuse/new-run)")
+    fingerprint.add_argument("--model", required=True)
+    fingerprint.add_argument("--keep-alive", default=None)
+    fingerprint.add_argument("--git-sha", required=True)
+    fingerprint.add_argument("--model-digest", required=True)
+    fingerprint.add_argument("--run-id", default="")
+
+    validate = sub.add_parser("validate", help="Проверить result.json.tmp перед atomic mv (R4 п.3)")
+    validate.add_argument("--file", required=True)
+    validate.add_argument("--expect-model", required=True)
+    validate.add_argument("--expect-fingerprint-hash", default=None)
 
     args = parser.parse_args()
     if args.mode == "golden":
         _cli_golden(args)
+    elif args.mode == "fingerprint":
+        _cli_fingerprint(args)
+    elif args.mode == "validate":
+        _cli_validate(args)
 
 
 if __name__ == "__main__":
