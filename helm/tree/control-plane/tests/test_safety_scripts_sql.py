@@ -38,6 +38,7 @@ SAFETY_SCRIPTS = [
     SCRIPTS / "destructive-drop-pre-r1-checkpoints.sh",
     SCRIPTS / "r1-verify.sh",
     SCRIPTS / "r2-verify.sh",
+    SCRIPTS / "r3-verify.sh",
 ]
 
 
