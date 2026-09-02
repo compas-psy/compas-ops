@@ -9,10 +9,14 @@ export RESTIC_REPOSITORY="rclone:yandex:helm-backup"
 export RESTIC_PASSWORD_FILE="$SECRETS_DIR/restic_password"
 
 RESTORE_DIR=$(mktemp -d /var/lib/helm-guardian/restore-test-XXXXXX)
+#: Рабочий каталог проверок: вывод SQL пишется в файлы, а не читается
+#: через подстановку процессов, где код возврата теряется (см. разбор
+#: перед health-проверками ниже).
+HEALTH_TMP=$(mktemp -d /var/lib/helm-guardian/restore-check-XXXXXX)
 TEST_CONTAINER="helm-restore-test-$$"
 cleanup() {
   docker rm -f "$TEST_CONTAINER" >/dev/null 2>&1 || true
-  rm -rf "$RESTORE_DIR"
+  rm -rf "$RESTORE_DIR" "$HEALTH_TMP"
 }
 trap cleanup EXIT
 
@@ -114,53 +118,150 @@ else
   echo "restore test: Markdown-зеркал памяти восстановлено ${MIRROR_COUNT}"
 fi
 
-# Health-схема и приватное дерево (§14.16, R1 от 02.09.2026). Без этой
-# проверки тест восстановления давал бы зелёный свет на снятие копии
-# health-чанков из общей схемы, даже если в снапшоте приватных данных
-# нет вовсе — а это ровно тот исход, ради которого тест и существует:
-# база выглядит целой, а второго мозга в ней уже нет.
-HEALTH_SCHEMA=$(docker exec "$TEST_CONTAINER" psql -U postgres -d helm -tAc \
-  "select count(*) from information_schema.schemata where schema_name = 'health'")
-if [ "$HEALTH_SCHEMA" = "1" ]; then
-  HEALTH_CHUNKS=$(docker exec "$TEST_CONTAINER" psql -U postgres -d helm -tAc \
-    "select count(*) from health.knowledge_chunks")
-  HEALTH_SOURCES=$(docker exec "$TEST_CONTAINER" psql -U postgres -d helm -tAc \
-    "select count(*) from health.knowledge_source_private")
-  echo "restore test: health-схема восстановлена — чанков ${HEALTH_CHUNKS}," \
-       "приватных источников ${HEALTH_SOURCES}"
+# ── Health: схема, файлы, роли (§14.16, §30.8.5 C) ───────────────────
+#
+# НАЙДЕНО ВЛАДЕЛЬЦЕМ 02.09.2026 в прогоне #152. Первая версия этой
+# проверки спрашивала `stored_path` и `sha256` у
+# `health.knowledge_source_private`. Таких колонок там нет и не было:
+# сайдкар хранит только `source_id`, `knowledge_user_id`,
+# `original_filename`, `parse_error`, `created_at`. Путь и хэш файла —
+# в публичном конверте `knowledge_sources` (`raw_path`, `source_path`,
+# `sha256`), и приватно там как раз ничего нет: чувствительное имя
+# файла живёт в сайдкаре, а хэш-производный путь — нет.
+#
+# Хуже самой ошибки было то, как она себя повела. Запрос падал с
+# `ERROR: column "stored_path" does not exist`, но стоял внутри
+# process substitution `< <(...)`. Код возврата подстановки основной
+# оболочке не виден, `set -e` на неё не распространяется: цикл получил
+# ноль строк, счётчик пропаж остался нулём, и тест напечатал
+# «восстановлено 90 из 90» и `RESTORE TEST PASSED`. Зелёный тест
+# восстановления, не проверивший ни одного файла, — худший из возможных
+# отказов страховки: он не молчит, он врёт.
+#
+# Поэтому здесь: никаких подстановок процессов. Каждый запрос пишется во
+# временный файл, код возврата проверяется сразу, и любой отказ SQL —
+# фатален.
 
-  # Каждой строке сайдкара обязан соответствовать восстановленный файл.
-  # Сверяем по имени файла, а не по полному пути: restic кладёт дерево
-  # под свой префикс, и абсолютный путь из колонки здесь не совпадёт.
-  if [ "$HEALTH_SOURCES" -gt 0 ]; then
-    PRIVATE_MISSING=0
-    while IFS= read -r stored; do
-      [ -n "$stored" ] || continue
-      name=$(basename "$stored")
-      find "$RESTORE_DIR" -path '*/helm-knowledge-private/*' -name "$name" \
-        -print -quit | grep -q . || PRIVATE_MISSING=$((PRIVATE_MISSING + 1))
-    done < <(docker exec "$TEST_CONTAINER" psql -U postgres -d helm -tAc \
-              "select stored_path from health.knowledge_source_private")
-    if [ "$PRIVATE_MISSING" -gt 0 ]; then
-      echo "FAIL: ${PRIVATE_MISSING} из ${HEALTH_SOURCES} приватных файлов health не восстановились" >&2
-      exit 1
-    fi
-    echo "restore test: приватных файлов health восстановлено ${HEALTH_SOURCES} из ${HEALTH_SOURCES}"
+q() {
+  # Единственный способ обратиться к восстановленной базе. Падение psql
+  # завершает тест, а не теряется в подоболочке.
+  if ! docker exec "$TEST_CONTAINER" psql -U postgres -d helm -tA \
+       -v ON_ERROR_STOP=1 -c "$1" > "$HEALTH_TMP/q.out" 2> "$HEALTH_TMP/q.err"; then
+    echo "FAIL: запрос к восстановленной базе не выполнился" >&2
+    sed 's/^/    /' "$HEALTH_TMP/q.err" >&2
+    exit 1
   fi
+  cat "$HEALTH_TMP/q.out"
+}
+
+HEALTH_SCHEMA=$(q "select count(*) from information_schema.schemata where schema_name = 'health'")
+if [ "$HEALTH_SCHEMA" = "1" ]; then
+  HEALTH_CHUNKS=$(q "select count(*) from health.knowledge_chunks")
+  HEALTH_SIDECARS=$(q "select count(*) from health.knowledge_source_private")
+  HEALTH_EMBEDDINGS=$(q "select count(*) from health.knowledge_chunks where embedding is not null")
+  HEALTH_ENVELOPES=$(q "select count(*) from knowledge_sources where domain = 'health'")
+  echo "restore test: health — чанков ${HEALTH_CHUNKS} (с вектором ${HEALTH_EMBEDDINGS})," \
+       "сайдкаров ${HEALTH_SIDECARS}, конвертов ${HEALTH_ENVELOPES}"
+
+  # Каждому health-конверту обязан соответствовать сайдкар: конверт без
+  # сайдкара означает, что приватная часть источника не восстановилась.
+  ORPHAN_ENVELOPES=$(q "
+    select count(*) from knowledge_sources s
+    where s.domain = 'health'
+      and not exists (select 1 from health.knowledge_source_private p
+                      where p.source_id = s.id)")
+  if [ "$ORPHAN_ENVELOPES" != "0" ]; then
+    echo "FAIL: ${ORPHAN_ENVELOPES} health-конвертов без сайдкара в восстановленной базе" >&2
+    exit 1
+  fi
+
+  # ── файлы: 90 оригиналов RAW и 90 конспектов L1, всего 180 ──────────
+  # Путь в базе абсолютный, restic кладёт дерево под свой префикс —
+  # значит файл ищется по "$RESTORE_DIR" + абсолютный путь, а не по
+  # имени где-то в дереве. Поиск по имени нашёл бы файл, лежащий не там,
+  # где его будет искать выдача оригинала, и это снова был бы зелёный
+  # тест при сломанной системе.
+  q "select id || E'\t' || sha256 || E'\t' || raw_path || E'\t' || coalesce(source_path, '')
+     from knowledge_sources where domain = 'health' order by id" > "$HEALTH_TMP/files.tsv"
+
+  RAW_OK=0; RAW_MISSING=0; RAW_MISMATCH=0
+  L1_OK=0; L1_MISSING=0; L1_ABSENT=0
+  OUTSIDE=0
+  PRIVATE_PREFIX=/opt/helm-knowledge-private
+
+  while IFS=$'\t' read -r sid sha raw src; do
+    [ -n "$sid" ] || continue
+
+    case "$raw" in "$PRIVATE_PREFIX"/*) ;; *) OUTSIDE=$((OUTSIDE + 1)); echo "  ВНЕ ПРИВАТНОГО ДЕРЕВА: $raw" ;; esac
+    if [ -f "$RESTORE_DIR$raw" ]; then
+      if [ "$(sha256sum "$RESTORE_DIR$raw" | cut -d' ' -f1)" = "$sha" ]; then
+        RAW_OK=$((RAW_OK + 1))
+      else
+        RAW_MISMATCH=$((RAW_MISMATCH + 1)); echo "  ХЭШ РАЗОШЁЛСЯ: $raw"
+      fi
+    else
+      RAW_MISSING=$((RAW_MISSING + 1)); echo "  НЕТ ОРИГИНАЛА: $raw"
+    fi
+
+    # L1-конспект: sha в базе для него не хранится, поэтому проверяем
+    # существование и то, что путь внутри приватного дерева. Меньше, чем
+    # для оригинала, — и это честно названо, а не выдано за полную сверку.
+    if [ -z "$src" ]; then
+      L1_ABSENT=$((L1_ABSENT + 1)); echo "  НЕТ source_path В БАЗЕ: $sid"
+    else
+      case "$src" in "$PRIVATE_PREFIX"/*) ;; *) OUTSIDE=$((OUTSIDE + 1)); echo "  ВНЕ ПРИВАТНОГО ДЕРЕВА: $src" ;; esac
+      if [ -f "$RESTORE_DIR$src" ]; then
+        L1_OK=$((L1_OK + 1))
+      else
+        L1_MISSING=$((L1_MISSING + 1)); echo "  НЕТ КОНСПЕКТА: $src"
+      fi
+    fi
+  done < "$HEALTH_TMP/files.tsv"
+
+  echo "restore test: оригиналов ${RAW_OK}/${HEALTH_ENVELOPES} (нет ${RAW_MISSING}, хэш разошёлся ${RAW_MISMATCH})," \
+       "конспектов ${L1_OK}/${HEALTH_ENVELOPES} (нет ${L1_MISSING}, без пути ${L1_ABSENT})," \
+       "путей вне приватного дерева ${OUTSIDE}"
+
+  # ── жёсткие утверждения ────────────────────────────────────────────
+  # Числа не «ожидаются примерно»: каждое расхождение это отказ. Пустой
+  # корпус тоже отказ — иначе тест на пустой базе всегда зелёный.
+  fail=0
+  assert_eq() {
+    if [ "$2" != "$3" ]; then
+      echo "FAIL: $1 — $2, ожидалось $3" >&2
+      fail=1
+    fi
+  }
+  [ "$HEALTH_ENVELOPES" -gt 0 ] || { echo "FAIL: health-конвертов ноль — проверять нечего" >&2; fail=1; }
+  assert_eq "сайдкаров"                 "$HEALTH_SIDECARS" "$HEALTH_ENVELOPES"
+  assert_eq "восстановлено оригиналов"  "$RAW_OK"          "$HEALTH_ENVELOPES"
+  assert_eq "восстановлено конспектов"  "$L1_OK"           "$HEALTH_ENVELOPES"
+  assert_eq "оригиналов не найдено"     "$RAW_MISSING"     "0"
+  assert_eq "хэш разошёлся"             "$RAW_MISMATCH"    "0"
+  assert_eq "конспектов не найдено"     "$L1_MISSING"      "0"
+  assert_eq "источников без source_path" "$L1_ABSENT"      "0"
+  assert_eq "путей вне приватного дерева" "$OUTSIDE"       "0"
+  [ "$HEALTH_CHUNKS" -gt 0 ] || { echo "FAIL: health-чанков ноль" >&2; fail=1; }
+  [ "$HEALTH_EMBEDDINGS" -gt 0 ] || { echo "FAIL: ни одного вектора в health" >&2; fail=1; }
 
   # Роли — часть изоляции, а не её оформление: без helm_health
   # восстановленная база вернёт данные, но не разграничение доступа.
   for role in helm_app helm_health; do
-    HAS_ROLE=$(docker exec "$TEST_CONTAINER" psql -U postgres -d helm -tAc \
-      "select count(*) from pg_roles where rolname = '$role'")
-    if [ "$HAS_ROLE" != "1" ]; then
+    if [ "$(q "select count(*) from pg_roles where rolname = '$role'")" != "1" ]; then
       echo "FAIL: роль ${role} не восстановлена — изоляция health не воспроизводится" >&2
-      exit 1
+      fail=1
     fi
   done
-  echo "restore test: роли helm_app и helm_health восстановлены"
+
+  [ "$fail" = "0" ] || exit 1
+  echo "restore test: health проверен целиком — ${HEALTH_ENVELOPES} источников," \
+       "$((RAW_OK + L1_OK)) файлов, роли на месте"
 else
-  echo "restore test: health-схемы в снапшоте нет (снапшот старше R1)"
+  # Снапшот старше R1. Это НЕ повод для зелёного теста: с 02.09.2026
+  # приватное дерево существует, и снапшот без него не годится как
+  # страховка для необратимого шага.
+  echo "FAIL: в снапшоте нет health-схемы — он снят до миграции R1 и приватных данных не содержит" >&2
+  exit 1
 fi
 
 PROFILE_COUNT=$(find "$RESTORE_DIR" -path '*/profiles/*/config.yaml' | wc -l)

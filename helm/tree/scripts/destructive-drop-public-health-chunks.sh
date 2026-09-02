@@ -16,9 +16,22 @@ set -uo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then exec sudo bash "$0" "$@"; fi
 
-die() { echo "::error::удаление отменено: $*"; exit 1; }
-psql() { docker exec helm-postgres-1 psql -U helm -d helm "$@"; }
-q() { psql -tAc "$1"; }
+die() { echo "::error::операция отменена: $*"; exit 1; }
+psql() { docker exec helm-postgres-1 psql -U helm -d helm -v ON_ERROR_STOP=1 "$@"; }
+
+WORK=$(mktemp -d /var/lib/helm-guardian/drop-public-health-XXXXXX)
+trap 'rm -rf "$WORK"' EXIT
+
+#: Любой отказ SQL фатален. Молча вернуть пустоту — это то, как ошибка в
+#: имени колонки превращается в зелёную проверку (прогон #152).
+q() {
+  if ! psql -tAc "$1" > "$WORK/q.out" 2> "$WORK/q.err"; then
+    echo "::error::запрос не выполнился:" >&2
+    sed 's/^/    /' "$WORK/q.err" >&2
+    exit 1
+  fi
+  cat "$WORK/q.out"
+}
 
 PRIVATE=/opt/helm-knowledge-private
 
@@ -82,28 +95,71 @@ echo "  копия в public: $expected, оригинал в health: $in_health"
 
 echo
 echo "############ 3. ФАЙЛЫ ЦЕЛЫ НА ПРИВАТНЫХ ПУТЯХ ############"
-# Тем же способом, каким это делает выдача оригинала
-# (documents.py::read_original): файл по пути из колонки существует и его
-# sha256 равен записанному. «Скрипт отчитался о переносе» не доказательство.
-missing=0; mismatch=0; ok=0
-while IFS=$'\t' read -r path digest; do
-  [ -n "$path" ] || continue
-  if [ ! -f "$path" ]; then missing=$((missing+1)); continue; fi
-  actual=$(sha256sum "$path" | cut -d' ' -f1)
-  if [ "$actual" = "$digest" ]; then ok=$((ok+1)); else mismatch=$((mismatch+1)); fi
-done < <(q "
-  select p.stored_path || E'\t' || p.sha256
-  from health.knowledge_source_private p")
-echo "  целых $ok, отсутствует $missing, хэш разошёлся $mismatch"
-[ "$missing" = "0" ] || die "$missing файлов не найдено на приватных путях"
-[ "$mismatch" = "0" ] || die "$mismatch файлов не совпали по sha256"
-[ "$ok" -gt 0 ] || die "ни одного файла не проверено — что-то не так с запросом"
+# ИСПРАВЛЕНО 02.09.2026 по замечанию владельца. Первая версия спрашивала
+# `stored_path` и `sha256` у `health.knowledge_source_private`. Таких
+# колонок там нет: сайдкар держит `source_id`, `knowledge_user_id`,
+# `original_filename`, `parse_error`, `created_at` — то есть ровно
+# чувствительное, и ничего больше. Путь и хэш файла живут в публичном
+# конверте `knowledge_sources` (`raw_path`, `source_path`, `sha256`), и
+# правильный запрос уже был написан в `r1-verify.sh` — здесь он был
+# переписан заново и переписан неверно.
+#
+# Читаем в файл, а не через подстановку процессов: там код возврата psql
+# основной оболочке не виден, и запрос с несуществующей колонкой дал бы
+# ноль строк, ноль пропаж и зелёную проверку. Именно так этот дефект и
+# проявился в тесте восстановления (прогон #152).
+q "
+  select s.id || E'\t' || s.sha256 || E'\t' || s.raw_path || E'\t' || coalesce(s.source_path, '')
+  from knowledge_sources s
+  where s.domain = 'health'
+  order by s.id" > "$WORK/files.tsv" || die "не удалось прочитать пути файлов"
 
-outside=$(q "
-  select count(*) from health.knowledge_source_private
-  where stored_path not like '$PRIVATE/%'")
-echo "  путей вне приватного дерева: $outside (ожидается 0)"
-[ "$outside" = "0" ] || die "$outside путей всё ещё указывают в общее дерево"
+raw_ok=0; raw_missing=0; raw_mismatch=0
+l1_ok=0; l1_missing=0; l1_absent=0
+outside=0; no_sidecar=0
+
+while IFS=$'\t' read -r sid sha raw src; do
+  [ -n "$sid" ] || continue
+
+  # Принадлежность сайдкару: конверт без приватной строки означает, что
+  # источник мигрирован не полностью, и снимать его копию нельзя.
+  if [ "$(q "select count(*) from health.knowledge_source_private where source_id = '$sid'")" != "1" ]; then
+    no_sidecar=$((no_sidecar+1)); echo "  НЕТ САЙДКАРА: $sid"
+  fi
+
+  case "$raw" in "$PRIVATE"/*) ;; *) outside=$((outside+1)); echo "  ВНЕ ПРИВАТНОГО ДЕРЕВА: $raw" ;; esac
+  if [ ! -f "$raw" ]; then
+    raw_missing=$((raw_missing+1)); echo "  НЕТ ОРИГИНАЛА: $raw"
+  elif [ "$(sha256sum "$raw" | cut -d' ' -f1)" != "$sha" ]; then
+    raw_mismatch=$((raw_mismatch+1)); echo "  ХЭШ РАЗОШЁЛСЯ: $raw"
+  else
+    raw_ok=$((raw_ok+1))
+  fi
+
+  if [ -z "$src" ]; then
+    l1_absent=$((l1_absent+1)); echo "  НЕТ source_path В БАЗЕ: $sid"
+  else
+    case "$src" in "$PRIVATE"/*) ;; *) outside=$((outside+1)); echo "  ВНЕ ПРИВАТНОГО ДЕРЕВА: $src" ;; esac
+    if [ -f "$src" ]; then l1_ok=$((l1_ok+1)); else
+      l1_missing=$((l1_missing+1)); echo "  НЕТ КОНСПЕКТА: $src"
+    fi
+  fi
+done < "$WORK/files.tsv"
+
+envelopes=$(wc -l < "$WORK/files.tsv")
+echo "  источников $envelopes: оригиналов $raw_ok, конспектов $l1_ok"
+echo "  нет оригинала $raw_missing, хэш разошёлся $raw_mismatch, нет конспекта $l1_missing,"
+echo "  без source_path $l1_absent, вне приватного дерева $outside, без сайдкара $no_sidecar"
+
+[ "$envelopes" -gt 0 ]            || die "health-источников ноль — проверять нечего"
+[ "$raw_ok" = "$envelopes" ]      || die "оригиналов целых $raw_ok из $envelopes"
+[ "$l1_ok" = "$envelopes" ]       || die "конспектов целых $l1_ok из $envelopes"
+[ "$raw_missing" = "0" ]          || die "$raw_missing оригиналов не найдено"
+[ "$raw_mismatch" = "0" ]         || die "$raw_mismatch файлов не совпали по sha256"
+[ "$l1_missing" = "0" ]           || die "$l1_missing конспектов не найдено"
+[ "$l1_absent" = "0" ]            || die "$l1_absent источников без source_path"
+[ "$outside" = "0" ]              || die "$outside путей вне приватного дерева"
+[ "$no_sidecar" = "0" ]           || die "$no_sidecar источников без приватного сайдкара"
 
 echo
 echo "############ 4. СНЯТИЕ КОПИИ ############"
