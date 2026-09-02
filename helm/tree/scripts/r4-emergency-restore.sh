@@ -39,9 +39,14 @@ echo "############ 1. ВОССТАНОВИТЬ ЛИМИТ ПАМЯТИ (4g, ка
 sudo docker update --memory=4g --memory-swap=4g "$CID"
 
 wait_for_ollama_ready() {
+  # curl внутри контейнера ollama не гарантирован образом — так уже
+  # ловили ложный таймаут (run 190: 75с ожидания без единого признака
+  # реального сбоя контейнера). ollama list — то же самое, чем уже
+  # пользуется этот скрипт в блоках ДО/ПОСЛЕ, гарантированно есть в
+  # образе и не зависит от лишней утилиты.
   for i in $(seq 1 60); do
     if [ "$(sudo docker inspect -f '{{.State.Running}}' "$CID" 2>/dev/null)" = "true" ] \
-       && sudo docker compose exec -T ollama curl -sf http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+       && sudo docker compose exec -T ollama ollama list >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
