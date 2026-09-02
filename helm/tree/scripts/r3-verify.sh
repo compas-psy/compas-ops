@@ -56,18 +56,35 @@ for schema in public health; do
                     where n.nspname = '$schema' and t.relname = 'knowledge_semantic_windows'
                       and c.contype = 'c'")" "2"
 done
-# Реальная попытка записи мимо реестра, с откатом. Нарушается ровно
-# одно ограничение: всё остальное в строке верно.
+# Реальная попытка записи мимо реестра, с откатом. Прогон заводится в
+# той же транзакции: до R5 их на сервере нет, и проверка, опирающаяся на
+# существующий прогон, молча ничего бы не проверила — ровно тот случай,
+# который эта приёмка и должна ловить у себя же.
+#
+# Нарушается ровно ОДНО ограничение: у окна поддельный только `status`.
 bogus=$(psql -c "begin;
+  insert into knowledge_semantic_runs
+    (id, knowledge_user_id, source_id, semantic_version, status, windows_total,
+     windows_processed, windows_failed, nodes_created, edges_created,
+     unresolved_candidates, created_at)
+  select '00000000-0000-0000-0000-0000000000ff', s.knowledge_user_id, s.id, 99,
+         'pending', 0, 0, 0, 0, 0, 0, now()
+    from knowledge_sources s where s.knowledge_user_id is not null limit 1;
   insert into knowledge_semantic_windows
     (id, knowledge_user_id, semantic_run_id, source_id, ordinal,
      char_start, char_end, text_hash, status, nodes_created, edges_created,
      rejected_count, created_at)
   select gen_random_uuid(), r.knowledge_user_id, r.id, r.source_id, 0, 0, 10,
          repeat('0', 64), 'нет', 0, 0, 0, now()
-    from knowledge_semantic_runs r limit 1;
+    from knowledge_semantic_runs r
+   where r.id = '00000000-0000-0000-0000-0000000000ff';
   rollback;" 2>&1 | grep -c 'ck_knowledge_semantic_windows_status')
-echo "  проверка неизвестного статуса: $bogus (0 = прогонов ещё нет, вставлять не от чего)"
+want "неизвестный статус окна отвергнут" "$bogus" "1"
+
+# И сам откат: после проверки в базе не должно остаться ни прогона, ни окна.
+want "подложный прогон не остался" \
+     "$(psql -c "select count(*) from knowledge_semantic_runs
+                  where id = '00000000-0000-0000-0000-0000000000ff'")" "0"
 
 echo
 echo "############ 4. SEMANTIC-V1 ВСЁ ЕЩЁ ЗАМОРОЖЕН ############"
