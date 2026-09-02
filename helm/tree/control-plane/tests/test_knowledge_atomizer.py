@@ -73,6 +73,25 @@ def test_atomize_drops_atoms_missing_required_fields():
     assert [a.slug for a in atoms] == ["Годный"]
 
 
+def test_parse_atoms_accepts_single_object_instead_of_array():
+    """Живьём (02.09.2026) gemma2:2b вернула ОДИН объект вместо массива —
+    сама сущность при этом корректная, терять её из-за формы обёртки
+    нельзя."""
+    raw = '{"slug": "Клинико-диагностический центр", "type": "ORGANIZATION", "text": "на Красной Пресне"}'
+
+    atoms = atomizer._parse_atoms(raw)
+
+    assert [a.slug for a in atoms] == ["Клинико-диагностический центр"]
+
+
+def test_parse_atoms_accepts_array_wrapped_in_object():
+    raw = '{"результат": [{"slug": "Петров", "type": "PERSON", "text": "кардиолог"}]}'
+
+    atoms = atomizer._parse_atoms(raw)
+
+    assert [a.slug for a in atoms] == ["Петров"]
+
+
 def test_atomize_caps_atoms_per_call():
     raw = "[" + ",".join(
         f'{{"slug": "атом{i}", "type": "CONCEPT", "text": "т"}}' for i in range(30)
