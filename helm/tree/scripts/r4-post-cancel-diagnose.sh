@@ -49,23 +49,27 @@ echo "############ 4. POSTGRES ############"
 sudo docker exec -i helm-postgres-1 psql -U helm -d helm -tAc "select 1" 2>&1
 
 echo
-echo "############ 5. Z2 REPHRASE SMOKE ############"
+echo "############ 5. Z2 REPHRASE SMOKE (прямой вызов rephrase(), не probe()) ############"
+# НАЙДЕНО живым прогоном 02.09.2026: смоук через probe() с этим текстом
+# НИКОГДА не проверял Z2 честно — probe.py:397 зовёт rephrase_or_none()
+# только при mode=="Z0" (ровно одна evidence-запись); решение владельца
+# 01.09.2026 сделало общий поиск глобальным по корпусу (probe.py:125-142,
+# health включён), и этот вопрос против реального корпуса предсказуемо
+# цепляет несколько посторонних совпадений → mode=Z1 → рефраз не
+# вызывается вообще, независимо от здоровья Ollama. Прямой вызов
+# rephrase() в обход retrieval — единственная честная проверка.
 sudo docker compose exec -T helm-core python3 <<'PY'
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
-from helm_core.config import get_settings
-from helm_core.knowledge.ingest import ingest_text
-from helm_core.knowledge.probe import probe
-engine = create_engine(get_settings().database_url)
-with Session(engine) as s:
-    ingest_text(s, domain="psychology",
-               text="Схема — это устойчивый паттерн мышления и поведения, сформированный в детстве.",
-               original_filename="r4-post-cancel-diagnose.txt")
-    s.flush()
-    result = probe(s, query="что такое схема?")
-    print("outcome:", result.outcome, "| mode:", result.mode)
-    print("answer_text:", repr(result.answer_text))
-    s.rollback()
+from helm_core.knowledge.rephrase import rephrase, RephraseUnavailable
+try:
+    text = rephrase(
+        "что такое схема?",
+        "Схема — это устойчивый паттерн мышления и поведения, сформированный в детстве.",
+        system_prompt=None,
+    )
+    print("Z2_DIRECT: OK")
+    print("answer_text:", repr(text))
+except RephraseUnavailable as exc:
+    print("Z2_DIRECT: FAIL", repr(str(exc)))
 PY
 
 echo

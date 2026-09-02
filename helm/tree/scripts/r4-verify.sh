@@ -139,21 +139,25 @@ want "ollama запущена" \
 want "gemma2:2b присутствует" \
      "$(sudo docker compose exec -T ollama ollama list 2>/dev/null | awk '$1=="gemma2:2b" {print "yes"}')" \
      "yes"
+# НАЙДЕНО живым прогоном 02.09.2026: смоук через probe() с общим текстом
+# НИКОГДА не проверял Z2 честно — probe.py:397 зовёт rephrase_or_none()
+# только при mode=="Z0" (ровно одна evidence-запись); решение владельца
+# 01.09.2026 сделало общий поиск глобальным по корпусу (probe.py:125-142,
+# health включён), и любой такой вопрос против реального корпуса
+# предсказуемо цепляет несколько посторонних совпадений → mode=Z1 →
+# рефраз не вызывается вообще, независимо от здоровья Ollama. Прямой
+# вызов rephrase() в обход retrieval — единственная честная проверка.
 z2_smoke=$(sudo docker compose exec -T helm-core python3 <<'PY'
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
-from helm_core.config import get_settings
-from helm_core.knowledge.ingest import ingest_text
-from helm_core.knowledge.probe import probe
-engine = create_engine(get_settings().database_url)
-with Session(engine) as s:
-    ingest_text(s, domain="psychology",
-               text="Схема — это устойчивый паттерн мышления и поведения, сформированный в детстве.",
-               original_filename="r4-verify-z2-smoke.txt")
-    s.flush()
-    result = probe(s, query="что такое схема?")
-    print("OK" if result.answer_text else "BAD")
-    s.rollback()
+from helm_core.knowledge.rephrase import rephrase, RephraseUnavailable
+try:
+    rephrase(
+        "что такое схема?",
+        "Схема — это устойчивый паттерн мышления и поведения, сформированный в детстве.",
+        system_prompt=None,
+    )
+    print("OK")
+except RephraseUnavailable:
+    print("BAD")
 PY
 )
 want "Z2 rephrase smoke" "$z2_smoke" "OK"

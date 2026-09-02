@@ -84,32 +84,36 @@ echo "лимит памяти: $(sudo docker inspect -f '{{.HostConfig.Memory}}'
 sudo docker compose exec -T ollama ollama list
 
 echo
-echo "############ 4. Z2 REPHRASE SMOKE (должен быть mode=Z2, не Z1) ############"
+echo "############ 4. Z2 REPHRASE SMOKE (прямой вызов rephrase(), не probe()) ############"
+# НАЙДЕНО живым прогоном 02.09.2026 (run 192): пробовавший этот же текст
+# probe()-смоук-тест НИКОГДА не мог показать реальное состояние Z2 —
+# probe.py:397 зовёт rephrase_or_none() только когда retrieval вернул
+# РОВНО одну evidence-запись (mode == "Z0"); при mode == "Z1" (2+
+# совпадений) рефраз не вызывается вообще, реальная работоспособность
+# gemma2:2b тут ни при чём. Решение владельца 01.09.2026 сделало общий
+# поиск глобальным по корпусу (probe.py:125-142, health включён) — этот
+# же тестовый вопрос против реального корпуса (953+ health-чанков)
+# предсказуемо цепляет несколько посторонних совпадений и ВСЕГДА даёт
+# mode=Z1, независимо от здоровья Ollama. Единственная честная проверка
+# — звать rephrase() напрямую, в обход retrieval.
 z2_out=$(sudo docker compose exec -T helm-core python3 <<'PY'
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
-from helm_core.config import get_settings
-from helm_core.knowledge.ingest import ingest_text
-from helm_core.knowledge.probe import probe
-engine = create_engine(get_settings().database_url)
-with Session(engine) as s:
-    ingest_text(s, domain="psychology",
-               text="Схема — это устойчивый паттерн мышления и поведения, сформированный в детстве.",
-               original_filename="r4-emergency-restore-smoke.txt")
-    s.flush()
-    result = probe(s, query="что такое схема?")
-    print("outcome:", result.outcome, "| mode:", result.mode)
-    print("answer_text:", repr(result.answer_text))
-    s.rollback()
+from helm_core.knowledge.rephrase import rephrase, RephraseUnavailable
+try:
+    text = rephrase(
+        "что такое схема?",
+        "Схема — это устойчивый паттерн мышления и поведения, сформированный в детстве.",
+        system_prompt=None,
+    )
+    print("Z2_DIRECT: OK")
+    print("answer_text:", repr(text))
+except RephraseUnavailable as exc:
+    print("Z2_DIRECT: FAIL", repr(str(exc)))
 PY
 )
 echo "$z2_out"
 
-# Раньше скрипт просто печатал результат и выходил 0 независимо от того,
-# что в нём — та же дыра, что и в остальном сценарии: "напечатали —
-# значит проверили". Явно проверяем mode, а не полагаемся на глаз.
-if ! echo "$z2_out" | grep -q "mode: Z2"; then
-  echo "::error::Z2 rephrase всё ещё не работает (ожидался mode: Z2)"
+if ! echo "$z2_out" | grep -q "^Z2_DIRECT: OK$"; then
+  echo "::error::Z2 rephrase (gemma2:2b) всё ещё не работает"
   exit 1
 fi
 
