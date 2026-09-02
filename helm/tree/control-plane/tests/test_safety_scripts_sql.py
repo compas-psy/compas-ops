@@ -126,6 +126,30 @@ def test_sql_output_is_not_read_through_process_substitution(script: Path) -> No
     )
 
 
+@pytest.mark.parametrize("script", SAFETY_SCRIPTS, ids=lambda p: p.name)
+def test_heredoc_sql_reaches_the_database(script: Path) -> None:
+    """`docker exec` без `-i` не пробрасывает stdin.
+
+    НАЙДЕНО 02.09.2026 (прогон #154): транзакция снятия копии передавалась
+    в psql через heredoc, а обёртка вызывала `docker exec` без `-i`. psql
+    прочитал EOF, вышел с нулём, операция не выполнилась — и промолчала.
+    Третий за день случай команды, которая тихо ничего не сделала.
+
+    Правило: если в скрипте есть heredoc с SQL, обёртка над psql обязана
+    открывать stdin.
+    """
+    text = _code(script)
+    if "<<'SQL'" not in text and '<<"SQL"' not in text and "<<SQL" not in text:
+        pytest.skip("heredoc с SQL в этом скрипте не используется")
+
+    for line in text.splitlines():
+        if "docker exec" in line and "psql" in line:
+            assert re.search(r"docker exec\s+(-\w+\s+)*-i\b|docker exec\s+-\w*i", line), (
+                f"{script.name}: {line.strip()} — heredoc в этом скрипте есть, "
+                "а stdin в контейнер не пробрасывается: нужен `docker exec -i`"
+            )
+
+
 def test_restore_test_marks_success_only_after_every_check() -> None:
     """`touch last-restore-test` обязан быть последним действием.
 

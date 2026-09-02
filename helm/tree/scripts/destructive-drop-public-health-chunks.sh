@@ -17,7 +17,13 @@ set -uo pipefail
 if [ "$(id -u)" -ne 0 ]; then exec sudo bash "$0" "$@"; fi
 
 die() { echo "::error::операция отменена: $*"; exit 1; }
-psql() { docker exec helm-postgres-1 psql -U helm -d helm -v ON_ERROR_STOP=1 "$@"; }
+#: `-i` обязателен. НАЙДЕНО 02.09.2026 (прогон #154): без него `docker
+#: exec` не пробрасывает stdin, heredoc с транзакцией ушёл в никуда,
+#: psql прочитал EOF и вышел с нулём. Операция не выполнилась и об этом
+#: промолчала — третий за день случай команды, которая тихо ничего не
+#: сделала. Поймала её проверка «ПОСЛЕ»: 953 вместо 0, отказ вместо
+#: рапорта об успехе. Ради этого она и написана.
+psql() { docker exec -i helm-postgres-1 psql -U helm -d helm -v ON_ERROR_STOP=1 "$@"; }
 
 WORK=$(mktemp -d /var/lib/helm-guardian/drop-public-health-XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
