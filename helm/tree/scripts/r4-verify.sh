@@ -69,14 +69,19 @@ want "OLLAMA_URL указывает на локальный ollama" "$ollama_onl
 
 echo
 echo "############ 4. РЕЗУЛЬТАТЫ БЕНЧМАРКА НА ДИСКЕ (§14.18: не self-generated gold) ############"
-RUN_DIR=/opt/helm-state/benchmarks/r4/run1
-for f in golden-gemma2_2b.json golden-qwen2_5_3b.json; do
-  size=$(sudo stat -c '%s' "$RUN_DIR/$f" 2>/dev/null || echo 0)
-  want "$f непустой" "$([ "$size" -gt 0 ] && echo да || echo нет)" "да"
+# Каталоги именуются по fingerprint (ретракция владельца п.4), не по
+# фиксированному run1 — ищем по маске модели, а не по жёсткому пути.
+BASE_DIR=/opt/helm-state/benchmarks/r4
+for safe in gemma2_2b qwen2_5_3b; do
+  found=$(sudo find "$BASE_DIR" -maxdepth 1 -type d -name "${safe}-*" 2>/dev/null | head -1)
+  size=0
+  [ -n "$found" ] && size=$(sudo stat -c '%s' "$found/result.json" 2>/dev/null || echo 0)
+  want "$safe: result.json непустой" "$([ "$size" -gt 0 ] && echo да || echo нет)" "да"
 done
 echo "  (qwen2.5:7b — опционален, зависит от resource preflight на момент прогона)"
-if [ -s "$RUN_DIR/golden-qwen2_5_7b.json" ]; then
-  echo "  qwen2.5:7b: результат есть"
+found_7b=$(sudo find "$BASE_DIR" -maxdepth 1 -type d -name "qwen2_5_7b-*" 2>/dev/null | head -1)
+if [ -n "$found_7b" ] && [ -s "$found_7b/result.json" ]; then
+  echo "  qwen2.5:7b: результат есть ($found_7b)"
 else
   echo "  qwen2.5:7b: результата нет (preflight не пройден или ещё не прогнан)"
 fi
@@ -122,6 +127,36 @@ sudo docker compose ps --format "{{.Service}}: {{.Status}}"
 unhealthy=$(sudo docker compose ps --format "{{.Service}} {{.Status}}" \
             | grep -Ev "healthy|Up [0-9]" | wc -l)
 want "сервисов без явного здорового статуса" "$unhealthy" "0"
+
+echo
+echo "############ 8. OLLAMA ВОССТАНОВЛЕНА ПОСЛЕ БЕНЧМАРКА (ретракция владельца) ############"
+# gemma2:2b — боевая модель Z2 style-rephrase (rephrase.py), была на
+# сервере ДО R4 и обязана остаться после (docker-compose.yml: "входит в
+# обычный deploy... up -d ollama + ollama pull gemma2:2b идемпотентно").
+want "ollama запущена" \
+     "$(sudo docker inspect -f '{{.State.Running}}' "$(sudo docker compose ps -q ollama)" 2>/dev/null)" \
+     "true"
+want "gemma2:2b присутствует" \
+     "$(sudo docker compose exec -T ollama ollama list 2>/dev/null | awk '$1=="gemma2:2b" {print "yes"}')" \
+     "yes"
+z2_smoke=$(sudo docker compose exec -T helm-core python3 <<'PY'
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from helm_core.config import get_settings
+from helm_core.knowledge.ingest import ingest_text
+from helm_core.knowledge.probe import probe
+engine = create_engine(get_settings().database_url)
+with Session(engine) as s:
+    ingest_text(s, domain="psychology",
+               text="Схема — это устойчивый паттерн мышления и поведения, сформированный в детстве.",
+               original_filename="r4-verify-z2-smoke.txt")
+    s.flush()
+    result = probe(s, query="что такое схема?")
+    print("OK" if result.answer_text else "BAD")
+    s.rollback()
+PY
+)
+want "Z2 rephrase smoke" "$z2_smoke" "OK"
 
 echo
 if [ "$fails" -eq 0 ]; then
