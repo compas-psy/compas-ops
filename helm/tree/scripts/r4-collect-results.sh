@@ -13,6 +13,13 @@ BASE_DIR=/opt/helm-state/benchmarks/r4
 echo "############ КАТАЛОГ ЦЕЛИКОМ ############"
 sudo find "$BASE_DIR" -maxdepth 3 2>/dev/null | sort
 
+if [ -f "$BASE_DIR/run1/DIAGNOSTIC_STALE.json" ]; then
+  echo "############ BEGIN run1/DIAGNOSTIC_STALE.json ############"
+  sudo cat "$BASE_DIR/run1/DIAGNOSTIC_STALE.json"
+  echo
+  echo "############ END run1/DIAGNOSTIC_STALE.json ############"
+fi
+
 for f in "$BASE_DIR"/*/result.json; do
   [ -e "$f" ] || continue
   echo "############ BEGIN $f ############"
