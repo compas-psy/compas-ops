@@ -94,7 +94,8 @@ def test_parse_atoms_accepts_array_wrapped_in_object():
 
 def test_atomize_caps_atoms_per_call():
     raw = "[" + ",".join(
-        f'{{"slug": "атом{i}", "type": "CONCEPT", "text": "т"}}' for i in range(30)
+        f'{{"slug": "атом{i}", "type": "CONCEPT", "text": "т"}}'
+        for i in range(atomizer.MAX_ATOMS_PER_CALL + 10)
     ) + "]"
 
     atoms = atomizer._parse_atoms(raw)

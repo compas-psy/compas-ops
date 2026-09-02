@@ -92,7 +92,31 @@ _TYPE_DIR = {
 #: Защита от патологического ответа модели (зацикленный JSON, галлюцинация
 #: сотен атомов на один абзац) — тот же принцип осторожности, что и у
 #: per-user quotas (§14.4), не новая инфраструктура ради этого файла.
-MAX_ATOMS_PER_CALL = 20
+#: 60, а не 20: живой замер 02.09.2026 на реальной консультации
+#: эндокринолога (4000 символов) дал 40 осмысленных атомов — прежний
+#: предел резал ровно ту половину, где назначения и рекомендации.
+MAX_ATOMS_PER_CALL = 60
+
+#: Форма ответа задаётся СХЕМОЙ, а не просьбой в тексте промпта. Живой
+#: замер 02.09.2026 (`scripts/atomizer-prompt-lab.sh`, один и тот же
+#: документ, один и тот же промпт): с `format: "json"` gemma2:2b вернула
+#: ОДИН объект — Ollama гарантирует валидный JSON, но не его форму; с
+#: этой схемой — 40 атомов, включая «Врач эндокринолог: Бокова Мария
+#: Николаевна» (PERSON) и «Приём врача-эндокринолога повторный» (EVENT),
+#: то есть ровно то, чего не находил чанковый поиск.
+_RESPONSE_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "slug": {"type": "string"},
+            "type": {"type": "string", "enum": sorted(NOTE_TYPES)},
+            "text": {"type": "string"},
+            "links": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["slug", "type", "text"],
+    },
+}
 
 #: Модель видит только начало длинного текста — контекстное окно gemma2:2b
 #: на CPU не резиновое, и это временный выбор модели (см. докстринг),
@@ -189,7 +213,7 @@ def atomize(text: str, *, domain: str) -> list[AtomizedAtom]:
         "prompt": prompt,
         "stream": False,
         "keep_alive": KEEP_ALIVE,
-        "format": "json",
+        "format": _RESPONSE_SCHEMA,
     }
     req = urllib.request.Request(
         OLLAMA_URL, data=json.dumps(body).encode("utf-8"), method="POST",
