@@ -53,6 +53,7 @@ from ..models import (
 )
 from .audio import is_audio_file
 from .ingest import DEFAULT_VAULT_ROOT, RegisterFileResult, register_file_for_ingest
+from .vault import scope_root
 from .quotas import QuotaExceeded
 from .tenancy import bind_knowledge_user
 
@@ -355,7 +356,8 @@ def resolve_pending_domain(session: Session, *, channel: str, reply_text: str,
             result=RegisterFileResult(source=existing_source, job=None, created=False),
         )
 
-    raw_dir = Path(vault_root) / "raw" / domain
+    raw_dir = Path(scope_root(vault_root, domain=domain,
+                              knowledge_user_id=pending.knowledge_user_id)) / "raw" / domain
     raw_dir.mkdir(parents=True, exist_ok=True)
     raw_path = raw_dir / f"{pending.sha256}{spool_path.suffix}"
     # НАЙДЕНО живым тестом 29.08.2026: spool (/opt/helm-state) и Vault

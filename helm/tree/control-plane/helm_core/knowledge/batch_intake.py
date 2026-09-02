@@ -42,6 +42,7 @@ from sqlalchemy.orm import Session
 from . import zip_safety
 from .chat_intake import _CANCEL_SENTINEL, domain_list_lines, parse_domain_reply
 from .ingest import DEFAULT_VAULT_ROOT, register_file_for_ingest
+from .vault import scope_root
 from .quotas import QuotaExceeded
 from .tenancy import bind_knowledge_user
 from ..models import (
@@ -303,7 +304,8 @@ def _process_item(session: Session, batch: KnowledgeIngestBatch, item: Knowledge
         item.graph_status = "not_applicable"
         return
 
-    raw_dir = Path(vault_root) / "raw" / batch.domain
+    raw_dir = Path(scope_root(vault_root, domain=batch.domain,
+                              knowledge_user_id=batch.knowledge_user_id)) / "raw" / batch.domain
     ext = Path(decision.path_normalized).suffix
     archive_path = Path(batch.archive_raw_path)
     # Промежуточное имя по item.id — sha256 известен только ПОСЛЕ

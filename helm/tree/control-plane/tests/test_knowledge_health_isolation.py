@@ -248,8 +248,11 @@ def test_ingest_text_health_domain_routes_notes_to_sidecar(
         assert len(notes) == 1
         assert notes[0].source_ids == [str(source.id)]
 
-    file_text = (tmp_path / "entities" / "Иванов, уролог.md").read_text(encoding="utf-8")
-    assert "Приём у уролога Иванова." in file_text
+    # До 02.09.2026 здесь ожидался общий `<vault>/entities/` — это и был
+    # F15: строка уходила в health-схему, а файл ложился в общее дерево.
+    private = (tmp_path.parent / f"{tmp_path.name}-private" / "health" / "users" / str(user.id)
+               / "entities" / "Иванов, уролог.md")
+    assert "Приём у уролога Иванова." in private.read_text(encoding="utf-8")
 
 
 # ── worker.py — process_job() health-ветка ────────────────────────────────
@@ -399,6 +402,53 @@ def test_probe_general_query_still_excludes_zapiski_client_content(
     result = probe(session, query="что там про тревогу на работе", knowledge_user_id=user.id)
 
     assert result.outcome == "NEEDS_REASONING"
+
+
+# ── §14.16 F15: файлы health вне общего Vault ─────────────────────────────
+
+def test_health_source_path_lands_in_private_tree(session, health_configured, user, tmp_path):
+    """§14.16: файловое дерево health обязано быть ВНЕ общего Vault и, в
+    частности, не в `<vault>/sources/`. Маршрутизация строки в БД в
+    health-схему этого не заменяет."""
+    source = ingest_text(session, domain="health", text="Приём эндокринолога.",
+                         knowledge_user_id=user.id, vault_root=str(tmp_path))
+    session.flush()
+
+    assert not source.source_path.startswith(f"{tmp_path}/")
+    assert source.source_path.startswith(f"{tmp_path}-private/health/users/{user.id}/")
+    assert not source.raw_path.startswith(f"{tmp_path}/")
+
+
+def test_non_health_source_path_stays_in_common_vault(session, health_configured, user, tmp_path):
+    """Разделение — только для health. Остальные домены остаются там же,
+    где были: приватное дерево не должно расползаться на весь Vault."""
+    source = ingest_text(session, domain="personal", text="Купил чайник, гарантия два года.",
+                         knowledge_user_id=user.id, vault_root=str(tmp_path))
+    session.flush()
+
+    assert source.source_path.startswith(f"{tmp_path}/sources/")
+
+
+def test_health_semantic_note_file_is_not_written_into_common_vault(
+        session, health_configured, user, tmp_path, monkeypatch):
+    """F15, аудит 02.09.2026 — BLOCKER: `_note_file_path()` собирал путь
+    из типа и slug без домена, и health-заметка ложилась в общий
+    `<vault>/entities/`, хотя строка в БД уходила в health-схему."""
+    monkeypatch.setattr(
+        atomizer, "atomize_or_empty",
+        lambda text, *, domain: [AtomizedAtom(slug="Бокова Мария Николаевна", type="PERSON",
+                                              text="Врач эндокринолог.", links=())],
+    )
+
+    ingest_text(session, domain="health", text="Приём эндокринолога.",
+                knowledge_user_id=user.id, vault_root=str(tmp_path))
+    session.flush()
+
+    assert not (tmp_path / "entities" / "Бокова Мария Николаевна.md").exists()
+    private = (tmp_path.parent / f"{tmp_path.name}-private" / "health" / "users" / str(user.id)
+               / "entities" / "Бокова Мария Николаевна.md")
+    assert private.is_file()
+    assert "Врач эндокринолог." in private.read_text(encoding="utf-8")
 
 
 # ── documents.py — поиск/скачивание своих health-документов владельцем ───

@@ -285,6 +285,13 @@ def _write_note_file(*, file_path: str, atom: AtomizedAtom, domain: str, is_new:
 
 
 def _note_file_path(*, vault_root: str, atom: AtomizedAtom) -> str:
+    """`vault_root` здесь — корень ДОМЕНА, не общий Vault.
+
+    §14.16 F15: маршрутизация строки в health-схему не отменяет того, что
+    сам .md-файл ложился в общий `<vault>/entities/`. Развилку считает
+    вызывающий (`ingest.py`/`worker.py` через `vault.scope_root()`), сюда
+    приходит уже готовый корень — чтобы не появилось второе место, где
+    решается, куда писать health."""
     return f"{vault_root}/{_TYPE_DIR[atom.type]}/{atom.slug}.md"
 
 

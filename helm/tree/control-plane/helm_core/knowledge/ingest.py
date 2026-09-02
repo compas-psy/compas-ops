@@ -39,6 +39,7 @@ from .health_schema import health_schema_configured, is_health_domain, write_chu
 from .quotas import check_and_record_ingest, check_queue_depth, record_entry_formed
 from .relations import note_id_for, store_relations
 from .tenancy import bind_knowledge_user
+from .vault import scope_root
 
 #: Корень Vault (§14.2). Параметр, а не только константа: тесты обязаны
 #: указывать свой временный каталог — писать в /opt/helm-knowledge при
@@ -110,10 +111,11 @@ def ingest_text(session: Session, *, domain: str, text: str,
     if existing is not None:
         return existing
 
+    root = scope_root(vault_root, domain=domain, knowledge_user_id=knowledge_user_id)
     source = KnowledgeSource(
         knowledge_user_id=knowledge_user_id, domain=domain, sha256=sha256,
-        raw_path=f"{vault_root}/raw/{domain}/{sha256}.txt",
-        source_path=f"{vault_root}/sources/{sha256}.md",
+        raw_path=f"{root}/raw/{domain}/{sha256}.txt",
+        source_path=f"{root}/sources/{sha256}.md",
         original_filename=original_filename, mime_type="text/plain", parser="manual",
         sensitivity=sensitivity, trust=trust, status=KnowledgeStatus.ACTIVE,
     )
@@ -142,7 +144,7 @@ def ingest_text(session: Session, *, domain: str, text: str,
     # созданию source/chunks/слоя-1-relations, см. atomizer.py).
     atomize_and_store(session, domain=domain, knowledge_user_id=knowledge_user_id,
                       source_id=source.id, source_sha256=sha256, text=text,
-                      vault_root=vault_root)
+                      vault_root=root)
 
     chunks = split_chunks(text)
     # ADR-025: недоступность embed-сервиса не должна мешать созданию
@@ -219,9 +221,10 @@ def register_file_for_ingest(session: Session, *, domain: str, raw_path: Path,
     check_and_record_ingest(session, knowledge_user_id=knowledge_user_id, size_bytes=len(data))
     check_queue_depth(session, knowledge_user_id=knowledge_user_id)
 
+    root = scope_root(vault_root, domain=domain, knowledge_user_id=knowledge_user_id)
     source = KnowledgeSource(
         knowledge_user_id=knowledge_user_id, domain=domain, sha256=sha256, raw_path=str(raw_path),
-        source_path=f"{vault_root}/sources/{sha256}.md",
+        source_path=f"{root}/sources/{sha256}.md",
         original_filename=original_filename, mime_type=mime_type, parser=None,
         sensitivity=sensitivity, trust=trust, status=KnowledgeStatus.ACTIVE,
     )
