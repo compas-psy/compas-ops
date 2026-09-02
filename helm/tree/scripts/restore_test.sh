@@ -248,6 +248,33 @@ if [ "$HEALTH_SCHEMA" = "1" ]; then
   [ "$HEALTH_CHUNKS" -gt 0 ] || { echo "FAIL: health-чанков ноль" >&2; fail=1; }
   [ "$HEALTH_EMBEDDINGS" -gt 0 ] || { echo "FAIL: ни одного вектора в health" >&2; fail=1; }
 
+  # ── состояние ПОСЛЕ R1: копии health в общей схеме быть не должно ──
+  # Распоряжение владельца 02.09.2026, пункт «post-migration recovery
+  # checkpoint». Восстановиться в состояние ДО R1 — значит вернуть
+  # копию health-текста в общую схему, то есть отменить приватность,
+  # ничего об этом не сказав. Точка восстановления, возвращающая систему
+  # в починенное состояние, — часть починки, а не следствие.
+  PUBLIC_HEALTH=$(q "
+    select count(*) from knowledge_chunks c
+    join knowledge_sources s on s.id = c.source_id
+    where s.domain = 'health'")
+  echo "restore test: health-чанков в общей схеме после восстановления: ${PUBLIC_HEALTH}"
+  if [ "$PUBLIC_HEALTH" != "0" ]; then
+    echo "FAIL: в восстановленной базе ${PUBLIC_HEALTH} health-чанков в общей схеме" >&2
+    echo "      снапшот снят до R1 — восстановление из него отменяет приватность" >&2
+    fail=1
+  fi
+
+  # helm_app не должен читать health и в восстановленной базе: гранты
+  # едут в дампе вместе с ролями, и потерять их — значит восстановить
+  # данные без разграничения доступа к ним.
+  for t in knowledge_chunks knowledge_notes knowledge_relations knowledge_source_private; do
+    if [ "$(q "select has_table_privilege('helm_app', 'health.${t}', 'select')")" != "f" ]; then
+      echo "FAIL: helm_app читает health.${t} в восстановленной базе" >&2
+      fail=1
+    fi
+  done
+
   # Роли — часть изоляции, а не её оформление: без helm_health
   # восстановленная база вернёт данные, но не разграничение доступа.
   for role in helm_app helm_health; do
@@ -256,6 +283,15 @@ if [ "$HEALTH_SCHEMA" = "1" ]; then
       fail=1
     fi
   done
+
+  # Архивы пачек: тот же контур, что и файлы. Найдено 02.09.2026 при
+  # приёмке — ZIP с медицинскими документами лежали в общем дереве, и
+  # снапшот, где они там же, возвращает утечку вместе с данными.
+  COMMON_ZIPS=$(find "$RESTORE_DIR" -path '*/helm-knowledge/raw-batches/*' -name '*.zip' | wc -l)
+  if [ "$COMMON_ZIPS" != "0" ]; then
+    echo "FAIL: в восстановленном общем дереве ${COMMON_ZIPS} архивов пачек" >&2
+    fail=1
+  fi
 
   [ "$fail" = "0" ] || exit 1
   echo "restore test: health проверен целиком — ${HEALTH_ENVELOPES} источников," \
