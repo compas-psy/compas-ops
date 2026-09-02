@@ -205,7 +205,15 @@ def atomize(text: str, *, domain: str) -> list[AtomizedAtom]:
     if not raw_response:
         raise AtomizerUnavailable("ollama вернула пустой ответ")
     try:
-        return _parse_atoms(raw_response)
+        atoms = _parse_atoms(raw_response)
+        if not atoms:
+            # "Модель ответила, но всё отсеялось фильтром" и "модель не
+            # ответила" — разные вещи, и в fail-open логе они обязаны
+            # различаться: без этого ноль атомов необъясним (найдено
+            # живьём 02.09.2026 — молчаливый ноль на всех трёх источниках).
+            logger.warning("атомизатор вернул 0 атомов, сырой ответ модели: %r",
+                           raw_response[:300])
+        return atoms
     except (json.JSONDecodeError, AtomizerUnavailable) as exc:
         # Сырой ответ модели — не только текст исключения — обязателен в
         # сообщении: без него "невалидный JSON" ничем не отличается от
