@@ -1696,9 +1696,85 @@ LOOCV/threshold-подбора; **4 final_holdout-кейса / 17 positives**
 `f8e32a576297d04c90b3bfb4fd2fdf7f1d1c4eb7`** (`f8e32a5`, ветка
 `claude/ai-agents-server-deployment-xdp77a`).
 
-Статус до результата двух моделей: **R4 = NO_PASS / R4.6.F1.2**,
-production semantic pipeline = NONE, **R5 = NOT STARTED**, backfill =
-**FORBIDDEN**.
+**5. Инфраструктурная находка (run 234, до результата): `helm-knowledge-worker`
+— собранный Docker-образ** (`COPY helm_core` в `Dockerfile.worker`, НЕ
+bind-mount с хоста) — новый код v3 физически отсутствовал внутри
+контейнера до полноценного деплоя, а деплоить агенту запрещено (CLAUDE.md
+§5.2). `recon`-пайплайн `deploy.yml` переносит на VPS ровно один файл.
+Решение — `scripts/r4-f1-2-build-recon-script.py` склеивает три модуля
+(`relation_verbalizer_v3.py` + `relation_benchmark_v3_fixtures.py` +
+`nli_relation_dataset_v3.py`, единственный источник истины — сами файлы,
+не копия в `.sh`) в самодостаточный Python-heredoc, переписывая
+относительные импорты на прямые ссылки; сверено байт-в-байт офлайн —
+`build_examples_v3()` из собранного блока даёт те же 285 примеров, что
+и настоящий пакет, 0 расхождений. `docker cp`/деплой НЕ использовались —
+только пересборка содержимого самого recon-скрипта, переносимого штатным
+read-only пайплайном.
+
+### R4.6.F1.2 — результат: NO-GO для обеих моделей (run 235, коммит `3e8a2cd`)
+
+Прогон (GitHub Actions run 235, `helm-knowledge-worker`, лимит временно
+6g, восстановлен POST=PRE) — полный лог воспроизводим (sha256 recon.sh:
+`89d02e94fd07d7111eaa0dd69f429e2d29f2a3f3a28db3f68c492cd445108c69`).
+
+| | `mDeBERTa-v3-base-xnli` (278.8M) | `rubert-base-cased-nli-threeway` (177.9M) |
+|---|---|---|
+| id2label | entailment/neutral/contradiction (0/1/2) | entailment/contradiction/neutral (0/1/2) |
+| load/inference time | 5.3с / 271.0с (1.1 пар/с) | 1.4с / 27.7с (10.3 пар/с) |
+| peak RSS (нарастающим итогом) | 890MB | 1033MB |
+| LOOCV внутри calibration (16 фолдов) | TP=0 FP=1 TN=156 FN=78, precision=0.000 recall=0.000 | TP=0 FP=0 TN=157 FN=78, precision=nan recall=0.000 |
+| фолды, где gate 0.90 недостижим | 1 из 16 (`v3_family_property`) | **16 из 16 — ВСЕ** |
+| финальный threshold (на всём calibration) | 0.9995 | **не найден** (0.90 недостижим ни на одном threshold) |
+| **final_holdout: TP/FP/TN/FN** | 0/1/32/17 | 0/0/33/17 |
+| **final_holdout precision** | **0.000** | **nan (0 предсказанных positive)** |
+| **final_holdout recall** | **0.000** | **0.000** |
+| AUROC calibration / final_holdout | 0.629 / **0.479** | 0.539 / **0.428** |
+| AUPRC calibration / final_holdout | 0.463 / 0.340 | 0.379 / 0.328 |
+| **GATE (precision≥0.90 без коллапса recall)** | **FAIL** | **FAIL** |
+
+**Обе модели на final_holdout не нашли НИ ОДНОГО верного positive** (TP=0
+у обеих). У `mDeBERTa` AUROC final_holdout=0.479, у `rubert`
+AUROC final_holdout=0.428 — **ниже случайного угадывания (0.5)** на
+held-out данных, которые модель не видела ни на каком этапе подбора
+порога. Это принципиально другой результат, чем run 233 (F1 v1
+dataset, тоже NO-GO, но там `rubert` хотя бы держал precision=1.000 при
+recall=0.054 — слабый, но ненулевой сигнал): здесь после полной
+дата-set-валидации (0 unverbalizable edges, ручные hard negatives с
+явной причиной, 95/190 positive/negative, ontology contract на все 15
+типов) сигнал не просто слабый — он статистически неотличим от шума
+(и у rubert чуть хуже шума) именно там, где раньше подозревался сам
+dataset.
+
+**Предположение, не подтверждённый вывод (владелец §5.1: не выдавать
+оценку за факт без пометки)**: возможная причина — стиль hypothesis
+(`RelationVerbalizerV3`, quoted reference — «Иванов участвует в
+событии «дословная цитата из premise»») структурно непохож на короткие
+пары premise/hypothesis, на которых обучались общие XNLI/NLI-модели;
+дословное совпадение подстроки premise↔hypothesis могло восприниматься
+моделью как признак иного отношения (перефраз/пересказ), а не
+typed-relation entailment. Корневая причина НЕ исследовалась отдельным
+offline-audit (в отличие от R4.6.F1.1) — mandate R4.6.F1.2 явно
+предписывал только прогон, не новый цикл диагностики; если владелец
+захочет цикл диагностики именно причины низкого AUROC — это отдельный
+мандат, не решение, принятое здесь.
+
+**Итог по гейту (владелец, дословно): «если покажет precision≥0.90 без
+коллапса recall → F2; иначе generic local NLI = STOP».** Обе модели —
+NO-GO, у обеих final_holdout precision практически 0 (не «низкий
+recall при высокой precision», а полное отсутствие сигнала на
+типизированное направленное отношение). **R4.6.F = NO_PASS** (оба
+кандидата в реестре F1 — mDeBERTa и rubert — исчерпаны на честном,
+валидированном датасете; F2 не имеет смысла запускать на кандидате,
+который не различает entailment уже на 235-примерном calibration set).
+
+Per R4.6.F план (владелец, раздел выше «R4.6.F: purpose-built local NLI
+relation scorer», пункт 9): **только теперь развилка возвращается
+владельцу** — cloud semantic model vs graph scope reduction vs
+deterministic relations only. Cloud не используется до явного решения
+владельца по этой развилке.
+
+Статус: **R4 = NO_PASS / R4.6.F закрыт (NO_PASS)**, production semantic
+pipeline = NONE, **R5 = NOT STARTED**, backfill = **FORBIDDEN**.
 
 ### R4.6.F2 (после F1, если go): high-recall candidate generation для NLI
 
@@ -1732,13 +1808,24 @@ classifier; здесь это лишь фильтр входа, решение �
 atoms) независимо от relation-слоя (`mistral:7b` уже показал entity/
 atom-слой не хуже `qwen2.5:7b`, R4.6.D).
 
-### R4.6.F — итоговый гейт
+### R4.6.F — итоговый гейт: ЗАКРЫТ, R4.6.F = NO_PASS (03.09.2026)
 
-Если purpose-built NLI (после F1 и, если применимо, F2) тоже не
-обеспечивает typed relation precision ≥ 0.90 — **R4.6.F = NO_PASS**, и
-только тогда развилка возвращается владельцу: cloud semantic model vs
-graph scope reduction vs deterministic relations only. До этого момента
-cloud не используется.
+Правило было: если purpose-built NLI (после F1 и, если применимо, F2)
+тоже не обеспечивает typed relation precision ≥ 0.90 — R4.6.F = NO_PASS,
+и только тогда развилка возвращается владельцу.
+
+**Наступило.** F1 (v1 dataset) — NO-GO. F1.1 нашла дефект самого
+dataset, не технологии. F1.2 — материально расширенный, ontology-
+grounded, hand-validated dataset (95 positives/190 negatives, 0
+unverbalizable edges) — **обе модели (mDeBERTa, rubert) дали
+final_holdout precision≈0 (TP=0 у обеих) и AUROC ниже случайного на
+held-out данных** (0.479/0.428) — см. раздел «R4.6.F1.2 — результат»
+выше. F2 не запускался: нет кандидата, прошедшего F1/F1.2, для которого
+имело бы смысл улучшать candidate recall.
+
+Развилка возвращается владельцу: cloud semantic model vs graph scope
+reduction vs deterministic relations only. До явного решения владельца
+по этой развилке cloud не используется, backfill остаётся FORBIDDEN.
 
 ## Ресурсные контракты (не зависят от выбора конкретной модели)
 
