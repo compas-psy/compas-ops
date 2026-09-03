@@ -1599,6 +1599,107 @@ positive + 3 hard negative — 0 годных wrong_type, 1 reversed_direction,
 Статус не меняется: **R4 = NO_PASS / R4.6.F1.1**, production semantic
 pipeline = NONE, **R5 = NOT STARTED**, backfill = **FORBIDDEN**.
 
+### R4.6.F1.2: material fixture expansion + freeze benchmark v3 (владелец 03.09.2026)
+
+Владелец разрешил material-расширение (не признал R4.6.F1.1 доказательством
+исчерпания NLI-технологии — только доказательством, что v1/v2 dataset
+были слишком дефектны/малы для честного вывода) и дал точную
+спецификацию: quoted-reference verbalizer v3, ontology contract на все
+15 типов, новый ЗАМОРОЖЕННЫЙ fixture set (`GOLDEN_CASES` не трогать),
+DEV/CALIBRATION vs FINAL_HOLDOUT split, тот же гейт (`typed precision ≥
+0.90` без коллапса recall) на тех же двух моделях — без нового
+owner-check-in до результата.
+
+**1. Ontology contract — `docs/R4.6.F1.2-RELATION-ONTOLOGY.md`.** Для
+каждого из 15 `SemanticRelationType`: определение, допустимые kind
+источника/цели, directed/symmetric, сосуществование с другими типами,
+позитивный пример, явный контрпример. Разграничены все пары, которые
+просил владелец: `involves`/`has_role` (атомо-зависимая роль на ребре
+vs атомонезависимая профессия человека — прямым примером в fixtures,
+см. п.3), `about`/`refers_to` (тема-ENTITY vs ссылка-на-ATOM),
+`reason_for`/`resulted_in`/`supports` (обоснование решения / наблюдаемое
+следствие / эпистемическое свидетельство — три разные роли, не
+взаимозаменяемые), `created_by`/`derived_from` (автор-агент vs
+исходный материал), `related_to` vs точные типы (сознательно узкий
+fallback, не «для разнообразия»). Задокументирован факт (не предположение):
+8 из 15 типов отсутствуют в `GOLDEN_CASES` полностью (`has_role, part_of,
+created_by, owned_by, contradicts, supersedes, derived_from, refers_to`);
+`resulted_in`/`supports` — ОТДЕЛЬНЫЙ случай, в gold ЕСТЬ (`typed_relations_variety`),
+но были недоступны v2 из-за guard неоднозначности, не из-за отсутствия.
+
+**2. `RelationVerbalizerV3`** (`helm_core/knowledge/relation_verbalizer_v3.py`,
+20 тестов). Ключевое отличие от v2: ATOM-ссылка — не родовая именная
+группа («описанное событие»), а ДЕТЕРМИНИРОВАННАЯ quoted reference
+(kind-noun в нужном падеже + `canonical_text` в кавычках, например
+`факт «Тестирование проекта не завершено.»`) — уникальна по построению,
+guard неоднозначности v2 («сколько атомов этого kind в кейсе») стал не
+нужен и не воспроизведён. Реестр расширен на все 15 типов; там, где
+декленация произвольного `ENTITY.label` была бы нужна (падеж, род
+глагола для незнакомого имени), используется именительный падеж
+(подлежащее/предикатив через тире — «Автор {X} — {label}») вместо
+попытки склонить имя. Найдено и исправлено при написании (не живым
+прогоном на сервере, полностью offline): `about` ошибочно исключал
+EVENT-источник (у события тоже может быть тема — «лекция была посвящена
+теме X»); `resulted_in` в v2 использовал семантически неверное
+«произошёл к» (temporal coincidence) вместо причинного «привёл/привело
+к» (с согласованием по роду источника); голый PLACE-лейбл без
+собственных кавычек (топоним вроде «Казань») давал грамматически
+неверный предложный падеж — добавлен классификатор «месте», не
+трогающий сам лейбл.
+
+**Recovery-check** (`scripts/r4-f1-2-verbalizer-v3-recovery-check.py`,
+offline, без NLI) на всех 37 v1/v2 gold edges: **37/37 usable v3, 0
+регрессий** (было 17/37 у v2) — включая `resulted_in` и `supports`
+(владелец явно требовал их вернуть), которые были 0/37 в v2 из-за
+guard'а неоднозначности на `typed_relations_variety` (4 атома kind=fact)
+и `long_dense_window` (7 атомов, два kind=event).
+
+**3. Новые frozen fixtures — `helm_core/knowledge/relation_benchmark_v3_fixtures.py`**
+(отдельный модуль, `GOLDEN_CASES` не изменён и не расширен — историческая
+сравнимость R4 сохранена). 20 hand-written кейсов (ручная работа —
+`premise`/`entailed`/`not_entailed` не сгенерированы mDeBERTa/rubert и
+не сверялись с их выводом до заморозки), каждый явно объявляет ОБА
+списка — `entailed` и `not_entailed` с человекочитаемой `reason` —
+«отсутствует в entailed» нигде не читается как «ложно» (закрывает
+методологическую дыру v1's `false_pair` на эвристике «нет в gold»).
+Обязательное отдельное покрытие `HAS_ROLE` (R7): кейс
+`v3_project_meeting_full` намеренно ставит `HAS_ROLE` (Волошин →
+понятие «руководитель проекта», атомонезависимо) РЯДОМ с
+`INVOLVES(role=project_manager)` (тот же человек, роль на ребре ОДНОГО
+события) — на разных парах узлов, не смешивая паттерны; тест
+`test_has_role_is_kept_structurally_distinct_from_involves_role_attribute`
+(`tests/test_knowledge_relation_benchmark_v3_fixtures.py`) кодирует это
+как инвариант, а не только пример.
+
+Итоговое покрытие (проверено `scripts/r4-f1-2-benchmark-v3-coverage.py`
+и 8 freeze-контрактными тестами):
+
+| Метрика | Требование владельца | Факт |
+|---|---|---|
+| positives на relation_type | ≥6 | все 15 типов ≥6 (about/involves/located_at выше) |
+| distinct case_id на relation_type | ≥3 | все 15 типов ≥5 |
+| hard negative на positive | ≥2 | ровно 2.00 (190/95) |
+| всего positives | ~90+ | **95** |
+| всего negatives | ~180+ | **190** |
+| unverbalizable edges (positive ИЛИ negative) | 0 | **0** |
+
+**4. Freeze.** Markdown-дамп всех 20 кейсов + coverage matrix —
+`docs/R4.6.F1.2-BENCHMARK-V3-FREEZE.md` (сгенерирован
+`scripts/r4-f1-2-generate-freeze-dump.py`, детерминированно, без
+NLI-вызовов). Split по `case_id` (не по отдельному примеру): **16
+calibration-кейсов / 78 positives** — единственный источник
+LOOCV/threshold-подбора; **4 final_holdout-кейса / 17 positives**
+(`v3_clinic_visit_specialty_2`, `v3_project_meeting_2`,
+`v3_decision_supersede_2`, `v3_purchase_2`) — покрывают все 15 типов
+минимум по разу, используются ТОЛЬКО для финального отчёта, **не
+меняются после первого inference**. Freeze commit: `<см. следующий
+коммит после этого — SHA дописан отдельной строкой ниже сразу после
+push>`.
+
+Статус до результата двух моделей: **R4 = NO_PASS / R4.6.F1.2**,
+production semantic pipeline = NONE, **R5 = NOT STARTED**, backfill =
+**FORBIDDEN**.
+
 ### R4.6.F2 (после F1, если go): high-recall candidate generation для NLI
 
 Текущий `candidate_recall≈0.536` (R4.6.E шаг 1) — НЕ доказанный
