@@ -404,13 +404,19 @@ PYEOF
   if [ "$health_before_core" = "OK" ] && [ "$health_after_core" != "OK" ]; then degraded="true"; fi
   if [ "$health_before_pg" = "OK" ] && [ "$health_after_pg" != "OK" ]; then degraded="true"; fi
   echo "  other_services_degraded=$degraded"
+  # НАЙДЕНО живым прогоном 200: bash "true"/"false" — не валидные Python
+  # литералы (нужны True/False), поэтому эта строка ВСЕГДА падала с
+  # NameError и other_services_degraded НИКОГДА не попадал в JSON — на
+  # всех трёх кандидатах молча, кандидаты потом проваливали собственный
+  # hard gate R4.4e (missing required field). Передаём через argv, а не
+  # через прямую интерполяцию bash-строки в python-код.
   python3 -c "
-import json
-p = '$BASE_DIR/resources-$safe.json'
+import json, sys
+p, degraded = sys.argv[1], sys.argv[2] == 'true'
 d = json.load(open(p))
-d['other_services_degraded'] = $degraded
+d['other_services_degraded'] = degraded
 json.dump(d, open(p, 'w'), indent=2)
-"
+" "$BASE_DIR/resources-$safe.json" "$degraded"
   behavioral_health_check "ПОСЛЕ $model"
   echo "=== Z2 rephrase smoke после кандидата ==="
   z2_rephrase_smoke
