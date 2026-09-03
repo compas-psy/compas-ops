@@ -19,6 +19,14 @@
 # же lifecycle-safety принцип, что в r4-golden-benchmark.sh: снимок
 # preexisting-моделей до, pull только той модели, что тестируется,
 # удалить только то, чего не было, в конце.
+#
+# НАЙДЕНО вторым прогоном: qwen2.5:7b падал 500 (Internal Server Error)
+# под лимитом памяти 4g, восстановленным после run 200 — тот же
+# ресурсный барьер, из-за которого r4-golden-benchmark.sh временно
+# поднимает лимит до 8g именно для этого кандидата. Этот скрипт не
+# измеряет ресурсы вообще (в отличие от канонического бенчмарка) —
+# поднимаем лимит один раз на весь диагностический прогон, а не
+# по-кандидатно, и восстанавливаем в конце вместе с моделями.
 set -uo pipefail
 cd /opt/helm/compose
 
@@ -26,9 +34,20 @@ DIAG_DIR=/opt/helm-state/benchmarks/r4/diagnostic-safety-cases
 sudo mkdir -p "$DIAG_DIR"
 sudo chown "$(id -u):$(id -g)" "$DIAG_DIR"
 
+OLLAMA_CID=$(sudo docker compose ps -q ollama)
 PREEXISTING_MODELS=$(sudo docker compose exec -T ollama ollama list | tail -n +2 | awk '{print $1}')
 echo "модели до диагностики:"
 echo "$PREEXISTING_MODELS" | sed 's/^/  /'
+
+ORIGINAL_MEM_LIMIT=$(sudo docker inspect -f '{{.HostConfig.Memory}}' "$OLLAMA_CID")
+if [ "$ORIGINAL_MEM_LIMIT" = "0" ] || [ -z "$ORIGINAL_MEM_LIMIT" ]; then
+  ORIGINAL_MEM_LIMIT_HUMAN="4g"
+else
+  ORIGINAL_MEM_LIMIT_HUMAN="${ORIGINAL_MEM_LIMIT}b"
+fi
+echo "лимит памяти до диагностики: $ORIGINAL_MEM_LIMIT_HUMAN"
+echo "=== временно поднимаем лимит ollama до 8g (нужно для qwen2.5:7b) ==="
+sudo docker update --memory=8g --memory-swap=8g "$OLLAMA_CID"
 
 for model in gemma2:2b qwen2.5:3b qwen2.5:7b; do
   echo "=== pull $model ==="
@@ -117,6 +136,10 @@ for m in $current_models; do
     echo "  оставляем $m (была до диагностики)"
   fi
 done
+
+echo
+echo "############ ВОССТАНОВЛЕНИЕ: лимит памяти -> $ORIGINAL_MEM_LIMIT_HUMAN ############"
+sudo docker update --memory="$ORIGINAL_MEM_LIMIT_HUMAN" --memory-swap="$ORIGINAL_MEM_LIMIT_HUMAN" "$OLLAMA_CID"
 
 if [ "$diag_rc" -ne 0 ]; then
   echo "::error::диагностика завершилась с кодом $diag_rc"
