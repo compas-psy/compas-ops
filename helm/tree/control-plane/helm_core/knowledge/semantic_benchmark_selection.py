@@ -144,6 +144,15 @@ def evaluate_hard_gates(candidate: CandidateResult) -> GateResult:
         v.append(f"malformed_results = {s.malformed_results} (schema-invalid terminal window)")
     if s.processed_window_coverage < 1.0:
         v.append(f"processed-window coverage = {s.processed_window_coverage:.1%} (требуется 100%)")
+    # Владелец 03.09.2026 (R4.6.B.1 п.2): защита от «идеальная точность
+    # через молчание» — явная проверка, НЕ полагающаяся на то, что
+    # 0 извлечённых связей уже сегодня даёт relation_precision=0.0, а не
+    # 1.0. Кандидат, вообще не пытавшийся извлечь связи там, где gold их
+    # ожидает, не проходит гейт по этой причине САМА ПО СЕБЕ.
+    if m.relation_gold_scoreable > 0 and m.relation_extracted_total == 0:
+        v.append(
+            f"relation precision: gold ожидал {m.relation_gold_scoreable} связей, "
+            f"извлечено 0 — молчание не засчитывается за точность")
     if m.relation_precision < 0.90:
         v.append(f"relation precision on labeled edges = {m.relation_precision:.1%} (требуется >= 90%)")
     if m.critical_entity_event_recall < 0.90:

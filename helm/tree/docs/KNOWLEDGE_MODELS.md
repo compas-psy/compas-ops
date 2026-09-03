@@ -860,6 +860,89 @@ architectural experiment), исчерпаны. `qwen2.5:7b` остаётся FAI
 шагу — новый вариант two-pass-промпта, дополнительные кандидаты
 (R4.6.D) или что-то ещё — за владельцем.
 
+## R4.6.B.1: найден и закрыт benchmark drift — typed relation precision (владелец 03.09.2026)
+
+Владелец, сверяя R4.6.B/C с §14.18 буквально, нашёл ВТОРОЙ drift (после
+R4.5.6): `evaluate_case()`/`aggregate()` сопоставляли ребро по паре
+конечных точек `(from_local_id, to_local_id)`, а `relation_type`
+проверяли ОТДЕЛЬНО через `relation_type_accuracy` — не входившую ни в
+один hard gate. Формально пара «верные концы + неверный тип»
+засчитывалась в `relation_precision` как matched. Но §14.18 требует
+«relation precision **on labeled edges**», а §14.9 называет typed
+relation каноническим смыслом связи — неверный тип означает неверную
+связь, а не почти-верную.
+
+### Что исправлено
+
+- **Typed identity**: normative `relation_precision`/`relation_recall`
+  теперь считаются по `(from, normalized_relation_type, to)`, не только
+  по паре точек. Реализовано БЕЗ изменения per-case цикла сопоставления
+  (`evaluate_case()` не тронут) — на уровне `aggregate()`:
+  `typed_matched = relation_type_correct` (уже читает случай, где ОБЕ
+  точки совпали И тип совпал — ровно то, что нужно), `typed_extra =
+  edges_extra + (edges_matched - relation_type_correct)` (пара с
+  верными точками, но неверным типом, была извлечена — значит уходит в
+  extra, а не исчезает бесследно).
+- **Старая метрика сохранена диагностически** как
+  `endpoint_relation_precision`/`endpoint_relation_recall` — отвечает
+  на «нашёл правильную пару?» отдельно от «выбрал правильный тип?»
+  (`relation_type_accuracy`, не переименован, формула не изменилась).
+  Не гейт, не участвует в `select_winner()`.
+- **`role` НЕ включён в идентичность** — по прямому указанию владельца
+  («не проверив все fixtures»), измеряется отдельно, если понадобится.
+- **Новый `relation_f1`** — гармоническое typed precision/recall,
+  отчётное поле.
+- **Защита от «идеальная точность через молчание»**: `evaluate_hard_
+  gates()` — НОВАЯ явная проверка `relation_gold_scoreable > 0 and
+  relation_extracted_total == 0 → FAIL`, независимая от того, что
+  `_safe_div(0, 0)` уже сегодня возвращает 0.0 (не 1.0). Не новый
+  quality threshold — защита от будущей правки `_safe_div()`, которая
+  могла бы тихо открыть эту дыру.
+- **Sabotage-tests** (все проверены обратным прогоном — временно
+  откатить проверку → должен упасть just-that тест, восстановить →
+  снова зелёный):
+  - `test_wrong_relation_type_on_correct_endpoints_is_not_a_typed_match`
+    — верные точки + неверный тип на `doctor_visit` → typed precision
+    падает 1.0→0.0, endpoint precision остаётся 1.0.
+  - `test_missing_relation_type_registry_still_lowers_typed_precision`
+    — `related_to`-fallback (R4.6.B) как «валидный, но не тот» тип.
+  - `test_silent_zero_extractions_disqualifies_even_if_precision_
+    formula_would_default_high` — 0 извлечённых связей при
+    gold_scoreable=5 дисквалифицирует ПО СВОЕЙ причине.
+  - `test_nonzero_extractions_do_not_trigger_the_silence_gate` —
+    кандидат, который пытался (extracted_total > 0), не должен
+    случайно спотыкаться об этот гейт.
+
+Golden fixtures не менялись. Никакого нового прогона Ollama не
+понадобилось для самого исправления — только для offline-пересчёта
+ниже (числа уже были в сохранённых job-логах run 217/220, реюз, не
+повторный вызов модели).
+
+### Offline пересчёт R4.6.B/C под typed-метрикой
+
+| | endpoint precision (старое число, теперь диагностика) | **typed relation_precision (нормативное)** | typed recall | relation_type_accuracy |
+|---|---|---|---|---|
+| single-pass (run 217) | 0.304 | **0.000** | 0.000 | 0.000 (0/7) |
+| two-pass (run 220) | 0.167 | **0.133** | 0.182 | 0.800 (4/5) |
+
+**Сравнение переворачивается под правильной метрикой.** Под старой
+(endpoint-only, ошибочной с точки зрения §14.18) метрикой two-pass
+выглядел ХУЖЕ single-pass (0.167 < 0.304) — вывод R4.6.C был «two-pass
+не решил, а усугубил». Под НОРМАТИВНОЙ typed-метрикой single-pass
+вообще не набрал ни одной по-настоящему верной связи (**0.000** — из 7
+«matched» пар все 7 оказались неверного типа), а two-pass, при всей
+своей склонности к over-generation, всё же дал 4 верно типизированные
+связи из 5 найденных пар (**0.133**). Ранее задокументированный вывод
+«two-pass хуже single-pass» был артефактом неверной метрики — под
+нормативной оба катастрофически далеки от 0.90, но two-pass не хуже,
+а НЕМНОГО лучше single-pass по буквальному smyslu §14.18.
+
+Ни один из вариантов не приближается к гейту. Оба остаются FAIL.
+`R4.6.C2` (ниже) — следующий шаг по мандату владельца, а не
+продолжение произвольного prompt-tuning.
+
+## R4.6.C2: deterministic candidate generation + relation-or-NONE classifier (в работе, владелец 03.09.2026)
+
 ## Ресурсные контракты (не зависят от выбора конкретной модели)
 
 - ASR: `concurrency=1`, on-demand, выгрузка из RAM после использования,

@@ -18,6 +18,7 @@ def _report(*, hallucinations=None, safety_hallucinations=0, fabricated_dates=0,
            no_knowledge_violations=0, precision=1.0, recall=1.0, correctness=1.0,
            relation_precision=None, critical_recall=1.0,
            exact_identifier_corruption=0, exact_date_corruption=0,
+           relation_gold_scoreable=0, relation_extracted_total=None,
            failed_cases=0, truncated_cases=0, malformed_results=0,
            avg_repair_attempts=0.0, stable=True,
            p50_latency=1.0) -> GoldenBenchmarkReport:
@@ -30,6 +31,12 @@ def _report(*, hallucinations=None, safety_hallucinations=0, fabricated_dates=0,
     # агрегат) не увидел бы нарушение, которое тест утверждает, что задал.
     if hallucinations is None:
         hallucinations = max(safety_hallucinations, fabricated_dates + no_knowledge_violations)
+    # По умолчанию «extracted_total = gold_scoreable» — нейтральное
+    # предположение «нашли примерно всё, что искали», чтобы тесты, не
+    # интересующиеся R4.6.B.1-гейтом «молчание», не спотыкались о него
+    # случайно (relation_gold_scoreable по умолчанию 0 — гейт неактивен).
+    if relation_extracted_total is None:
+        relation_extracted_total = relation_gold_scoreable
     metrics = AggregateMetrics(
         cases_scored=21,
         entity_precision=precision, atom_precision=precision,
@@ -41,6 +48,8 @@ def _report(*, hallucinations=None, safety_hallucinations=0, fabricated_dates=0,
         critical_entity_event_recall=critical_recall,
         exact_identifier_corruption=exact_identifier_corruption,
         exact_date_corruption=exact_date_corruption,
+        relation_gold_scoreable=relation_gold_scoreable,
+        relation_extracted_total=relation_extracted_total,
     )
     schema = SchemaStats(cases_total=21, failed_cases=failed_cases,
                          truncated_cases=truncated_cases, malformed_results=malformed_results,
@@ -113,6 +122,28 @@ class TestNormativeHardGates:
         0.90` в правке гейта прошёл бы незамеченным."""
         gate = evaluate_hard_gates(_candidate("x", relation_precision=0.90))
         assert gate.passed
+
+    def test_silent_zero_extractions_disqualifies_even_if_precision_formula_would_default_high(self):
+        """Владелец 03.09.2026 (R4.6.B.1 п.2): «идеальная точность через
+        молчание» не должна проходить гейт. Эта проверка обязана
+        дисквалифицировать по СВОЕЙ причине, независимо от того, что
+        сегодня даёт формула precision на 0/0 — иначе будущая правка
+        `_safe_div()` («0 попыток — 0 провалов, вакуумно точно = 1.0»)
+        тихо открыла бы дыру: сабо-таж ниже это доказывает."""
+        candidate = _candidate("x", relation_precision=0.0,
+                               relation_gold_scoreable=5, relation_extracted_total=0)
+        gate = evaluate_hard_gates(candidate)
+        assert not gate.passed
+        assert any("извлечено 0" in v for v in gate.violations)
+
+    def test_nonzero_extractions_do_not_trigger_the_silence_gate(self):
+        """Кандидат, который РЕАЛЬНО пытался (extracted_total > 0), не
+        должен спотыкаться о гейт молчания — даже если его precision всё
+        равно низкая, это уже другая (уже проверенная выше) причина."""
+        candidate = _candidate("x", relation_precision=0.0,
+                               relation_gold_scoreable=5, relation_extracted_total=1)
+        gate = evaluate_hard_gates(candidate)
+        assert not any("извлечено 0" in v for v in gate.violations)
 
     def test_critical_entity_event_recall_just_under_threshold_disqualifies(self):
         gate = evaluate_hard_gates(_candidate("x", critical_recall=0.89))

@@ -206,6 +206,62 @@ def test_lost_negation_is_flagged_as_material_hallucination():
     assert score.material_hallucinations >= 2
 
 
+def test_wrong_relation_type_on_correct_endpoints_is_not_a_typed_match():
+    """Владелец 03.09.2026 (R4.6.B.1): §14.18 «relation precision on
+    labeled edges» — typed идентичность `(from, type, to)`, не только
+    пара конечных точек. Верная пара с неверным типом обязана СНИЗИТЬ
+    normative `relation_precision`, а не остаться в нём почти-верной
+    (это тот самый drift, из-за которого run 210/217 показал
+    endpoint-only 0.304 вместо настоящего typed-precision 0.0)."""
+    case = _BY_ID["doctor_visit"]
+    right_type = WindowExtraction(
+        entities=[ExtractedEntity(local_id="x1", entity_type="PERSON",
+                                  label="Кириченко Сергей Александрович")],
+        atoms=[ExtractedAtom(local_id="y1", kind="event", title="Приём",
+                             text=("19 августа 2026 года состоялся приём врача-уролога "
+                                   "Кириченко Сергея Александровича."))],
+        edges=[ExtractedEdge(from_local_id="y1", relation_type="involves", to_local_id="x1")],
+    )
+    right_agg = aggregate([evaluate_case(case, right_type)])
+    assert right_agg.relation_precision == 1.0
+    assert right_agg.endpoint_relation_precision == 1.0
+
+    wrong_type = WindowExtraction(
+        entities=right_type.entities, atoms=right_type.atoms,
+        edges=[ExtractedEdge(from_local_id="y1", relation_type="contradicts", to_local_id="x1")],
+    )
+    wrong_score = evaluate_case(case, wrong_type)
+    assert wrong_score.edges_matched == 1, "конечные точки всё ещё найдены верно"
+    assert wrong_score.relation_type_correct == 0, "но тип — нет"
+
+    wrong_agg = aggregate([wrong_score])
+    assert wrong_agg.relation_precision == 0.0, (
+        "typed relation_precision обязан УПАСТЬ при неверном типе на верной паре")
+    assert wrong_agg.endpoint_relation_precision == 1.0, (
+        "старая endpoint-only метрика остаётся диагностическим числом — "
+        "она НЕ портится, именно поэтому normative-гейт больше не читает её напрямую")
+
+
+def test_missing_relation_type_registry_still_lowers_typed_precision():
+    """`related_to` (нормализованный владельцем 03.09.2026 fallback вне
+    закрытого реестра §14.9, R4.6.B) — валидный ЗНАЧЕНИЕ типа, но не то,
+    что ждёт gold `involves`: typed-идентичность обязана его отличать
+    так же, как явно неверный тип выше."""
+    case = _BY_ID["doctor_visit"]
+    entities = [ExtractedEntity(local_id="x1", entity_type="PERSON",
+                                label="Кириченко Сергей Александрович")]
+    atoms = [ExtractedAtom(local_id="y1", kind="event", title="Приём",
+                           text=("19 августа 2026 года состоялся приём врача-уролога "
+                                 "Кириченко Сергея Александровича."))]
+    extraction = WindowExtraction(
+        entities=entities, atoms=atoms,
+        edges=[ExtractedEdge(from_local_id="y1", relation_type="related_to", to_local_id="x1")])
+
+    agg = aggregate([evaluate_case(case, extraction)])
+    assert agg.relation_precision == 0.0
+    assert agg.endpoint_relation_precision == 1.0
+
+
 def test_aggregate_reduces_over_multiple_cases_without_crashing():
     scores = [evaluate_case(case, WindowExtraction()) for case in GOLDEN_CASES]
     agg = aggregate(scores)

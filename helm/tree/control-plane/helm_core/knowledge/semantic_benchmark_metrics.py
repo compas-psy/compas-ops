@@ -376,9 +376,30 @@ class AggregateMetrics:
     atom_f1: float = 0.0
     atom_kind_accuracy: float = 0.0
     date_accuracy: float = 0.0
+    #: Владелец 03.09.2026 (R4.6.B.1): нормативный §14.18 «relation
+    #: precision on labeled edges» — TYPED идентичность связи `(from,
+    #: normalized_type, to)`, не только пара конечных точек. Верная пара
+    #: с неверным типом — НЕ typed match: связь была извлечена, значит
+    #: остаётся среди извлечённого и уходит в `extra` (была связь — она
+    #: неверна), а не пропадает бесследно и не засчитывается почти-верной.
+    #: `endpoint_relation_precision`/`_recall` ниже — старое (endpoint-
+    #: only) измерение, оставлено ДИАГНОСТИЧЕСКИ: разводит «не нашёл пару»
+    #: от «нашёл пару, перепутал тип» — но не гейт и не участвует в отборе.
     relation_precision: float = 0.0
     relation_recall: float = 0.0
+    relation_f1: float = 0.0
     relation_type_accuracy: float = 0.0
+    endpoint_relation_precision: float = 0.0
+    endpoint_relation_recall: float = 0.0
+    #: Владелец 03.09.2026 (R4.6.B.1 п.2): защита от «идеальная точность
+    #: через молчание» — НЕ полагается на то, что `_safe_div(0, 0)` уже
+    #: сегодня возвращает 0.0, а не 1.0. `evaluate_hard_gates()` явно
+    #: проверяет `relation_gold_scoreable > 0 and relation_extracted_total
+    #: == 0` как отдельное условие, не производное от самой precision —
+    #: иначе будущая правка `_safe_div()` («0 попыток — 0 провалов, значит
+    #: вакуумно точно») тихо открыла бы дыру в гейте.
+    relation_gold_scoreable: int = 0
+    relation_extracted_total: int = 0
     no_knowledge_violations: int = 0
     fabricated_dates: int = 0
     fabricated_relations: int = 0
@@ -444,11 +465,27 @@ def aggregate(scores: list[CaseScore]) -> AggregateMetrics:
                                   sum(s.date_applicable for s in scores))
 
     edges_scoreable = sum(s.edges_gold_scoreable for s in scores)
-    edges_matched = sum(s.edges_matched for s in scores)
-    edges_extra = sum(s.edges_extracted_extra for s in scores)
-    agg.relation_recall = _safe_div(edges_matched, edges_scoreable)
-    agg.relation_precision = _safe_div(edges_matched, edges_matched + edges_extra)
-    agg.relation_type_accuracy = _safe_div(sum(s.relation_type_correct for s in scores), edges_matched)
+    edges_matched = sum(s.edges_matched for s in scores)          # endpoint-only (from, to)
+    edges_extra = sum(s.edges_extracted_extra for s in scores)    # endpoint-only
+    relation_type_correct = sum(s.relation_type_correct for s in scores)
+
+    agg.relation_gold_scoreable = edges_scoreable
+    agg.relation_extracted_total = edges_matched + edges_extra
+    agg.endpoint_relation_recall = _safe_div(edges_matched, edges_scoreable)
+    agg.endpoint_relation_precision = _safe_div(edges_matched, edges_matched + edges_extra)
+    agg.relation_type_accuracy = _safe_div(relation_type_correct, edges_matched)
+
+    # Владелец 03.09.2026 (R4.6.B.1) — нормативная relation_precision:
+    # typed идентичность (from, type, to). Верная пара с неверным типом
+    # НЕ typed-matched — она уже извлечена, значит переходит в typed
+    # extra, а не исчезает из обоих знаменателей молча.
+    typed_matched = relation_type_correct
+    typed_extra = edges_extra + (edges_matched - relation_type_correct)
+    agg.relation_precision = _safe_div(typed_matched, typed_matched + typed_extra)
+    agg.relation_recall = _safe_div(typed_matched, edges_scoreable)
+    agg.relation_f1 = _safe_div(2 * agg.relation_precision * agg.relation_recall,
+                                agg.relation_precision + agg.relation_recall) \
+        if (agg.relation_precision + agg.relation_recall) else 0.0
 
     agg.no_knowledge_violations = sum(1 for s in scores if s.no_knowledge_violation)
     agg.fabricated_dates = sum(s.fabricated_dates for s in scores)
