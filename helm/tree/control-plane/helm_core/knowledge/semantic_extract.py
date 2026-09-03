@@ -269,14 +269,20 @@ def _prompt(window_text: str, *, domain: str, heading_path: tuple[str, ...],
     return "\n\n".join(parts)
 
 
-def _call_ollama(prompt: str, *, model: str, keep_alive: str | None = None) -> str:
+def _call_ollama(prompt: str, *, model: str, keep_alive: str | None = None,
+                  system: str = SYSTEM_PROMPT, response_schema: dict = RESPONSE_SCHEMA) -> str:
+    """`system`/`response_schema` параметризованы ради R4.6.C
+    (`semantic_extract_twopass.py`): pass 2 того эксперимента — другой
+    промпт и схема (только edges), но тот же HTTP/retry/детерминизм
+    контракт, что и у single-pass. Значения по умолчанию — прежнее
+    поведение `extract_window()`, ничего не меняется для него."""
     body = {
         "model": model,
-        "system": SYSTEM_PROMPT,
+        "system": system,
         "prompt": prompt,
         "stream": False,
         "keep_alive": keep_alive if keep_alive is not None else get_settings().knowledge_semantic_keep_alive,
-        "format": RESPONSE_SCHEMA,
+        "format": response_schema,
         "options": {"temperature": 0, "seed": DETERMINISTIC_SEED},
     }
     request = urllib.request.Request(
@@ -292,6 +298,43 @@ def _call_ollama(prompt: str, *, model: str, keep_alive: str | None = None) -> s
     if not answer:
         raise ExtractionFailed("извлекатель вернул пустой ответ")
     return answer
+
+
+def _validate_edges(edge_items, *, known: set[str], window_text: str) -> tuple[list[ExtractedEdge], list[str]]:
+    """Общая проверка edges — вынесена из `validate()` ради R4.6.C
+    (`semantic_extract_twopass.py`): pass 2 того эксперимента строит
+    `known` не из своего же ответа (там нет entities/atoms), а из
+    результатов pass 1, и вызывает ЭТУ ЖЕ функцию, а не копию её
+    логики. Держать grounding/реестр §14.9 в двух местах значило бы
+    разъезжаться при следующей правке (тот же класс риска, что и
+    остальные дублирующиеся проверки в этой сессии)."""
+    edges: list[ExtractedEdge] = []
+    rejected: list[str] = []
+    for item in edge_items:
+        if not isinstance(item, dict):
+            rejected.append("связь не объект")
+            continue
+        source = str(item.get("from") or "").strip()
+        target = str(item.get("to") or "").strip()
+        relation = str(item.get("type") or "").strip().lower()
+        if source not in known or target not in known:
+            rejected.append(f"связь в никуда: {source!r} → {target!r}")
+            continue
+        evidence_quote = str(item.get("evidence_quote") or "").strip()
+        if not evidence_quote:
+            rejected.append(f"связь без evidence_quote: {item!r:.80}")
+            continue
+        if not _evidence_grounded(evidence_quote, window_text):
+            rejected.append(f"evidence_quote связи не найден в тексте окна: {evidence_quote!r:.80}")
+            continue
+        if relation not in _RELATION_TYPES:
+            rejected.append(f"тип связи {relation!r} сведён к related_to")
+            relation = SemanticRelationType.RELATED_TO.value
+        edges.append(ExtractedEdge(
+            from_local_id=source, relation_type=relation, to_local_id=target,
+            role=(str(item.get("role")).strip() or None) if item.get("role") else None,
+            evidence_quote=evidence_quote))
+    return edges, rejected
 
 
 def validate(raw: str, *, window_text: str) -> WindowExtraction:
@@ -402,30 +445,9 @@ def validate(raw: str, *, window_text: str) -> WindowExtraction:
             subtype=(str(item.get("subtype")).strip() or None) if item.get("subtype") else None,
             occurred_at=occurred_at, date_precision=precision, evidence_quote=evidence_quote))
 
-    for item in data.get("edges") or []:
-        if not isinstance(item, dict):
-            result.rejected.append("связь не объект")
-            continue
-        source = str(item.get("from") or "").strip()
-        target = str(item.get("to") or "").strip()
-        relation = str(item.get("type") or "").strip().lower()
-        if source not in known or target not in known:
-            result.rejected.append(f"связь в никуда: {source!r} → {target!r}")
-            continue
-        evidence_quote = str(item.get("evidence_quote") or "").strip()
-        if not evidence_quote:
-            result.rejected.append(f"связь без evidence_quote: {item!r:.80}")
-            continue
-        if not _evidence_grounded(evidence_quote, window_text):
-            result.rejected.append(f"evidence_quote связи не найден в тексте окна: {evidence_quote!r:.80}")
-            continue
-        if relation not in _RELATION_TYPES:
-            result.rejected.append(f"тип связи {relation!r} сведён к related_to")
-            relation = SemanticRelationType.RELATED_TO.value
-        result.edges.append(ExtractedEdge(
-            from_local_id=source, relation_type=relation, to_local_id=target,
-            role=(str(item.get("role")).strip() or None) if item.get("role") else None,
-            evidence_quote=evidence_quote))
+    edges, edge_rejections = _validate_edges(data.get("edges") or [], known=known, window_text=window_text)
+    result.edges = edges
+    result.rejected.extend(edge_rejections)
 
     if len(result.atoms) >= MAX_ATOMS_PER_WINDOW:
         raise WindowTruncated(
