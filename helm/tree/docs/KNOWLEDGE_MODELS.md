@@ -1354,35 +1354,157 @@ POST совпадает с PRE: Memory=8589934592 MemorySwap=8589934592
 Явное подтверждение из самого лога — `POST совпадает с PRE`, hardened
 lifecycle сработал в бою, не только в локальной симуляции.
 
-### Оценка (владелец, шаг 5) — третий исход, не описанный ни одной из двух веток мандата
+### Решение владельца — R4.6.E закрыт: chat-LLM existence NO-GO
 
-Мандат предполагал два исхода: «различает positive/hard-negative» → C3,
-или «обе систематически entailed=true» → STOP. Фактический результат —
-ни то, ни другое:
+```
+chat-LLM forced-choice defect fixed
+but existence recall unacceptable:
 
-- Старый forced-choice bias («выбирают связь вместо NONE») **устранён**:
-  NONE/false rate 0.867 (qwen) и 0.900 (mistral) — обе модели теперь
-  ГОРАЗДО чаще говорят «нет», чем того требует истинный баланс датасета
-  (50/50). `mistral:7b` вообще не даёт ни одного false positive на
-  hard-negative (specificity=1.000, precision=1.000).
-- Но обе модели теперь **систематически говорят `entailed=false` и на
-  реальных positive** — recall 0.133 (qwen) и 0.200 (mistral): из 15
-  настоящих gold-связей модели ловят 2 и 3 соответственно. Это
-  переобучение анти-bias формулировки в противоположную сторону, не
-  «различение».
+qwen2.5:7b  precision .500 / recall .133
+mistral:7b  precision 1.000 / recall .200
 
-Это не решение владельца, а находка, которую владелец сам просил не
-предвосхищать: числа не укладываются ни в «идти к C3», ни в чистый
-«STOP локальных chat-LLM для existence» — recall слишком низкий для
-первого, но specificity/precision `mistral:7b` (1.000/1.000) не похожи
-на «модель не умеет отличать вообще», как предполагал бы второй исход.
-Дальнейший шаг (калибровка формулировки промпта 2A в сторону менее
-консервативного default, отдельный прогон на большем/иначе
-сбалансированном наборе, или прямой переход к п.6 мандата — purpose-
-built NLI/cross-encoder) — решение владельца, не принято здесь.
+chat-LLM existence = NO-GO
+```
 
-Статус не меняется: **R4 = NO_PASS**, production semantic model = NONE,
-**R5 = NOT STARTED**, backfill = **FORBIDDEN**.
+Владелец принял находку не как «третий, неопределённый исход», а как
+достаточное основание для NO-GO: forced-choice bias устранён (это
+доказано), но recall обеих моделей неприемлем для gate 0.90 — separate
+prompt-tuning `classify_existence()` дальше не производится, C3 на
+qwen/mistral не запускается, новые generative chat-модели для relation
+existence не добавляются. Чистого результата `mistral:7b`
+(precision=1.000, specificity=1.000, ноль инфраструктурного шума)
+достаточно для этого решения — qwen:7b ради него не перегоняется.
+
+**Infrastructure debt (отдельно от quality-решения):** ~15 `HTTP Error
+500: Internal Server Error` от Ollama на вызовах `qwen2.5:7b` в run 230
+(см. выше) зафиксированы как известный операционный долг, НЕ
+переиспользуются как довод ни за, ни против чата-LLM existence —
+причина не диагностирована (кандидат: конкуренция за 8GB с резидентным
+`gemma2:2b`), доследование не блокирует переход к R4.6.F.
+
+Следующий шаг — **R4.6.F: purpose-built local NLI relation scorer**
+(владелец 03.09.2026), см. ниже. До результата F:
+
+```
+R4 = NO_PASS / R4.6.F
+R5 = NOT STARTED
+production semantic pipeline = NONE
+backfill = FORBIDDEN
+```
+
+Cloud не используется, пока purpose-built NLI (F) тоже не провалится —
+до этого момента развилка cloud/scope-reduction/deterministic-only
+владельцу не выносится.
+
+## R4.6.F: purpose-built local NLI relation scorer (владелец 03.09.2026)
+
+Диагноз владельца: chat-generative LLM (7B, forced multi-way choice или
+even binary existence) — неподходящий инструмент именно для шага
+«есть ли эта конкретная типизированная связь между этими двумя
+объектами» — это классическая задача **natural language inference**
+(NLI: premise entails/contradicts/neutral hypothesis), для которой
+существуют компактные (0.2-0.3B) модели, специально предобученные на
+этой задаче, на порядок дешевле по CPU/RAM, чем 7B chat-модель.
+
+Целевая архитектура (предпочтительная, если F1/F2 пройдут):
+
+```
+local generative LLM
+→ entities + atoms
+
+deterministic candidate/hypothesis builder
+→ pairs + typed hypotheses
+
+local NLI model
+→ entailment scores
+
+deterministic threshold
+→ graph edges
+```
+
+Итоговым `production semantic pipeline` может оказаться НЕ одна
+модель, а связка: например, `mistral:7b` (лучший entity/atom layer из
+R4.6.D) + `mDeBERTa`/`RuBERT` NLI (relation layer) — это решается по
+факту после R4.6.F2 (см. ниже), не предполагается заранее.
+
+### R4.6.F1: NLI benchmark — план (в работе)
+
+Кандидаты (только local CPU, zero cloud, предпочтительно
+`safetensors`/ONNX):
+- `MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7`
+- `cointegrated/rubert-base-cased-nli-threeway`
+
+**На этом этапе `generate_candidates()` НЕ используется вообще** — цель
+F1 измерить способность NLI различать typed+directed relation
+entailment в изоляции от recall/precision candidate-генератора (та же
+дисциплина, что и offline audit R4.6.E шага 1: не смешивать два разных
+источника ошибок в одном числе).
+
+Датасет строится ТОЛЬКО из уже существующих golden fixtures,
+детерминированно, без LLM:
+- на каждый `GoldEdge` — premise (текст fixture/минимальный grounded
+  context) + hypothesis по ФИКСИРОВАННОМУ русскому шаблону на
+  relation_type (по одному шаблону на каждый тип из закрытого реестра
+  §14.9, versioned в коде, не генерируется моделью);
+- четыре варианта на каждое gold-ребро: правильный
+  relation+direction (positive), неправильный relation type для той же
+  пары (hard negative), обратное направление (hard negative), заведомо
+  несвязанная пара (hard negative) — проверяется typed+directed
+  entailment, не «просто связаны ли A и B где-то».
+
+Методология (владелец, обязательна): threshold НЕ подбирается на тех
+же примерах, на которых репортируется итог. Split по `case_id`
+(leave-one-case-out или несколько case-level folds) — порог,
+максимизирующий recall при precision ≥ 0.90, подбирается на
+calibration folds, применяется к held-out кейсу. **Product gate
+остаётся typed relation precision ≥ 0.90 — это НЕ то же самое, что
+probability threshold 0.90 у NLI-модели.**
+
+Репорт: precision/recall/F1/specificity/FPR/AUROC-AUPRC (если разумно)
+/confusion matrix/latency/peak RAM/throughput (pairs/sec).
+
+Go/no-go к R4.6.F2: хотя бы одна NLI-модель держит typed precision
+≥ 0.90 без коллапса recall на held-out кейсах.
+
+### R4.6.F2 (после F1, если go): high-recall candidate generation для NLI
+
+Текущий `candidate_recall≈0.536` (R4.6.E шаг 1) — НЕ доказанный
+production ceiling (offline audit был на synthetic GOLD evidence
+representation), но ДОКАЗАННАЯ проблема нынешнего генератора. NLI на
+0.2-0.3B на порядок дешевле 7B LLM по CPU — можно позволить себе шире
+candidate pool:
+
+```
+bounded semantic window
+      ↓
+широкий набор object pairs
+      ↓
+deterministic hypotheses: relation × direction
+      ↓
+batched NLI scorer
+      ↓
+threshold + margin
+      ↓
+canonical typed edges
+```
+
+`same_paragraph` в этой архитектуре — только способ ВКЛЮЧИТЬ пару в
+широкий candidate pool, не самостоятельное доказательство связи (тем
+самым решается находка R4.6.E шага 1 про 0.105 precision на
+`same_paragraph` — тогда это было единственное, на что опирался
+classifier; здесь это лишь фильтр входа, решение принимает NLI).
+
+После F2 — сравнить `qwen2.5:7b` и `mistral:7b` как pass1 (entities/
+atoms) независимо от relation-слоя (`mistral:7b` уже показал entity/
+atom-слой не хуже `qwen2.5:7b`, R4.6.D).
+
+### R4.6.F — итоговый гейт
+
+Если purpose-built NLI (после F1 и, если применимо, F2) тоже не
+обеспечивает typed relation precision ≥ 0.90 — **R4.6.F = NO_PASS**, и
+только тогда развилка возвращается владельцу: cloud semantic model vs
+graph scope reduction vs deterministic relations only. До этого момента
+cloud не используется.
 
 ## Ресурсные контракты (не зависят от выбора конкретной модели)
 
