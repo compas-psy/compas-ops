@@ -20,6 +20,7 @@
 # это ограничение, а не измеренный факт, и как ограничение отражено в
 # итоговом отчёте, а не выдаётся за «0 подтверждённых вызовов».
 set -uo pipefail
+cd /opt/helm/compose
 BASE_DIR=/opt/helm-state/benchmarks/r4
 
 sudo python3 -c "
