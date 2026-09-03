@@ -54,6 +54,19 @@ class ResourceStats:
     prompt_eval_rate: float | None = None
     generation_rate: float | None = None
 
+    #: R4.5.6.4 (владелец 03.09.2026) — диагностический контекст для
+    #: `oom_occurred`, не отдельный gate: сырые before/after cgroup v2
+    #: `memory.events oom_kill` счётчики и StartedAt/RestartCount
+    #: контейнера. Позволяют человеку перепроверить сам вывод
+    #: `oom_occurred`, не входят в REQUIRED_RESOURCE_FIELDS — их
+    #: отсутствие само по себе не гейт, гейт уже стоит на oom_occurred=None.
+    oom_kill_before: float | None = None
+    oom_kill_after: float | None = None
+    container_started_before: str | None = None
+    container_started_after: str | None = None
+    container_restart_count_before: str | None = None
+    container_restart_count_after: str | None = None
+
 
 #: p50/p95 latency сюда намеренно не входят: они считаются ВНУТРИ
 #: `GoldenBenchmarkReport` из реальных per-case таймингов самого
@@ -90,6 +103,27 @@ class GateResult:
 
 
 def evaluate_hard_gates(candidate: CandidateResult) -> GateResult:
+    """§14.18 «Hard gates for initial golden set» — нормативный список,
+    буквально:
+
+        processed-window coverage                    100%
+        unsupported critical facts                   0
+        identifier/date corruption on exact fixture   0
+        schema-invalid terminal windows               0 after retry
+        critical expected entity/event recall         >= 90%
+        relation precision on labeled edges           >= 90%
+
+    Владелец 03.09.2026 (R4.5.6): предыдущая версия этой функции
+    проверяла `safety_case_hallucinations`/`fabricated_dates`/
+    `no_knowledge_violations` по отдельности и вообще не проверяла
+    coverage/relation_precision/critical recall/exact corruption —
+    drift от спеки, найденный при сверке run 210 (qwen2.5:7b с
+    `failed_cases=2` и `relation_precision=0.28` формально «проходил»
+    старую версию гейта). `unsupported_critical_facts` — то же самое
+    измерение, что раньше называлось `total_material_hallucinations`
+    (весь golden набор — куратированные фикстуры, здесь «критично» всё
+    выдуманное, не только safety-помеченные кейсы) под именем гейта.
+    """
     v: list[str] = []
     m = candidate.golden.metrics
     s = candidate.golden.schema_stats
@@ -101,14 +135,32 @@ def evaluate_hard_gates(candidate: CandidateResult) -> GateResult:
         v.append(f"LiteLLM calls = {candidate.litellm_calls} (должно быть 0)")
     if candidate.openrouter_calls > 0:
         v.append(f"OpenRouter calls = {candidate.openrouter_calls} (должно быть 0)")
-    if m.safety_case_hallucinations > 0:
-        v.append(f"material hallucination на safety-кейсах golden: {m.safety_case_hallucinations}")
-    if m.fabricated_dates > 0:
-        v.append(f"выдуманная точная дата: {m.fabricated_dates}")
-    if m.no_knowledge_violations > 0:
-        v.append(f"NO_KNOWLEDGE придумал знание: {m.no_knowledge_violations} случаев")
+
+    if s.failed_cases > 0:
+        v.append(f"failed_cases = {s.failed_cases} (processed-window coverage < 100%)")
+    if s.truncated_cases > 0:
+        v.append(f"truncated_cases = {s.truncated_cases} (processed-window coverage < 100%)")
     if s.malformed_results > 0:
-        v.append(f"validate()/repair пропустил невалидный результат: {s.malformed_results}")
+        v.append(f"malformed_results = {s.malformed_results} (schema-invalid terminal window)")
+    if s.processed_window_coverage < 1.0:
+        v.append(f"processed-window coverage = {s.processed_window_coverage:.1%} (требуется 100%)")
+    if m.relation_precision < 0.90:
+        v.append(f"relation precision on labeled edges = {m.relation_precision:.1%} (требуется >= 90%)")
+    if m.critical_entity_event_recall < 0.90:
+        v.append(
+            f"critical expected entity/event recall = {m.critical_entity_event_recall:.1%} "
+            f"(требуется >= 90%)")
+    if m.unsupported_critical_facts > 0:
+        v.append(
+            f"unsupported critical facts = {m.unsupported_critical_facts} "
+            f"(no_knowledge={m.no_knowledge_violations}, fabricated_dates={m.fabricated_dates}, "
+            f"fabricated_relations={m.fabricated_relations}, inverted_negations={m.inverted_negations}, "
+            f"unsupported_fact_additions={m.unsupported_fact_additions})")
+    if m.exact_identifier_corruption > 0:
+        v.append(f"identifier corruption on exact fixture = {m.exact_identifier_corruption}")
+    if m.exact_date_corruption > 0:
+        v.append(f"date corruption on exact fixture = {m.exact_date_corruption}")
+
     if candidate.resources.oom_occurred:
         v.append("OOM на этом кандидате")
     if candidate.resources.other_services_degraded:

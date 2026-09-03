@@ -166,12 +166,31 @@ class CaseScore:
     aliases_correct: int = 0
     aliases_applicable: int = 0
 
+    #: §14.18 hard gate «critical expected entity/event recall» — подмножество
+    #: entities_gold/matched, где GoldEntity.critical истинен (см. фикстуры).
+    #: НЕ общий entity_recall: CONCEPT-сущности туда не входят намеренно.
+    critical_entities_gold: int = 0
+    critical_entities_matched: int = 0
+
     atoms_gold: int = 0
     atoms_matched: int = 0
     atoms_extracted_extra: int = 0
     atom_kind_correct: int = 0
     date_correct: int = 0
     date_applicable: int = 0
+
+    #: Та же критичность, что у entities выше, но для атомов: GoldAtom.critical
+    #: (EVENT-kind либо датированный атом) — часть того же combined
+    #: critical_entity_event_recall гейта, не отдельная метрика.
+    critical_atoms_gold: int = 0
+    critical_atoms_matched: int = 0
+
+    #: §14.18: «identifier/date corruption on exact fixture» — matched-по-
+    #: похожести объект, чьё значение (label/occurred_at) РАСХОДИТСЯ с gold
+    #: буквально. Не то же самое, что miss (recall) — объект найден, но
+    #: испорчен, и именно это отдельный hard gate, а не minus к F1.
+    exact_identifier_corruptions: int = 0
+    exact_date_corruptions: int = 0
 
     edges_gold_scoreable: int = 0
     edges_matched: int = 0
@@ -222,12 +241,19 @@ def evaluate_case(case: GoldenCase, extraction: WindowExtraction) -> CaseScore:
     score.entities_gold = len(case.entities)
     score.entities_matched = len(entity_match.matched)
     score.entities_extracted_extra = len(entity_match.unmatched_extracted)
+    score.critical_entities_gold = sum(1 for g in case.entities if g.critical)
 
     ref_to_local_id: dict[str, str] = {}
     for m in entity_match.matched:
         g: GoldEntity = m.gold
         e: ExtractedEntity = m.extracted
         ref_to_local_id[g.ref] = e.local_id
+        if g.critical:
+            score.critical_entities_matched += 1
+            if _normalize(g.label) != _normalize(e.label):
+                score.exact_identifier_corruptions += 1
+                score.notes.append(
+                    f"{g.ref}: identifier corruption — gold={g.label!r} extracted={e.label!r}")
         if _normalize(g.entity_type) == _normalize(e.entity_type):
             score.entity_type_correct += 1
         if g.subtype is not None:
@@ -262,11 +288,14 @@ def evaluate_case(case: GoldenCase, extraction: WindowExtraction) -> CaseScore:
     score.atoms_gold = len(case.atoms)
     score.atoms_matched = len(atom_match.matched)
     score.atoms_extracted_extra = len(atom_match.unmatched_extracted)
+    score.critical_atoms_gold = sum(1 for g in case.atoms if g.critical)
 
     for m in atom_match.matched:
         g: GoldAtom = m.gold
         e: ExtractedAtom = m.extracted
         ref_to_local_id[g.ref] = e.local_id
+        if g.critical:
+            score.critical_atoms_matched += 1
         if _normalize(g.kind) == _normalize(e.kind):
             score.atom_kind_correct += 1
 
@@ -286,6 +315,14 @@ def evaluate_case(case: GoldenCase, extraction: WindowExtraction) -> CaseScore:
             else:
                 if e.date_precision == g.date_precision and e.occurred_at == g.occurred_at:
                     score.date_correct += 1
+                elif e.occurred_at and g.occurred_at and e.occurred_at != g.occurred_at:
+                    # §14.18 «identifier/date corruption on exact fixture»:
+                    # атом найден (matched по тексту), но точная дата
+                    # разошлась с gold — не miss (recall), а порча значения.
+                    score.exact_date_corruptions += 1
+                    score.notes.append(
+                        f"{g.ref}: точная дата расходится с gold — "
+                        f"gold={g.occurred_at!r} extracted={e.occurred_at!r}")
 
         if g.negation_sensitive:
             has_negation = bool(re.search(r"\bне\b|\bнет\b|\bнельзя\b", e.text, flags=re.IGNORECASE))
@@ -352,6 +389,26 @@ class AggregateMetrics:
     rejected_items_total: int = 0
     per_category: dict = field(default_factory=dict)
 
+    #: §14.18 нормативные hard gates (владелец 03.09.2026, R4.5.6 —
+    #: восстановление после drift от спеки). НЕ дубли существующих полей
+    #: выше по случайности: critical_entity_event_recall — подмножество
+    #: GoldEntity.critical/GoldAtom.critical, не общий entity/atom recall;
+    #: exact_identifier/date_corruption — matched-объект с расходящимся
+    #: значением, отдельно от recall (объект НАЙДЕН, но испорчен).
+    critical_entity_event_recall: float = 0.0
+    exact_identifier_corruption: int = 0
+    exact_date_corruption: int = 0
+
+    @property
+    def unsupported_critical_facts(self) -> int:
+        """§14.18 gate name для того же измерения, что и
+        `total_material_hallucinations` — property, а не отдельное поле:
+        AggregateMetrics иногда конструируют напрямую (тесты), а не только
+        через `aggregate()`, и хранить одно и то же число в двух полях
+        значило бы держать их синхронными вручную — тот же класс бага,
+        что и `peak_rss_mb=None → 0.0` (ретракция владельца 02.09.2026)."""
+        return self.total_material_hallucinations
+
 
 def _safe_div(numerator: float, denominator: float) -> float:
     return numerator / denominator if denominator else 0.0
@@ -401,6 +458,14 @@ def aggregate(scores: list[CaseScore]) -> AggregateMetrics:
     agg.total_material_hallucinations = sum(s.material_hallucinations for s in scores)
     agg.safety_case_hallucinations = sum(s.material_hallucinations for s in scores if s.is_safety_case)
     agg.rejected_items_total = sum(s.rejected_count for s in scores)
+
+    critical_gold = (sum(s.critical_entities_gold for s in scores)
+                     + sum(s.critical_atoms_gold for s in scores))
+    critical_matched = (sum(s.critical_entities_matched for s in scores)
+                        + sum(s.critical_atoms_matched for s in scores))
+    agg.critical_entity_event_recall = _safe_div(critical_matched, critical_gold)
+    agg.exact_identifier_corruption = sum(s.exact_identifier_corruptions for s in scores)
+    agg.exact_date_corruption = sum(s.exact_date_corruptions for s in scores)
 
     categories: dict[str, list[CaseScore]] = {}
     for s in scores:

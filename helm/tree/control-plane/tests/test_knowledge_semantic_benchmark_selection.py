@@ -14,19 +14,36 @@ from helm_core.knowledge.semantic_benchmark_selection import (
 )
 
 
-def _report(*, hallucinations=0, safety_hallucinations=0, fabricated_dates=0,
+def _report(*, hallucinations=None, safety_hallucinations=0, fabricated_dates=0,
            no_knowledge_violations=0, precision=1.0, recall=1.0, correctness=1.0,
-           failed_cases=0, avg_repair_attempts=0.0, stable=True,
+           relation_precision=None, critical_recall=1.0,
+           exact_identifier_corruption=0, exact_date_corruption=0,
+           failed_cases=0, truncated_cases=0, malformed_results=0,
+           avg_repair_attempts=0.0, stable=True,
            p50_latency=1.0) -> GoldenBenchmarkReport:
+    # `total_material_hallucinations` в реальном `aggregate()` всегда >=
+    # каждой из своих компонент (safety_case_hallucinations — подмножество,
+    # fabricated_dates/no_knowledge_violations — слагаемые). Синтетический
+    # хелпер обязан держать тот же инвариант сам — иначе тест мог бы задать
+    # `fabricated_dates=1` при `total_material_hallucinations=0`, что живые
+    # данные никогда не производят, и гейт (по праву читающий только
+    # агрегат) не увидел бы нарушение, которое тест утверждает, что задал.
+    if hallucinations is None:
+        hallucinations = max(safety_hallucinations, fabricated_dates + no_knowledge_violations)
     metrics = AggregateMetrics(
         cases_scored=21,
-        entity_precision=precision, atom_precision=precision, relation_precision=precision,
+        entity_precision=precision, atom_precision=precision,
+        relation_precision=precision if relation_precision is None else relation_precision,
         entity_recall=recall, atom_recall=recall, relation_recall=recall,
         subtype_accuracy=correctness, relation_type_accuracy=correctness, date_accuracy=correctness,
         total_material_hallucinations=hallucinations, safety_case_hallucinations=safety_hallucinations,
         fabricated_dates=fabricated_dates, no_knowledge_violations=no_knowledge_violations,
+        critical_entity_event_recall=critical_recall,
+        exact_identifier_corruption=exact_identifier_corruption,
+        exact_date_corruption=exact_date_corruption,
     )
     schema = SchemaStats(cases_total=21, failed_cases=failed_cases,
+                         truncated_cases=truncated_cases, malformed_results=malformed_results,
                          total_repair_attempts=round(avg_repair_attempts * 21))
     from helm_core.knowledge.semantic_benchmark import StabilityResult
     reps = 3
@@ -65,6 +82,68 @@ def test_clean_candidate_passes_all_gates():
     assert gate.passed and gate.violations == []
 
 
+class TestNormativeHardGates:
+    """§14.18 «Hard gates for initial golden set» — владелец 03.09.2026
+    (R4.5.6): предыдущая версия evaluate_hard_gates() не проверяла ни
+    processed-window coverage, ни relation precision, ни critical
+    entity/event recall вообще — drift, который позволил qwen2.5:7b
+    (failed_cases=2, relation_precision=0.28 в run 210) формально
+    «пройти» старый гейт. Каждый тест ниже — минимум, который владелец
+    явно потребовал: failed_cases=1, relation_precision=0.89,
+    critical_recall=0.89 — все строго ниже нормативного порога."""
+
+    def test_failed_cases_disqualifies_even_with_perfect_everything_else(self):
+        gate = evaluate_hard_gates(_candidate("x", failed_cases=1))
+        assert not gate.passed
+        assert any("failed_cases" in v for v in gate.violations)
+
+    def test_truncated_cases_disqualifies(self):
+        gate = evaluate_hard_gates(_candidate("x", truncated_cases=1))
+        assert not gate.passed
+        assert any("truncated_cases" in v for v in gate.violations)
+
+    def test_relation_precision_just_under_threshold_disqualifies(self):
+        gate = evaluate_hard_gates(_candidate("x", relation_precision=0.89))
+        assert not gate.passed
+        assert any("relation precision" in v for v in gate.violations)
+
+    def test_relation_precision_exactly_at_threshold_passes(self):
+        """Граница включительна — 90.0% сам по себе не провал (owner: `>=
+        90%`), только строго ниже. Без этого теста откат `< 0.90` на `<=
+        0.90` в правке гейта прошёл бы незамеченным."""
+        gate = evaluate_hard_gates(_candidate("x", relation_precision=0.90))
+        assert gate.passed
+
+    def test_critical_entity_event_recall_just_under_threshold_disqualifies(self):
+        gate = evaluate_hard_gates(_candidate("x", critical_recall=0.89))
+        assert not gate.passed
+        assert any("critical expected entity/event recall" in v for v in gate.violations)
+
+    def test_unsupported_critical_facts_disqualifies(self):
+        gate = evaluate_hard_gates(_candidate("x", fabricated_dates=1))
+        assert not gate.passed
+        assert any("unsupported critical facts" in v for v in gate.violations)
+
+    def test_exact_identifier_corruption_disqualifies(self):
+        gate = evaluate_hard_gates(_candidate("x", exact_identifier_corruption=1))
+        assert not gate.passed
+        assert any("identifier corruption" in v for v in gate.violations)
+
+    def test_exact_date_corruption_disqualifies(self):
+        gate = evaluate_hard_gates(_candidate("x", exact_date_corruption=1))
+        assert not gate.passed
+        assert any("date corruption" in v for v in gate.violations)
+
+    def test_malformed_results_disqualifies_via_both_named_checks(self):
+        """Владелец перечислил malformed_results и processed-window
+        coverage как ДВЕ отдельные строки гейта — оба обязаны сработать
+        на одном и том же входе, не только один из них."""
+        gate = evaluate_hard_gates(_candidate("x", malformed_results=1))
+        assert not gate.passed
+        assert any("malformed_results" in v for v in gate.violations)
+        assert any("processed-window coverage" in v for v in gate.violations)
+
+
 def test_any_single_hard_gate_violation_excludes_the_candidate():
     cases = [
         dict(fabricated_dates=1),
@@ -89,40 +168,52 @@ def test_no_passing_candidate_gives_no_pass_not_a_best_of_bad():
 
 
 def test_precision_outranks_recall_lexicographically():
+    # precision у обоих >= 0.90 (иначе relation_precision hard gate
+    # дисквалифицировал бы низкоprecision-кандидата раньше, чем дело
+    # дойдёт до сравнения ranking key, и тест проверял бы дисквалификацию,
+    # а не лексикографический порядок).
     high_precision_low_recall = _candidate("precise", precision=0.95, recall=0.70)
-    low_precision_high_recall = _candidate("recall_heavy", precision=0.80, recall=0.99)
+    low_precision_high_recall = _candidate("recall_heavy", precision=0.90, recall=0.99)
     result = select_winner([high_precision_low_recall, low_precision_high_recall])
     assert result.winner.model == "precise"
 
 
 def test_disqualified_candidate_never_wins_even_if_metrics_look_better():
     hallucinating_but_precise = _candidate("bad", precision=1.0, recall=1.0, fabricated_dates=1)
-    honest_but_weaker = _candidate("good", precision=0.85, recall=0.85)
+    honest_but_weaker = _candidate("good", precision=0.90, recall=0.85)
     result = select_winner([hallucinating_but_precise, honest_but_weaker])
     assert result.winner.model == "good"
     assert "bad" in result.disqualified
 
 
 def test_smaller_model_preferred_on_near_tie_by_ram_margin():
-    big = _candidate("big-7b", precision=0.90, recall=0.90, correctness=0.90, peak_rss_mb=6000.0)
-    small = _candidate("small-3b", precision=0.895, recall=0.895, correctness=0.895, peak_rss_mb=3000.0)
+    # precision/recall у обоих safely >= 0.90 (relation_precision — hard
+    # gate) — «near tie» задаётся через correctness (не гейтится), чтобы
+    # тест проверял именно RAM-margin override, а не дисквалификацию.
+    big = _candidate("big-7b", precision=0.95, recall=0.95, correctness=0.90, peak_rss_mb=6000.0)
+    small = _candidate("small-3b", precision=0.95, recall=0.95, correctness=0.895, peak_rss_mb=3000.0)
     result = select_winner([big, small])
     assert result.winner.model == "small-3b"
     assert "R4 п.9" in result.winner_reason
 
 
 def test_ram_margin_alone_does_not_override_a_real_quality_gap():
+    # much_smaller_but_worse держится >= 0.90 по precision/recall (иначе
+    # relation_precision hard gate дисквалифицировал бы его раньше, чем
+    # дело дойдёт до сравнения ranking key — тест проверял бы
+    # дисквалификацию, а не «RAM не перевешивает реальный разрыв в
+    # качестве»); реальный разрыв в качестве задан через correctness.
     clearly_better = _candidate("better", precision=0.98, recall=0.98, correctness=0.98,
                                 peak_rss_mb=6000.0)
-    much_smaller_but_worse = _candidate("smaller", precision=0.70, recall=0.70, correctness=0.70,
+    much_smaller_but_worse = _candidate("smaller", precision=0.90, recall=0.90, correctness=0.50,
                                         peak_rss_mb=1000.0)
     result = select_winner([clearly_better, much_smaller_but_worse])
     assert result.winner.model == "better"
 
 
 def test_small_ram_difference_does_not_trigger_the_override():
-    leader = _candidate("leader", precision=0.90, recall=0.90, correctness=0.90, peak_rss_mb=3100.0)
-    close_second = _candidate("second", precision=0.895, recall=0.895, correctness=0.895,
+    leader = _candidate("leader", precision=0.95, recall=0.95, correctness=0.90, peak_rss_mb=3100.0)
+    close_second = _candidate("second", precision=0.95, recall=0.95, correctness=0.895,
                               peak_rss_mb=3000.0)
     result = select_winner([leader, close_second])
     assert result.winner.model == "leader"
@@ -147,7 +238,7 @@ def test_candidate_missing_peak_rss_never_wins_by_looking_cheapest():
     RAM» и выигрывало бы у честно измеренного тяжёлого кандидата."""
     unmeasured = _candidate("unmeasured", precision=0.99, recall=0.99, correctness=0.99,
                             resources=ResourceStats(peak_rss_mb=None))
-    honestly_measured = _candidate("measured", precision=0.80, recall=0.80, correctness=0.80,
+    honestly_measured = _candidate("measured", precision=0.90, recall=0.90, correctness=0.80,
                                    peak_rss_mb=5000.0)
     result = select_winner([unmeasured, honestly_measured])
     assert result.winner.model == "measured"

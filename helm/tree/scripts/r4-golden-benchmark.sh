@@ -46,6 +46,41 @@ echo "выкачено: $GIT_SHA"
 
 OLLAMA_CID() { sudo docker compose ps -q ollama; }
 
+# НАЙДЕНО живым прогоном 210 (владелец 03.09.2026): `docker inspect
+# State.OOMKilled` — состояние КОНТЕЙНЕРА с момента его последнего
+# рестарта целиком, не измерение конкретного кандидата. Live-проверка
+# показала: ollama не рестартовала 9 часов ДО начала run 210, флаг
+# унаследован от инцидента задолго до этого прогона — все три
+# кандидата показали oom_occurred=true при абсолютно плоском swap.
+# cgroup v2 `memory.events` (oom_kill) — per-cgroup СЧЁТЧИК с момента
+# создания cgroup, снятый before/after КОНКРЕТНОГО кандидата, даёт
+# дельту, а не lifetime-флаг. Путь к cgroup ищем через
+# /proc/<pid>/cgroup самого процесса контейнера — устойчиво к тому,
+# каким cgroup-driver'ом (systemd/cgroupfs) поднят Docker на хосте,
+# в отличие от жёстко зашитого docker-<id>.scope.
+container_memory_events_path() {
+  local cid="$1" pid cg_path
+  pid=$(sudo docker inspect -f '{{.State.Pid}}' "$cid" 2>/dev/null)
+  if [ -z "$pid" ] || [ "$pid" = "0" ]; then
+    return 1
+  fi
+  cg_path=$(sudo awk -F: '$1=="0" {print $3}' "/proc/$pid/cgroup" 2>/dev/null)
+  if [ -z "$cg_path" ]; then
+    return 1
+  fi
+  cg_path="/sys/fs/cgroup${cg_path}/memory.events"
+  if ! sudo test -r "$cg_path"; then
+    return 1
+  fi
+  echo "$cg_path"
+}
+
+read_oom_kill_counter() {
+  local path="$1" value
+  value=$(sudo awk '/^oom_kill /{print $2}' "$path" 2>/dev/null)
+  [ -n "$value" ] && echo "$value"
+}
+
 # ── 1. Снимок ДО (владелец п.1-2) ────────────────────────────────────
 WAS_OLLAMA_RUNNING=false
 existing_cid=$(OLLAMA_CID)
@@ -303,6 +338,19 @@ run_candidate() {
   health_before_core=$(check_helm_core_healthz)
   health_before_pg=$(check_postgres_query)
 
+  # R4.5.6.4 (владелец 03.09.2026): снимок ДО кандидата для дельты
+  # oom_kill (см. container_memory_events_path выше) — не lifetime-флаг.
+  local started_before restart_before mem_events_path oom_kill_before
+  started_before=$(sudo docker inspect -f '{{.State.StartedAt}}' "$(OLLAMA_CID)")
+  restart_before=$(sudo docker inspect -f '{{.RestartCount}}' "$(OLLAMA_CID)")
+  mem_events_path=$(container_memory_events_path "$(OLLAMA_CID)") || mem_events_path=""
+  if [ -n "$mem_events_path" ]; then
+    oom_kill_before=$(read_oom_kill_counter "$mem_events_path") || oom_kill_before=""
+  else
+    oom_kill_before=""
+    echo "::warning::$model: cgroup v2 memory.events недоступен — OOM-инструментовка для этого кандидата провалится явно, не унаследует lifetime OOMKilled"
+  fi
+
   # НАЙДЕНО живым прогоном 200 (владелец 03.09.2026): peak_rss_mb/
   # peak_cpu_percent раньше снимались ОДНИМ docker stats ПОСЛЕ того, как
   # keepalive-проба и golden-прогон уже закончились — это снимок
@@ -360,20 +408,34 @@ run_candidate() {
   local sample_count
   sample_count=$(wc -l < "$sample_file" 2>/dev/null || echo 0)
   echo "=== ресурсы: RSS/CPU/swap peak из $sample_count сэмплов (не одиночный снимок) ==="
-  local peak_json oom_flag
+  local peak_json
   peak_json=$(sudo docker compose exec -T helm-core \
     python3 -m helm_core.knowledge.resource_sampling peak-stats < "$sample_file")
   rm -f "$sample_file"
-  # State.OOMKilled — то, что реально знает ядро об ЭТОМ контейнере, не
-  # догадка по уровню swap (владелец п.6: "OOM evidence", не "похоже на OOM").
-  oom_flag=$(sudo docker inspect -f '{{.State.OOMKilled}}' "$(OLLAMA_CID)" 2>/dev/null || echo "unknown")
 
-  python3 - "$model" "$digest" "${cold0:-}" "${warm0:-}" "$total_seconds" "$oom_flag" \
+  # R4.5.6.4: снимок ПОСЛЕ и дельта. Рестарт контейнера в окне кандидата
+  # (restart_after != restart_before) — самостоятельное решающее
+  # свидетельство OOM независимо от счётчика: у новой cgroup-инстанции
+  # свой oom_kill с нуля, дельта после рестарта могла бы соврать
+  # (после < до).
+  local started_after restart_after oom_kill_after
+  started_after=$(sudo docker inspect -f '{{.State.StartedAt}}' "$(OLLAMA_CID)")
+  restart_after=$(sudo docker inspect -f '{{.RestartCount}}' "$(OLLAMA_CID)")
+  if [ -n "$mem_events_path" ] && sudo test -r "$mem_events_path"; then
+    oom_kill_after=$(read_oom_kill_counter "$mem_events_path") || oom_kill_after=""
+  else
+    oom_kill_after=""
+  fi
+
+  python3 - "$model" "$digest" "${cold0:-}" "${warm0:-}" "$total_seconds" \
+           "$started_before" "$restart_before" "${oom_kill_before:-}" \
+           "$started_after" "$restart_after" "${oom_kill_after:-}" \
            > "$BASE_DIR/resources-$safe.json" <<PYEOF
 import json
 import sys
 
-model, digest, cold, warm, total, oom_flag = sys.argv[1:7]
+(model, digest, cold, warm, total, started_before, restart_before, oom_kill_before,
+ started_after, restart_after, oom_kill_after) = sys.argv[1:12]
 peak = json.loads('''$peak_json''')
 
 
@@ -383,6 +445,21 @@ def to_float(x):
     except (TypeError, ValueError):
         return None
 
+
+# R4.5.6.4 (владелец 03.09.2026): oom_kill_after > oom_kill_before —
+# дельта per-cgroup счётчика за ЭТОГО кандидата, не lifetime
+# State.OOMKilled контейнера (см. container_memory_events_path). Рестарт
+# контейнера внутри окна кандидата — решающее свидетельство само по
+# себе, независимо от счётчика (новая cgroup после рестарта считает
+# oom_kill с нуля, дельта после рестарта могла бы ложно показать
+# "меньше" вместо реального OOM). Счётчик недоступен на этом хосте —
+# oom_occurred остаётся None: REQUIRED_RESOURCE_FIELDS уже гейтит
+# отсутствующее измерение, не нужно отдельного gate под то же самое.
+if restart_before != restart_after:
+    oom_occurred = True
+else:
+    b, a = to_float(oom_kill_before), to_float(oom_kill_after)
+    oom_occurred = (a > b) if (b is not None and a is not None) else None
 
 print(json.dumps({
     "model": model, "model_digest": digest,
@@ -394,7 +471,13 @@ print(json.dumps({
     "swap_before_mb": peak["swap_before_mb"],
     "swap_peak_mb": peak["swap_peak_mb"],
     "swap_after_mb": peak["swap_after_mb"],
-    "oom_occurred": {"true": True, "false": False}.get(oom_flag),
+    "oom_occurred": oom_occurred,
+    "oom_kill_before": to_float(oom_kill_before),
+    "oom_kill_after": to_float(oom_kill_after),
+    "container_started_before": started_before,
+    "container_started_after": started_after,
+    "container_restart_count_before": restart_before,
+    "container_restart_count_after": restart_after,
     "keep_alive_policy": "0",
     "min_host_available_ram_mb": peak["min_host_available_ram_mb"],
     "resource_samples_count": peak["samples_count"],

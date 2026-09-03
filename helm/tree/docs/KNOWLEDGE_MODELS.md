@@ -11,7 +11,7 @@
 | Эмбеддинги (dense retrieval) | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`, 384 измерения | живой замер на VPS, `knowledge/embed_benchmark.py` |
 | ASR (голос) | GigaAM `e2e_rnnt` | `knowledge/gigaam_benchmark.py`; on-demand, выгрузка после использования |
 | Локальный рефраз ответа (Z2-путь) | `gemma2:2b` через Ollama, `keep_alive=0` | живой замер 31.08.2026, `scripts/ollama-benchmark.sh` (см. ниже) |
-| Извлечение семантики (semantic-v2) | **не выбрана — R4 = NO_PASS/HARDENING** | run 210 (03.09.2026, после R4.5.1-R4.5.4) — hard gates буквально по коду: 0/3 прошли; но `qwen2.5:7b` блокирован ТОЛЬКО устаревшим OOM-флагом контейнера — нерешённая развилка, см. «R4.5.5» ниже |
+| Извлечение семантики (semantic-v2) | **не выбрана — R4 = NO_PASS** | run 210 (03.09.2026) пересчитан по нормативным §14.18 hard gates (R4.5.6) — все три кандидата FAIL по независимым от OOM причинам (relation precision, critical entity/event recall, у qwen2.5:7b ещё и coverage). Следующий шаг — R4.6, см. «R4.5.6» ниже |
 
 Живьём: 881 вектор из 953 чанков, схема `public.knowledge_chunks`,
 `pgvector` с колонкой на 384 измерения.
@@ -422,6 +422,173 @@ A** (0/3 прошли гейты). Shadow не запускается. След�
 объявляется, требуется live-корректирующий прогон (рестарт контейнера)
 + shadow + resource/health acceptance + evidence rejection analysis
 до какого-либо PASS. Ни то, ни другое не выполнено автоматически.
+
+## R4.5.6: восстановление hard gates по нормативному §14.18 (владелец 03.09.2026)
+
+Решение владельца по OOM-развилке из R4.5.5: `oom_occurred=true` из run
+210 признан **invalid per-run measurement**, не доказательством провала
+run 210. Отдельно от этого решения владелец при сверке с
+`HELM_FINAL_v4.0_RESCUE_2026-09-02.md` §14.18 обнаружил более серьёзную
+проблему: `evaluate_hard_gates()` уже давно (не только в R4.5.5) отошёл
+от нормативного списка. Спека буквально требует:
+
+```text
+processed-window coverage                    100%
+unsupported critical facts                   0
+identifier/date corruption on exact fixture   0
+schema-invalid terminal windows              0 after retry
+critical expected entity/event recall        >= 90%
+relation precision on labeled edges          >= 90%
+```
+
+а код проверял только `safety_case_hallucinations`/`fabricated_dates`/
+`no_knowledge_violations` по отдельности — **ни coverage, ни relation
+precision, ни critical recall вообще не были гейтами**. Run 210
+`qwen2.5:7b` (`failed_cases=2`, `relation_precision=0.280`) формально
+«проходил» старую версию гейта — то, чего нормативная спека явно не
+разрешает.
+
+### Что исправлено
+
+- **`GoldEntity.critical`/`GoldAtom.critical`** (`semantic_benchmark_fixtures.py`)
+  — новые computed-свойства, не отдельные вручную расставленные флаги:
+  сущность критична, если не `CONCEPT` (23 из 26 сущностей фикстур);
+  атом критичен, если `kind == "event"` ИЛИ задан `occurred_at` (13 из
+  40 атомов) — оба случая описывают ЧТО-ТО, что произошло в конкретный
+  момент, что и есть «event» в духе гейта, а не формальное совпадение
+  со значением `kind`. Явно НЕ то же самое, что общий entity/atom
+  recall — глоссарные понятия («уролог», «инфляция») и недатированные
+  facts/decisions/concepts не входят в этот конкретный gate (они
+  покрыты другими метриками: `unsupported_critical_facts`, `relation
+  precision`).
+- **`evaluate_hard_gates()`** (`semantic_benchmark_selection.py`)
+  переписан по нормативному списку буквально: `failed_cases`/
+  `truncated_cases`/`malformed_results` — отдельные проверки (владелец
+  явно перечислил их порознь, хотя все три входят и в
+  `processed_window_coverage`); `relation_precision < 0.90`;
+  `critical_entity_event_recall < 0.90`; `unsupported_critical_facts >
+  0` (property = `total_material_hallucinations`, то же измерение под
+  нормативным именем — весь golden набор куратирован, здесь «критично»
+  всё выдуманное, не только safety-помеченные кейсы); `exact_identifier_
+  corruption`/`exact_date_corruption > 0`. Старые отдельные проверки
+  `safety_case_hallucinations`/`fabricated_dates`/`no_knowledge_violations`
+  удалены как избыточные — они строго являются подмножеством
+  `unsupported_critical_facts` в реальных данных `aggregate()`.
+- **`processed_window_coverage`** — новое свойство `SchemaStats`:
+  `(cases_total - failed - truncated - malformed) / cases_total`.
+- **`exact_identifier_corruptions`/`exact_date_corruptions`** — новые
+  счётчики `CaseScore`: matched-по-похожести объект (прошёл fuzzy-порог
+  0.6), чьё точное значение (label/occurred_at) расходится с gold. Не
+  то же самое, что miss — объект НАЙДЕН, но испорчен.
+- **Regression-тесты** (`TestNormativeHardGates`, 10 тестов) — sabotage-
+  and-revert подтверждён для каждого нового гейта: временное удаление
+  всего блока новых проверок роняет 8 из них сразу; отдельно проверена
+  граница `relation_precision == 0.90` (включительна — провал только
+  строго ниже).
+- **OOM-инструментовка** (`r4-golden-benchmark.sh`) переписана на
+  cgroup v2 `memory.events`: `oom_kill` счётчик снимается до/после
+  КОНКРЕТНОГО кандидата (`container_memory_events_path()` находит путь
+  через `/proc/<pid>/cgroup` самого процесса — устойчиво к
+  cgroup-driver'у хоста), `oom_occurred = oom_kill_after >
+  oom_kill_before`; рестарт контейнера внутри окна кандидата
+  (`RestartCount` до/после) сам по себе решающее свидетельство
+  (новая cgroup после рестарта считает `oom_kill` с нуля — сырая дельта
+  могла бы соврать). Счётчик недоступен на хосте → `oom_occurred=None`
+  — существующий гейт `missing_resource_fields` уже дисквалифицирует
+  недостающее измерение, отдельный gate не нужен. Больше НЕ читает
+  `State.OOMKilled` (lifetime контейнера). `StartedAt`/`RestartCount`
+  before/after сохраняются в `resources-*.json` как диагностический
+  контекст, не как gate.
+
+### Offline пересчёт run 210 (без пере-прогона Ollama)
+
+Владелец явно запретил перегонять run 210 ради новых гейтов — там, где
+метрика уже в `result.json`, посчитано из него; `critical_entity_event_
+recall` посчитан из per-case golden scores run 210 (потребовался один
+доп. read-only recon на полный `result.json` `qwen2.5:3b` — первый общий
+дамп обрезался инструментом чтения логов GitHub Actions, сам файл на
+сервере был полон всё это время).
+
+| | `gemma2:2b` | `qwen2.5:3b` | `qwen2.5:7b` |
+|---|---|---|---|
+| processed-window coverage | 100% (0 failed/trunc/malformed) | 100% | **90.5%** (2 failed: timeout) |
+| relation precision on labeled edges | **0.0%** | **0.0%** | **28.0%** |
+| critical entity/event recall | **52.8–66.7%**¹ | **66.7–75.0%**¹ | **80.8–88.5%**¹ |
+| unsupported critical facts | **1** (no_knowledge) | **1** (no_knowledge) | 0 |
+| exact identifier/date corruption | `UNAVAILABLE IN RUN 210 ARTIFACT`² | `UNAVAILABLE...`² | `UNAVAILABLE...`² |
+| OOM (владелец: invalid per-run measurement) | не гейтится в этом пересчёте | не гейтится | не гейтится |
+
+¹ Диапазон, не одно число: `CaseScore` run 210 хранит только счётчик
+`entities_matched`/`atoms_matched` НА КЕЙС, не которые именно gold-
+объекты совпали. Для 20 из 21 кейсов состав однозначен (все
+критичны или все нет); один кейс (`lecture_concept`: 1 критичная
+сущность + 2 `CONCEPT`) даёт границы, а не точку. **На итог не влияет**
+— даже верхняя граница у всех трёх далека от порога 90%.
+
+² Причина одна для обеих строк: `WindowExtraction.rejected` (детали
+причин отказа) → `evaluate_case()` считает только `rejected_count` →
+сами причины отброшены до сериализации. Отдельно: старый код (которым
+считался run 210) вообще не реализовывал exact-corruption проверку —
+даже при полном логе взять эти два числа неоткуда, не только из-за
+обрезки. Не восстановлено догадками.
+
+### Итог — R4 = NO_PASS (нормативный), точные violations
+
+**`gemma2:2b` = FAIL**: relation precision on labeled edges (0.0% <
+90%); critical expected entity/event recall (52.8–66.7% < 90%);
+unsupported critical facts (1 > 0, no_knowledge).
+
+**`qwen2.5:3b` = FAIL**: relation precision on labeled edges (0.0% <
+90%); critical expected entity/event recall (66.7–75.0% < 90%);
+unsupported critical facts (1 > 0, no_knowledge).
+
+**`qwen2.5:7b` = FAIL**: processed-window coverage (90.5% < 100%,
+`failed_cases=2`: `long_dense_window`/`lecture_concept`, оба — Ollama
+timeout, не safety); relation precision on labeled edges (28.0% <
+90%); critical expected entity/event recall (80.8–88.5% < 90%).
+`unsupported critical facts = 0` — единственный из трёх, у кого этот
+gate чист.
+
+Ни один из трёх FAIL не связан с OOM-развилкой — она снята владельцем
+как invalid measurement и не участвует в этом вердикте вообще.
+`qwen2.5:7b` ближе всех к порогу по каждой метрике (кроме coverage,
+где он единственный вообще нарушает) и единственный чист по safety —
+это делает его reference baseline для R4.6 (владелец, п. D ниже), не
+production-кандидатом.
+
+```text
+R4 = NO_PASS
+R5 = NOT STARTED
+production semantic model = NONE
+backfill = FORBIDDEN
+```
+
+### R4.6 — следующий шаг (не начат в этой сессии)
+
+Владелец задал порядок исследования, hard gates не ослаблять:
+
+**A. Диагностика 2 timeout `qwen2.5:7b`** (`long_dense_window`,
+`lecture_concept`) — targeted, с чистым (новым) OOM-counter; сравнить
+`keep_alive=0` vs `5m`; не поднимать `REQUEST_TIMEOUT` вслепую. Если
+warm keep_alive убирает timeout при нормальных RAM/health — кандидат в
+production policy.
+
+**B. Разложить `relation_precision=0.28`** (главный semantic blocker,
+не OOM) — по типам ошибок: wrong type / wrong endpoints / missing /
+extra / rejected by evidence grounding / entity-atom mismatch делает
+ребро unscoreable. Не лечить снижением порога.
+
+**C. Two-pass extraction** (если single-pass принципиально не даёт
+≥90% relation precision) — pass 1: grounded entities+atoms; pass 2:
+только классификация связей МЕЖДУ уже извлечёнными local_id (видит их
+evidence_quote + исходное окно), без права создавать новые
+факты/сущности. Сравнить на golden set.
+
+**D. 1–3 доп. локальных кандидата** в пределах 12GB — `qwen2.5:7b`
+остаётся reference baseline, пул не расширяется бесконечно.
+
+Только кандидат, прошедший ВСЕ нормативные gates, допускается до
+real-corpus shadow benchmark; winner — только после shadow.
 
 ## Ресурсные контракты (не зависят от выбора конкретной модели)
 

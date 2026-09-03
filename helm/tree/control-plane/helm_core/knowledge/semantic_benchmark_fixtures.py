@@ -30,6 +30,16 @@ class GoldEntity:
     subtype: str | None = None
     aliases: tuple[str, ...] = ()
 
+    @property
+    def critical(self) -> bool:
+        """§14.18 hard gate «critical expected entity/event recall» — не
+        общий entity_recall. CONCEPT (глоссарное понятие вроде «уролог»
+        или «инфляция») — фоновое справочное знание, не тот «critical
+        entity», чей пропуск угрожает точности личного архива владельца.
+        PERSON/ORGANIZATION/PLACE — реальные участники зафиксированных
+        фактов, критичны всегда."""
+        return self.entity_type != "CONCEPT"
+
 
 @dataclass(frozen=True)
 class GoldAtom:
@@ -50,6 +60,18 @@ class GoldAtom:
     #: потерявшая отрицание при перефразе, меняет смысл на противоположный —
     #: это не стилевая потеря, а материальная галлюцинация (R4 п.7).
     negation_sensitive: bool = False
+
+    @property
+    def critical(self) -> bool:
+        """§14.18 hard gate «critical expected entity/EVENT recall» — не
+        общий atom_recall. EVENT по `kind` ИЛИ атом с конкретной датой
+        (`occurred_at` задан) — оба описывают ЧТО-ТО, что произошло в
+        определённый момент, что и есть «event» в духе гейта, независимо
+        от формального kind (например, purchase_warranty хранит дату
+        покупки в FACT-атоме, не EVENT). FACT/DECISION/CONCEPT без даты —
+        фон; их полнота покрыта другими метриками (unsupported critical
+        facts, relation precision), не этим конкретным гейтом."""
+        return self.kind == "event" or self.occurred_at is not None
 
 
 @dataclass(frozen=True)

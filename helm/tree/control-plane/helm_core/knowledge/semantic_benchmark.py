@@ -76,6 +76,18 @@ class SchemaStats:
     def avg_repair_attempts(self) -> float:
         return self.total_repair_attempts / self.cases_total if self.cases_total else 0.0
 
+    @property
+    def processed_window_coverage(self) -> float:
+        """§14.18 hard gate «processed-window coverage 100%». Окно НЕ
+        обработано терминально, если его исход — failed/truncated/
+        malformed (ни один из них не даёт `CaseScore`); "no_knowledge" и
+        "processed" — оба терминальные успешные исходы, обработка
+        состоялась, что бы модель ни вернула."""
+        if not self.cases_total:
+            return 0.0
+        unprocessed = self.failed_cases + self.truncated_cases + self.malformed_results
+        return (self.cases_total - unprocessed) / self.cases_total
+
 
 @dataclass
 class StabilityResult:
