@@ -23,25 +23,119 @@
 # rate, NONE/false rate. Go/no-go (владелец, шаг 5) решается ПОСЛЕ
 # прогона, не встроен сюда числовым порогом — «различает» или
 # «систематически entailed=true» видно из самой confusion-матрицы.
-set -uo pipefail
+# Владелец 03.09.2026 (lifecycle-хардненинг после инцидента с run 225 —
+# отменённый прогон оставил temporary memory limit и непреэкзистентную
+# модель, пока не была написана read-only верификация вручную): -e
+# обязателен (без него `docker update`/`ollama pull` мог упасть, а
+# скрипт продолжал бы как ни в чём не бывало), -E — чтобы ERR тоже
+# срабатывал внутри функций. cleanup() теперь идемпотентна и навешена
+# через trap на EXIT/INT/TERM — восстановление гарантировано при ЛЮБОМ
+# способе завершения (нормальном, ошибке, отмене прогона), а не только
+# при штатном доходе до конца файла.
+set -Eeuo pipefail
 cd /opt/helm/compose
 
-PREEXISTING_MODELS=$(sudo docker compose exec -T ollama ollama list | tail -n +2 | awk '{print $1}')
 OLLAMA_CID() { sudo docker compose ps -q ollama; }
-ORIGINAL_MEM_LIMIT=$(sudo docker inspect -f '{{.HostConfig.Memory}}' "$(OLLAMA_CID)")
-if [ "$ORIGINAL_MEM_LIMIT" = "0" ] || [ -z "$ORIGINAL_MEM_LIMIT" ]; then
-  ORIGINAL_MEM_LIMIT_HUMAN="4g"
-else
-  ORIGINAL_MEM_LIMIT_HUMAN="${ORIGINAL_MEM_LIMIT}b"
+
+echo "=== sha256 исполняемого скрипта (доказательство: тот же байт-в-байт файл, что закоммичен) ==="
+sha256sum "${BASH_SOURCE[0]:-$0}" || true
+
+CID="$(OLLAMA_CID)"
+if [ -z "$CID" ]; then
+  echo "::error::контейнер ollama не найден — не продолжаем"
+  exit 1
 fi
+
+echo
+echo "=== PRE: состояние ollama до изменений ==="
+echo "--- ollama list ---"
+sudo docker compose exec -T ollama ollama list
+echo "--- container state ---"
+sudo docker inspect -f '{{.State.Status}}' "$CID"
+echo "--- HostConfig.Memory / HostConfig.MemorySwap ---"
+sudo docker inspect -f '{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}' "$CID"
+
+# Владелец: сохранить Memory и MemorySwap ОТДЕЛЬНО (не предполагать, что
+# они равны или что можно перевести в "человеческое" значение вроде
+# "4g" — раньше пустой/нулевой Memory при восстановлении подменялся
+# угаданной строкой; теперь восстанавливаем ровно то число, которое
+# было, включая "0"/"-1" — Docker принимает их как есть).
+PREEXISTING_MODELS=$(sudo docker compose exec -T ollama ollama list | tail -n +2 | awk '{print $1}')
+ORIGINAL_MEMORY=$(sudo docker inspect -f '{{.HostConfig.Memory}}' "$CID")
+ORIGINAL_MEMORY_SWAP=$(sudo docker inspect -f '{{.HostConfig.MemorySwap}}' "$CID")
+
+# Перед изменением ресурсов — убедиться, что есть чем восстанавливать.
+if [ -z "$ORIGINAL_MEMORY" ] || [ -z "$ORIGINAL_MEMORY_SWAP" ]; then
+  echo "::error::не удалось прочитать исходные HostConfig.Memory/MemorySwap — не продолжаем"
+  exit 1
+fi
+
+CLEANUP_DONE=0
+cleanup() {
+  local rc=$?
+  if [ "$CLEANUP_DONE" -eq 1 ]; then
+    exit "$rc"
+  fi
+  CLEANUP_DONE=1
+
+  echo
+  echo "############ CLEANUP (idempotent; исходный код завершения: $rc) ############"
+  local cid current_models m found p post_memory post_swap
+  cid="$(OLLAMA_CID)"
+
+  if [ -z "$cid" ]; then
+    echo "::error::контейнер ollama не найден на этапе cleanup — восстановление невозможно"
+    exit "$rc"
+  fi
+
+  current_models=$(sudo docker compose exec -T ollama ollama list 2>/dev/null | tail -n +2 | awk '{print $1}') || current_models=""
+  for m in $current_models; do
+    found=0
+    for p in $PREEXISTING_MODELS; do
+      [ "$m" = "$p" ] && found=1 && break
+    done
+    if [ "$found" -eq 0 ]; then
+      sudo docker compose exec -T ollama ollama rm "$m" >/dev/null 2>&1 || true
+    fi
+  done
+
+  sudo docker update --memory="$ORIGINAL_MEMORY" --memory-swap="$ORIGINAL_MEMORY_SWAP" "$cid" >/dev/null 2>&1 \
+    || echo "::error::не удалось восстановить memory limit — проверьте контейнер ollama вручную"
+
+  echo "=== POST: состояние ollama после cleanup ==="
+  echo "--- ollama list ---"
+  sudo docker compose exec -T ollama ollama list || true
+  echo "--- container state ---"
+  sudo docker inspect -f '{{.State.Status}}' "$cid" || true
+  post_memory=$(sudo docker inspect -f '{{.HostConfig.Memory}}' "$cid" 2>/dev/null || echo "?")
+  post_swap=$(sudo docker inspect -f '{{.HostConfig.MemorySwap}}' "$cid" 2>/dev/null || echo "?")
+  echo "--- HostConfig.Memory / HostConfig.MemorySwap ---"
+  echo "$post_memory $post_swap"
+  if [ "$post_memory" = "$ORIGINAL_MEMORY" ] && [ "$post_swap" = "$ORIGINAL_MEMORY_SWAP" ]; then
+    echo "POST совпадает с PRE: Memory=$ORIGINAL_MEMORY MemorySwap=$ORIGINAL_MEMORY_SWAP"
+  else
+    echo "::error::POST НЕ совпадает с PRE — было Memory=$ORIGINAL_MEMORY/MemorySwap=$ORIGINAL_MEMORY_SWAP, стало Memory=$post_memory/MemorySwap=$post_swap"
+  fi
+
+  # $rc сохранён в самом начале функции — cleanup не имеет права
+  # подменить код завершения скрипта своими собственными командами.
+  exit "$rc"
+}
+trap cleanup EXIT INT TERM
+
+echo
 echo "=== временно поднимаем лимит ollama до 8g ==="
-sudo docker update --memory=8g --memory-swap=8g "$(OLLAMA_CID)"
+sudo docker update --memory=8g --memory-swap=8g "$CID"
 echo "=== ollama pull qwen2.5:7b ==="
 sudo docker compose exec -T ollama ollama pull qwen2.5:7b
 echo "=== ollama pull mistral:7b ==="
 sudo docker compose exec -T ollama ollama pull mistral:7b
 
-sudo docker compose exec -T helm-core python3 - <<'PYEOF'
+# Не изменено ни на строку относительно закоммиченной ранее версии
+# (владелец п.1) — dataset/prompts/архитектура 2A/2B здесь не трогаются,
+# правится только lifecycle bash-обвязки вокруг.
+diag_rc=0
+sudo docker compose exec -T helm-core python3 - <<'PYEOF' || diag_rc=$?
 import re
 import time
 
@@ -175,23 +269,12 @@ print("  различает positive/hard-negative -> C3 на 14-case subset;")
 print("  обе модели систематически entailed=true (высокий FPR, низкая specificity)")
 print("  -> chat-LLM relation-existence STOP, следующий шаг — НЕ ещё одна LLM.")
 PYEOF
-diag_rc=$?
-
-echo
-echo "############ ВОССТАНОВЛЕНИЕ ИСХОДНОГО СОСТОЯНИЯ OLLAMA ############"
-current_models=$(sudo docker compose exec -T ollama ollama list | tail -n +2 | awk '{print $1}')
-for m in $current_models; do
-  found=0
-  for p in $PREEXISTING_MODELS; do
-    [ "$m" = "$p" ] && found=1 && break
-  done
-  if [ "$found" -eq 0 ]; then
-    sudo docker compose exec -T ollama ollama rm "$m" >/dev/null 2>&1 || true
-  fi
-done
-sudo docker update --memory="$ORIGINAL_MEM_LIMIT_HUMAN" --memory-swap="$ORIGINAL_MEM_LIMIT_HUMAN" "$(OLLAMA_CID)"
 
 if [ "$diag_rc" -ne 0 ]; then
   echo "::error::калибровка завершилась с кодом $diag_rc"
-  exit "$diag_rc"
 fi
+# Восстановление (модели + memory limit + PRE/POST сверка) выполняет
+# cleanup() через trap EXIT — сработает независимо от того, как именно
+# скрипт сюда дошёл. Явный exit нужен только чтобы код завершения был
+# ИМЕННО diag_rc, а не 0 от последнего "if".
+exit "$diag_rc"
