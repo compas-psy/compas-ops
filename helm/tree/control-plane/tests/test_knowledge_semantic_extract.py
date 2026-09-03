@@ -9,6 +9,11 @@
 Каждый случай ниже взят из живых прогонов 02.09.2026: модель этого
 класса возвращает один объект вместо массива, путает регистр, ссылается
 на несуществующие local_id и изобретает типы связей.
+
+R4.5.3 (владелец 03.09.2026): «словами в промпте безопасность не
+обеспечить» — evidence_quote обязателен на entity/atom/edge и обязан
+быть дословной подстрокой окна. WINDOW_TEXT ниже — окно, на фоне
+которого проверяются все цитаты payload() по умолчанию.
 """
 
 import json
@@ -19,23 +24,32 @@ from helm_core.knowledge.semantic_extract import (
     MAX_ATOMS_PER_WINDOW, ExtractionFailed, WindowTruncated, extract_window, validate,
 )
 
+WINDOW_TEXT = (
+    "19 августа 2026 года в клинике был приём у уролога Кириченко "
+    "Сергея Александровича. Приём у Кириченко."
+)
+
 
 def payload(**overrides) -> str:
     data = {
         "entities": [
             {"local_id": "e1", "entity_type": "PERSON", "subtype": "doctor",
-             "label": "Кириченко Сергей Александрович", "aliases": ["Кириченко С.А."]},
+             "label": "Кириченко Сергей Александрович", "aliases": ["Кириченко С.А."],
+             "evidence_quote": "Кириченко Сергея Александровича"},
             {"local_id": "e2", "entity_type": "CONCEPT", "subtype": "medical_specialty",
-             "label": "уролог", "aliases": []},
+             "label": "уролог", "aliases": [], "evidence_quote": "уролога"},
         ],
         "atoms": [
             {"local_id": "a1", "kind": "EVENT", "subtype": "medical_visit",
              "title": "Приём уролога", "text": "Приём у Кириченко.",
-             "occurred_at": "2026-08-19", "date_precision": "DAY"},
+             "occurred_at": "2026-08-19", "date_precision": "DAY",
+             "evidence_quote": WINDOW_TEXT},
         ],
         "edges": [
-            {"from": "a1", "type": "INVOLVES", "to": "e1", "role": "doctor"},
-            {"from": "e1", "type": "HAS_ROLE", "to": "e2"},
+            {"from": "a1", "type": "INVOLVES", "to": "e1", "role": "doctor",
+             "evidence_quote": "Приём у Кириченко."},
+            {"from": "e1", "type": "HAS_ROLE", "to": "e2",
+             "evidence_quote": "уролога Кириченко Сергея Александровича"},
         ],
     }
     data.update(overrides)
@@ -44,7 +58,7 @@ def payload(**overrides) -> str:
 
 def test_normative_example_from_the_spec_is_accepted() -> None:
     """Форма из §14.4.2 — не «пример красивого JSON», а контракт."""
-    result = validate(payload())
+    result = validate(payload(), window_text=WINDOW_TEXT)
 
     assert [e.local_id for e in result.entities] == ["e1", "e2"]
     assert result.entities[0].aliases == ("Кириченко С.А.",)
@@ -59,7 +73,9 @@ def test_registry_of_relations_is_closed_and_unknown_becomes_related_to() -> Non
     """§14.9: неизвестный тип нормализуется к реестру либо становится
     RELATED_TO — но НЕ выбрасывается: связь была, и потерять её значит
     соврать об отсутствии."""
-    result = validate(payload(edges=[{"from": "a1", "type": "ЛЕЧИЛ", "to": "e1"}]))
+    result = validate(payload(edges=[
+        {"from": "a1", "type": "ЛЕЧИЛ", "to": "e1", "evidence_quote": "Приём у Кириченко."}]),
+        window_text=WINDOW_TEXT)
 
     assert [e.relation_type for e in result.edges] == ["related_to"]
     assert any("related_to" in note for note in result.rejected)
@@ -69,7 +85,9 @@ def test_edge_into_nowhere_is_dropped_and_counted() -> None:
     """Ребро на несуществующий local_id — не связь, а опечатка модели.
     Оно отбрасывается, но счётчик отброшенного растёт: молчаливое
     выбрасывание неотличимо от «модель ничего не нашла»."""
-    result = validate(payload(edges=[{"from": "a1", "type": "ABOUT", "to": "нет-такого"}]))
+    result = validate(payload(edges=[
+        {"from": "a1", "type": "ABOUT", "to": "нет-такого", "evidence_quote": "Приём у Кириченко."}]),
+        window_text=WINDOW_TEXT)
 
     assert result.edges == []
     assert result.rejected == ["связь в никуда: 'a1' → 'нет-такого'"]
@@ -77,7 +95,9 @@ def test_edge_into_nowhere_is_dropped_and_counted() -> None:
 
 def test_atom_kind_outside_the_registry_is_rejected() -> None:
     result = validate(payload(atoms=[
-        {"local_id": "a1", "kind": "ЗАМЕТКА", "title": "т", "text": "т"}]))
+        {"local_id": "a1", "kind": "ЗАМЕТКА", "title": "т", "text": "т",
+         "evidence_quote": "Приём у Кириченко."}]),
+        window_text=WINDOW_TEXT)
 
     assert result.atoms == []
     assert any("вне реестра" in note for note in result.rejected)
@@ -91,8 +111,9 @@ def test_entity_kinds_are_not_forced_into_the_node_registry() -> None:
     # которых в этом наборе нет, и их отбрасывание засоряло бы проверку
     # посторонним поводом.
     result = validate(payload(
-        entities=[{"local_id": "e1", "entity_type": "ORGANIZATION", "label": "клиника"}],
-        edges=[]))
+        entities=[{"local_id": "e1", "entity_type": "ORGANIZATION", "label": "клиника",
+                   "evidence_quote": "в клинике"}],
+        edges=[]), window_text=WINDOW_TEXT)
 
     assert result.entities[0].entity_type == "ORGANIZATION"
     assert result.rejected == []
@@ -102,9 +123,11 @@ def test_missing_required_field_drops_the_record_not_the_answer() -> None:
     """Та же дисциплина, что у разбора frontmatter: запись без
     обязательного поля пропускается целиком, а не додумывается."""
     result = validate(payload(atoms=[
-        {"local_id": "a1", "kind": "EVENT", "title": "", "text": "есть"},
-        {"local_id": "a2", "kind": "FACT", "title": "есть", "text": "есть"},
-    ], edges=[]))
+        {"local_id": "a1", "kind": "EVENT", "title": "", "text": "есть",
+         "evidence_quote": "Приём у Кириченко."},
+        {"local_id": "a2", "kind": "FACT", "title": "есть", "text": "есть",
+         "evidence_quote": "Приём у Кириченко."},
+    ], edges=[]), window_text=WINDOW_TEXT)
 
     assert [a.local_id for a in result.atoms] == ["a2"]
     assert len(result.rejected) == 1
@@ -112,9 +135,10 @@ def test_missing_required_field_drops_the_record_not_the_answer() -> None:
 
 def test_duplicate_local_id_is_rejected() -> None:
     result = validate(payload(entities=[
-        {"local_id": "e1", "entity_type": "PERSON", "label": "первый"},
+        {"local_id": "e1", "entity_type": "PERSON", "label": "первый",
+         "evidence_quote": "в клинике"},
         {"local_id": "e1", "entity_type": "PERSON", "label": "второй"},
-    ]))
+    ]), window_text=WINDOW_TEXT)
 
     assert [e.label for e in result.entities] == ["первый"]
     assert any("повтор local_id" in note for note in result.rejected)
@@ -125,7 +149,9 @@ def test_unknown_date_precision_keeps_the_atom_and_marks_unknown() -> None:
     Атом остаётся, точность становится «неизвестна»."""
     result = validate(payload(atoms=[
         {"local_id": "a1", "kind": "FACT", "title": "т", "text": "т",
-         "occurred_at": "2026-08-19", "date_precision": "ПРИМЕРНО"}]))
+         "occurred_at": "2026-08-19", "date_precision": "ПРИМЕРНО",
+         "evidence_quote": "Приём у Кириченко."}]),
+        window_text=WINDOW_TEXT)
 
     assert result.atoms[0].occurred_at == "2026-08-19"
     assert result.atoms[0].date_precision == "unknown"
@@ -141,18 +167,23 @@ def test_malformed_answer_is_a_failure_not_an_empty_result(raw, reason) -> None:
     его форму — модель возвращала массив или один объект. Пустой
     результат вместо ошибки означал бы «в тексте ничего нет»."""
     with pytest.raises(ExtractionFailed) as err:
-        validate(raw)
+        validate(raw, window_text=WINDOW_TEXT)
     assert reason in str(err.value)
 
 
 def test_window_at_the_cap_raises_instead_of_truncating() -> None:
     """§14.4.1: упёрлись в потолок — окно делится, а не обрезается.
-    Именно здесь semantic-v1 делал `data[:MAX_ATOMS_PER_CALL]`."""
-    atoms = [{"local_id": f"a{i}", "kind": "FACT", "title": f"т{i}", "text": "т"}
+    Именно здесь semantic-v1 делал `data[:MAX_ATOMS_PER_CALL]`.
+
+    evidence_quote="т" — не реалистичная цитата, а дешёвая грамматическая
+    случайность («августа» внутри WINDOW_TEXT содержит «т»): тесту нужен
+    только факт превышения потолка, не правдоподобие содержимого."""
+    atoms = [{"local_id": f"a{i}", "kind": "FACT", "title": f"т{i}", "text": "т",
+              "evidence_quote": "т"}
              for i in range(MAX_ATOMS_PER_WINDOW + 5)]
 
     with pytest.raises(WindowTruncated):
-        validate(payload(atoms=atoms, edges=[]))
+        validate(payload(atoms=atoms, edges=[]), window_text=WINDOW_TEXT)
 
 
 def test_repair_attempts_are_bounded_and_then_the_window_fails() -> None:
@@ -228,3 +259,85 @@ def test_call_ollama_requests_deterministic_generation(monkeypatch) -> None:
     module._call_ollama("окно", model="gemma2:2b")
     assert captured["body"]["options"]["temperature"] == 0
     assert captured["body"]["options"]["seed"] == module.DETERMINISTIC_SEED
+
+
+class TestEvidenceGrounding:
+    """R4.5.3 (владелец 03.09.2026): «не пытаться добиться безопасности
+    только словами в prompt» — каждый пункт ниже соответствует одной из
+    четырёх проверок, прямо перечисленных в распоряжении."""
+
+    def test_atom_without_evidence_quote_is_rejected(self) -> None:
+        result = validate(payload(atoms=[
+            {"local_id": "a1", "kind": "FACT", "title": "т", "text": "т"}],
+            edges=[]), window_text=WINDOW_TEXT)
+
+        assert result.atoms == []
+        assert any("evidence_quote" in note for note in result.rejected)
+
+    def test_entity_without_evidence_quote_is_rejected(self) -> None:
+        result = validate(payload(
+            entities=[{"local_id": "e1", "entity_type": "PERSON", "label": "клиника"}],
+            edges=[]), window_text=WINDOW_TEXT)
+
+        assert result.entities == []
+        assert any("evidence_quote" in note for note in result.rejected)
+
+    def test_edge_without_evidence_quote_is_rejected(self) -> None:
+        result = validate(payload(edges=[
+            {"from": "a1", "type": "INVOLVES", "to": "e1"}]),
+            window_text=WINDOW_TEXT)
+
+        assert result.edges == []
+        assert any("evidence_quote" in note for note in result.rejected)
+
+    def test_evidence_quote_not_present_in_window_text_is_rejected(self) -> None:
+        """Цитата обязана быть дословной подстрокой окна — придуманная
+        (пусть и правдоподобная) цитата не граунд, а тот же произвол,
+        только в новом поле."""
+        result = validate(payload(atoms=[
+            {"local_id": "a1", "kind": "FACT", "title": "т", "text": "т",
+             "evidence_quote": "этого не было в тексте окна"}],
+            edges=[]), window_text=WINDOW_TEXT)
+
+        assert result.atoms == []
+        assert any("не найден в тексте окна" in note for note in result.rejected)
+
+    def test_precise_date_without_absolute_date_in_evidence_is_rejected(self) -> None:
+        """precise occurred_at обязан подтверждаться абсолютной датой в
+        evidence — иначе точная дата остаётся выдумкой модели, просто с
+        цитатой-прикрытием, где даты вообще нет."""
+        result = validate(payload(atoms=[
+            {"local_id": "a1", "kind": "EVENT", "title": "т", "text": "Приём у Кириченко.",
+             "occurred_at": "2026-08-19", "date_precision": "DAY",
+             "evidence_quote": "Приём у Кириченко."}],
+            edges=[]), window_text=WINDOW_TEXT)
+
+        assert result.atoms == []
+        assert any("не подтверждён абсолютной датой" in note for note in result.rejected)
+
+    def test_relative_date_marker_in_evidence_forbids_precise_occurred_at(self) -> None:
+        """relative unanchored date → только date_precision=unknown.
+        Evidence с «в прошлый вторник» и одновременно occurred_at —
+        противоречие, а не находка."""
+        window_text = "В прошлый вторник встречались по поводу контракта."
+        result = validate(payload(atoms=[
+            {"local_id": "a1", "kind": "EVENT", "title": "т", "text": "Встреча по контракту.",
+             "occurred_at": "2026-08-25", "date_precision": "DAY",
+             "evidence_quote": "В прошлый вторник встречались по поводу контракта."}],
+            edges=[]), window_text=window_text)
+
+        assert result.atoms == []
+        assert any("относительную дату" in note for note in result.rejected)
+
+    def test_negation_lost_between_evidence_and_atom_text_is_rejected(self) -> None:
+        """Отрицание есть в evidence, но потеряно в atom.text — тот же
+        класс дефекта, что inverted_negations в R4-бенчмарке, только
+        пойманный валидатором, а не пост-фактум метрикой."""
+        window_text = "Диагноз не подтверждён по результатам биопсии."
+        result = validate(payload(atoms=[
+            {"local_id": "a1", "kind": "FACT", "title": "т", "text": "Диагноз подтверждён.",
+             "evidence_quote": "Диагноз не подтверждён по результатам биопсии."}],
+            edges=[]), window_text=window_text)
+
+        assert result.atoms == []
+        assert any("потеряно в тексте атома" in note for note in result.rejected)

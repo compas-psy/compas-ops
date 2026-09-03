@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -76,6 +77,7 @@ class ExtractedEntity:
     label: str
     subtype: str | None = None
     aliases: tuple[str, ...] = ()
+    evidence_quote: str = ""
 
 
 @dataclass(frozen=True)
@@ -87,6 +89,7 @@ class ExtractedAtom:
     subtype: str | None = None
     occurred_at: str | None = None
     date_precision: str | None = None
+    evidence_quote: str = ""
 
 
 @dataclass(frozen=True)
@@ -95,6 +98,7 @@ class ExtractedEdge:
     relation_type: str
     to_local_id: str
     role: str | None = None
+    evidence_quote: str = ""
 
 
 @dataclass
@@ -129,8 +133,9 @@ RESPONSE_SCHEMA = {
                     "subtype": {"type": "string"},
                     "label": {"type": "string"},
                     "aliases": {"type": "array", "items": {"type": "string"}},
+                    "evidence_quote": {"type": "string"},
                 },
-                "required": ["local_id", "entity_type", "label"],
+                "required": ["local_id", "entity_type", "label", "evidence_quote"],
             },
         },
         "atoms": {
@@ -145,8 +150,9 @@ RESPONSE_SCHEMA = {
                     "text": {"type": "string"},
                     "occurred_at": {"type": "string"},
                     "date_precision": {"type": "string"},
+                    "evidence_quote": {"type": "string"},
                 },
-                "required": ["local_id", "kind", "title", "text"],
+                "required": ["local_id", "kind", "title", "text", "evidence_quote"],
             },
         },
         "edges": {
@@ -158,8 +164,9 @@ RESPONSE_SCHEMA = {
                     "type": {"type": "string"},
                     "to": {"type": "string"},
                     "role": {"type": "string"},
+                    "evidence_quote": {"type": "string"},
                 },
-                "required": ["from", "type", "to"],
+                "required": ["from", "type", "to", "evidence_quote"],
             },
         },
     },
@@ -176,6 +183,45 @@ _ATOM_KINDS = {
 }
 _RELATION_TYPES = {member.value for member in SemanticRelationType}
 _DATE_PRECISIONS = {member.value for member in SemanticDatePrecision}
+_PRECISE_DATE_PRECISIONS = {
+    SemanticDatePrecision.DAY.value, SemanticDatePrecision.MONTH.value,
+    SemanticDatePrecision.YEAR.value,
+}
+
+_WS = re.compile(r"\s+")
+
+#: Тот же паттерн, что в semantic_benchmark_metrics.py — не импортируется
+#: оттуда намеренно, чтобы валидатор извлечения не зависел от модуля
+#: бенчмарка.
+_NEGATION_RE = re.compile(r"\bне\b|\bнет\b|\bнельзя\b", re.IGNORECASE)
+
+#: Владелец 03.09.2026: relative unanchored date (нельзя привязать к
+#: абсолютной дате) обязана остаться date_precision=unknown — эвристика
+#: маркеров относительного времени, по которым evidence_quote уличает
+#: occurred_at, выставленный туда, где в тексте только «в прошлый вторник».
+_RELATIVE_DATE_MARKERS_RE = re.compile(
+    r"\bв прошл\w+|\bна прошл\w+|\bв следующ\w+|\bна следующ\w+|"
+    r"\bна днях\b|\bнедавно\b|\bдавно\b|\bвчера\b|\bпозавчера\b|"
+    r"\bзавтра\b|\bпослезавтра\b|\bскоро\b",
+    re.IGNORECASE,
+)
+
+#: Абсолютная дата в evidence: цифровая (ISO/ДД.ММ.ГГГГ/год) либо
+#: русское название месяца. Подтверждает, что precise occurred_at не
+#: выдуман, а взят из буквального текста фрагмента.
+_ABSOLUTE_DATE_RE = re.compile(
+    r"\d{4}|\d{1,2}[./]\d{1,2}(?:[./]\d{2,4})?|"
+    r"январ\w*|феврал\w*|март\w*|апрел\w*|ма[ей]\w*|июн\w*|июл\w*|"
+    r"август\w*|сентябр\w*|октябр\w*|ноябр\w*|декабр\w*",
+    re.IGNORECASE,
+)
+
+
+def _evidence_grounded(evidence_quote: str, window_text: str) -> bool:
+    """§14.4.2 grounding: evidence_quote обязан быть дословной (с точностью
+    до пробелов) подстрокой окна, а не пересказом."""
+    return _WS.sub(" ", evidence_quote) in _WS.sub(" ", window_text)
+
 
 SYSTEM_PROMPT = (
     "Ты — детерминированный извлекатель структурированных знаний из личного "
@@ -196,6 +242,13 @@ SYSTEM_PROMPT = (
     "которую не к чему привязать, оставь пустой с date_precision unknown — "
     "выдумывать точную дату запрещено;\n"
     "- local_id уникальны внутри этого ответа; в edges ссылайся только на них;\n"
+    "- у каждой сущности, атома и связи заполняй evidence_quote — дословную "
+    "цитату из фрагмента (без пересказа и обобщения), которая доказывает "
+    "именно эту находку; цитата должна быть точной подстрокой фрагмента;\n"
+    "- служебный текст документа (колонтитул, номер страницы, штамп версии "
+    "шаблона, «не редактировать вручную» и подобное форматирование) не "
+    "несёт долговременного знания о владельце — по нему верни три пустых "
+    "списка, даже если формально это предложение с подлежащим и сказуемым;\n"
     "- если во фрагменте нечего извлекать, верни три пустых списка."
 )
 
@@ -241,7 +294,7 @@ def _call_ollama(prompt: str, *, model: str, keep_alive: str | None = None) -> s
     return answer
 
 
-def validate(raw: str) -> WindowExtraction:
+def validate(raw: str, *, window_text: str) -> WindowExtraction:
     """Разобрать и проверить ответ модели.
 
     Проверка не «на всякий случай»: §14.4.3 называет её обязательной.
@@ -252,6 +305,12 @@ def validate(raw: str) -> WindowExtraction:
     RELATED_TO (§14.9: «неизвестный тип нормализуется к реестру либо
     становится RELATED_TO с сохранённым свидетельством»). Ребро,
     указывающее в никуда, отбрасывается — оно не связь, а опечатка.
+
+    Владелец 03.09.2026: словами в промпте безопасность не обеспечить —
+    каждая сущность/атом/связь обязаны нести evidence_quote, дословно
+    входящий в `window_text`; иначе элемент отбрасывается целиком, не
+    понижается «на всякий случай». Это validation layer, а не точный
+    provenance (char_start/char_end откладывается в R5).
     """
     try:
         data = json.loads(raw)
@@ -276,12 +335,19 @@ def validate(raw: str) -> WindowExtraction:
         if local_id in known:
             result.rejected.append(f"повтор local_id {local_id!r}")
             continue
+        evidence_quote = str(item.get("evidence_quote") or "").strip()
+        if not evidence_quote:
+            result.rejected.append(f"сущность без evidence_quote: {item!r:.80}")
+            continue
+        if not _evidence_grounded(evidence_quote, window_text):
+            result.rejected.append(f"evidence_quote сущности не найден в тексте окна: {evidence_quote!r:.80}")
+            continue
         known.add(local_id)
         aliases = tuple(str(a).strip() for a in item.get("aliases") or [] if str(a).strip())
         result.entities.append(ExtractedEntity(
             local_id=local_id, entity_type=entity_type, label=label,
             subtype=(str(item.get("subtype")).strip() or None) if item.get("subtype") else None,
-            aliases=aliases))
+            aliases=aliases, evidence_quote=evidence_quote))
 
     for item in data.get("atoms") or []:
         if not isinstance(item, dict):
@@ -300,7 +366,17 @@ def validate(raw: str) -> WindowExtraction:
         if local_id in known:
             result.rejected.append(f"повтор local_id {local_id!r}")
             continue
-        known.add(local_id)
+        evidence_quote = str(item.get("evidence_quote") or "").strip()
+        if not evidence_quote:
+            result.rejected.append(f"атом без evidence_quote: {item!r:.80}")
+            continue
+        if not _evidence_grounded(evidence_quote, window_text):
+            result.rejected.append(f"evidence_quote атома не найден в тексте окна: {evidence_quote!r:.80}")
+            continue
+        if _NEGATION_RE.search(evidence_quote) and not _NEGATION_RE.search(text):
+            result.rejected.append(f"отрицание есть в evidence, но потеряно в тексте атома: {text!r:.80}")
+            continue
+
         precision = str(item.get("date_precision") or "").strip().lower() or None
         if precision and precision not in _DATE_PRECISIONS:
             # Точность вне реестра — не повод терять весь атом: сама
@@ -308,12 +384,23 @@ def validate(raw: str) -> WindowExtraction:
             # запрещает выдумывать точность, а не хранить дату.
             result.rejected.append(f"точность даты {precision!r} вне реестра")
             precision = SemanticDatePrecision.UNKNOWN.value
+        occurred_at = (str(item.get("occurred_at")).strip() or None) if item.get("occurred_at") else None
+
+        if occurred_at and _RELATIVE_DATE_MARKERS_RE.search(evidence_quote):
+            result.rejected.append(
+                f"evidence описывает относительную дату, но occurred_at выставлен: {occurred_at!r}")
+            continue
+        if occurred_at and precision in _PRECISE_DATE_PRECISIONS and not _ABSOLUTE_DATE_RE.search(evidence_quote):
+            result.rejected.append(
+                f"occurred_at {occurred_at!r} не подтверждён абсолютной датой в evidence: "
+                f"{evidence_quote!r:.80}")
+            continue
+
+        known.add(local_id)
         result.atoms.append(ExtractedAtom(
             local_id=local_id, kind=kind, title=title, text=text,
             subtype=(str(item.get("subtype")).strip() or None) if item.get("subtype") else None,
-            occurred_at=(str(item.get("occurred_at")).strip() or None)
-                        if item.get("occurred_at") else None,
-            date_precision=precision))
+            occurred_at=occurred_at, date_precision=precision, evidence_quote=evidence_quote))
 
     for item in data.get("edges") or []:
         if not isinstance(item, dict):
@@ -325,12 +412,20 @@ def validate(raw: str) -> WindowExtraction:
         if source not in known or target not in known:
             result.rejected.append(f"связь в никуда: {source!r} → {target!r}")
             continue
+        evidence_quote = str(item.get("evidence_quote") or "").strip()
+        if not evidence_quote:
+            result.rejected.append(f"связь без evidence_quote: {item!r:.80}")
+            continue
+        if not _evidence_grounded(evidence_quote, window_text):
+            result.rejected.append(f"evidence_quote связи не найден в тексте окна: {evidence_quote!r:.80}")
+            continue
         if relation not in _RELATION_TYPES:
             result.rejected.append(f"тип связи {relation!r} сведён к related_to")
             relation = SemanticRelationType.RELATED_TO.value
         result.edges.append(ExtractedEdge(
             from_local_id=source, relation_type=relation, to_local_id=target,
-            role=(str(item.get("role")).strip() or None) if item.get("role") else None))
+            role=(str(item.get("role")).strip() or None) if item.get("role") else None,
+            evidence_quote=evidence_quote))
 
     if len(result.atoms) >= MAX_ATOMS_PER_WINDOW:
         raise WindowTruncated(
@@ -356,7 +451,8 @@ def extract_window(window_text: str, *, domain: str, heading_path: tuple[str, ..
         prompt = _prompt(window_text, domain=domain, heading_path=heading_path,
                          complaint=complaint)
         try:
-            return validate(_call_ollama(prompt, model=model, keep_alive=keep_alive))
+            return validate(_call_ollama(prompt, model=model, keep_alive=keep_alive),
+                            window_text=window_text)
         except WindowTruncated:
             raise
         except ExtractionFailed as exc:
