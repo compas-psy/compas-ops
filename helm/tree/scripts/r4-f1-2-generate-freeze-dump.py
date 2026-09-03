@@ -25,9 +25,10 @@ def main() -> int:
     print(
         "Сгенерировано `scripts/r4-f1-2-generate-freeze-dump.py` из "
         "`helm_core/knowledge/relation_benchmark_v3_fixtures.py` — детерминированно, "
-        "без вызовов NLI/LLM. Владелец п.9: этот файл — часть freeze-артефактов; "
-        "SHA коммита, фиксирующего эту версию, записан в "
-        "`docs/KNOWLEDGE_MODELS.md` (раздел R4.6.F1.2).\n"
+        "без вызовов NLI/LLM. Владелец п.9: этот файл — часть freeze-артефактов. "
+        "**Freeze commit: `f8e32a576297d04c90b3bfb4fd2fdf7f1d1c4eb7`** (`f8e32a5`, "
+        "ветка `claude/ai-agents-server-deployment-xdp77a`) — holdout ниже не "
+        "меняется после первого inference на этой версии.\n"
     )
 
     all_types = {m.value for m in SemanticRelationType}

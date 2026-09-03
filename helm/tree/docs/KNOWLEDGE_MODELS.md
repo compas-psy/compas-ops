@@ -1692,9 +1692,9 @@ LOOCV/threshold-подбора; **4 final_holdout-кейса / 17 positives**
 (`v3_clinic_visit_specialty_2`, `v3_project_meeting_2`,
 `v3_decision_supersede_2`, `v3_purchase_2`) — покрывают все 15 типов
 минимум по разу, используются ТОЛЬКО для финального отчёта, **не
-меняются после первого inference**. Freeze commit: `<см. следующий
-коммит после этого — SHA дописан отдельной строкой ниже сразу после
-push>`.
+меняются после первого inference**. **Freeze commit:
+`f8e32a576297d04c90b3bfb4fd2fdf7f1d1c4eb7`** (`f8e32a5`, ветка
+`claude/ai-agents-server-deployment-xdp77a`).
 
 Статус до результата двух моделей: **R4 = NO_PASS / R4.6.F1.2**,
 production semantic pipeline = NONE, **R5 = NOT STARTED**, backfill =
