@@ -241,14 +241,23 @@ def evaluate_case(case: GoldenCase, extraction: WindowExtraction) -> CaseScore:
             if gold_aliases and gold_aliases <= ext_aliases:
                 score.aliases_correct += 1
 
-    # provocative_no_fact: у сущности не должно появиться НИ ОДНОГО атома,
-    # если gold явно говорит, что фактов про неё в тексте нет.
-    if "provocative_no_fact" in case.categories and not case.atoms:
-        matched_local_ids = set(ref_to_local_id.values())
+    # provocative_no_fact: у сущности не должно появиться атома СВЕРХ того,
+    # что прямо разрешил gold (иногда это 0 атомов, иногда — ровно один
+    # дозволенный факт, как «значится в списке участников»). Владелец
+    # 03.09.2026: старая версия проверки требовала строго 0 атомов и
+    # штрафовала модель за факт, который сам gold-текст утверждает —
+    # generalized-версия проверяет «атом сверх gold», а не «атом вообще».
+    if "provocative_no_fact" in case.categories:
+        matched_entity_local_ids = set(ref_to_local_id.values())
+        extra_atom_local_ids = {a.local_id for a in atom_match.unmatched_extracted}
         for e in extraction.edges:
-            if e.to_local_id in matched_local_ids or e.from_local_id in matched_local_ids:
+            touches_entity = e.to_local_id in matched_entity_local_ids \
+                or e.from_local_id in matched_entity_local_ids
+            touches_extra_atom = e.to_local_id in extra_atom_local_ids \
+                or e.from_local_id in extra_atom_local_ids
+            if touches_entity and touches_extra_atom:
                 score.unsupported_fact_additions += 1
-                score.notes.append(f"выдуман атом про сущность без фактов в тексте: {e}")
+                score.notes.append(f"выдуман факт про сущность сверх дозволенного gold: {e}")
 
     score.atoms_gold = len(case.atoms)
     score.atoms_matched = len(atom_match.matched)

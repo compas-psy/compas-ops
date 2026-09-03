@@ -156,6 +156,36 @@ def test_unsupported_fact_on_entity_without_facts_is_flagged():
     assert evaluate_case(case, invented).unsupported_fact_additions == 1
 
 
+def test_provocative_no_fact_allows_the_one_gold_fact_but_forbids_more():
+    """Владелец 03.09.2026: «значится в списке участников» — тоже факт, его
+    можно извлечь; запрещена именно ВЫДУМАННАЯ роль/действие сверх этого.
+    Старая проверка требовала строго 0 атомов у сущности и штрафовала бы
+    модель за факт, который сам gold теперь разрешает — этот тест ловит
+    именно такой регресс (в отличие от теста выше, где gold-фактов вообще
+    не бывает, здесь он есть, и его извлечение обязано остаться бесплатным)."""
+    case = _BY_ID["provocative_no_fact_invention"]
+
+    correct = WindowExtraction(
+        entities=[ExtractedEntity(local_id="e1", entity_type="PERSON", label="Соколов Артём")],
+        atoms=[ExtractedAtom(local_id="a1", kind="fact", title="Участник",
+                             text="В списке участников значится Соколов Артём.")],
+        edges=[ExtractedEdge(from_local_id="a1", relation_type="involves", to_local_id="e1")],
+    )
+    correct_score = evaluate_case(case, correct)
+    assert correct_score.atoms_matched == 1
+    assert correct_score.unsupported_fact_additions == 0
+
+    invented_in_addition = WindowExtraction(
+        entities=correct.entities,
+        atoms=[*correct.atoms,
+              ExtractedAtom(local_id="a2", kind="fact", title="Роль",
+                            text="Соколов Артём отвечал за логистику.")],
+        edges=[*correct.edges,
+              ExtractedEdge(from_local_id="a2", relation_type="involves", to_local_id="e1")],
+    )
+    assert evaluate_case(case, invented_in_addition).unsupported_fact_additions == 1
+
+
 def test_lost_negation_is_flagged_as_material_hallucination():
     case = _BY_ID["negative_statement"]
     faithful = WindowExtraction(atoms=[
