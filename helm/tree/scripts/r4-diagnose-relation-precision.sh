@@ -148,6 +148,12 @@ for case in cases:
         if "evidence_quote связи не найден" in r:
             totals["rejected_by_grounding"] += 1
             print(f"  REJECTED (grounding): {r[:120]}")
+        elif "сведён к related_to" in r:
+            # НЕ отброшена — validate() (semantic_extract.py) заменяет тип на
+            # related_to и всё равно кладёт связь в extraction.edges. Уже
+            # учтена как wrong_type/extra выше по факту related_to в edges;
+            # здесь только показываем ИСХОДНЫЙ тип для качественного разбора.
+            print(f"  TYPE COERCED (не отброшена, тип заменён на related_to): {r[:120]}")
         elif r.startswith("связь"):
             totals["rejected_other_structural"] += 1
             print(f"  REJECTED (структурно, не grounding): {r[:120]}")
