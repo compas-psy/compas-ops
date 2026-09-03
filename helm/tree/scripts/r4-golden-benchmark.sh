@@ -303,13 +303,32 @@ run_candidate() {
   health_before_core=$(check_helm_core_healthz)
   health_before_pg=$(check_postgres_query)
 
-  # Фоновый опрос swap на время реальной работы — снимок "до/после" сам
-  # по себе пропускает транзиентный пик посередине (владелец п.6: "swap
-  # before/peak/after" — три разных числа, не два).
-  local swap_poll_file swap_poll_pid
-  swap_poll_file=$(mktemp)
-  ( while true; do free -m | awk '/^Swap:/ {print $3}' >> "$swap_poll_file"; sleep 2; done ) &
-  swap_poll_pid=$!
+  # НАЙДЕНО живым прогоном 200 (владелец 03.09.2026): peak_rss_mb/
+  # peak_cpu_percent раньше снимались ОДНИМ docker stats ПОСЛЕ того, как
+  # keepalive-проба и golden-прогон уже закончились — это снимок
+  # простоя (модель выгружена/RSS уже осела), систематически
+  # занижающий пик, не просто "иногда промахивается". Единый background
+  # sampler на всё время кандидата — RSS/CPU/host-available-RAM/swap
+  # каждые 2с; арифметика максимума вынесена в resource_sampling.py и
+  # покрыта regression-тестом (пик посередине последовательности, не в
+  # конце), здесь только сбор сырых TSV-точек.
+  local sample_file sampler_pid
+  sample_file=$(mktemp)
+  (
+    while true; do
+      ts=$(date +%s.%N)
+      stats_line=$(sudo docker stats --no-stream "$(OLLAMA_CID)" --format "{{.MemUsage}}|{{.CPUPerc}}" 2>/dev/null)
+      raw_rss=$(echo "$stats_line" | cut -d'|' -f1 | cut -d/ -f1 | tr -d ' ')
+      raw_cpu=$(echo "$stats_line" | cut -d'|' -f2 | tr -d ' ')
+      avail=$(free -m | awk '/^Mem:/ {print $7}')
+      swap=$(free -m | awk '/^Swap:/ {print $3}')
+      if [ -n "$raw_rss" ] && [ -n "$raw_cpu" ]; then
+        printf '%s\t%s\t%s\t%s\t%s\n' "$ts" "$raw_rss" "$raw_cpu" "$avail" "$swap" >> "$sample_file"
+      fi
+      sleep 2
+    done
+  ) &
+  sampler_pid=$!
 
   local t_total_start t_total_end
   t_total_start=$(date +%s.%N)
@@ -335,30 +354,27 @@ run_candidate() {
   local total_seconds
   total_seconds=$(python3 -c "print(round($t_total_end - $t_total_start, 2))")
 
-  kill "$swap_poll_pid" 2>/dev/null
-  wait "$swap_poll_pid" 2>/dev/null
-  local swap_before swap_peak swap_after oom_flag raw_mem raw_cpu
-  swap_before=$(head -1 "$swap_poll_file" 2>/dev/null)
-  swap_peak=$(sort -n "$swap_poll_file" 2>/dev/null | tail -1)
-  swap_after=$(free -m | awk '/^Swap:/ {print $3}')
-  rm -f "$swap_poll_file"
+  kill "$sampler_pid" 2>/dev/null
+  wait "$sampler_pid" 2>/dev/null
 
-  echo "=== ресурсы: RSS/CPU/swap/OOM ==="
-  raw_mem=$(sudo docker stats --no-stream "$(OLLAMA_CID)" --format "{{.MemUsage}}")
-  raw_cpu=$(sudo docker stats --no-stream "$(OLLAMA_CID)" --format "{{.CPUPerc}}")
+  local sample_count
+  sample_count=$(wc -l < "$sample_file" 2>/dev/null || echo 0)
+  echo "=== ресурсы: RSS/CPU/swap peak из $sample_count сэмплов (не одиночный снимок) ==="
+  local peak_json oom_flag
+  peak_json=$(sudo docker compose exec -T helm-core \
+    python3 -m helm_core.knowledge.resource_sampling peak-stats < "$sample_file")
+  rm -f "$sample_file"
   # State.OOMKilled — то, что реально знает ядро об ЭТОМ контейнере, не
   # догадка по уровню swap (владелец п.6: "OOM evidence", не "похоже на OOM").
   oom_flag=$(sudo docker inspect -f '{{.State.OOMKilled}}' "$(OLLAMA_CID)" 2>/dev/null || echo "unknown")
 
-  python3 - "$model" "$digest" "${cold0:-}" "${warm0:-}" "$total_seconds" \
-           "$raw_mem" "$raw_cpu" "${swap_before:-}" "${swap_peak:-}" "${swap_after:-}" "$oom_flag" "0" \
-           > "$BASE_DIR/resources-$safe.json" <<'PYEOF'
+  python3 - "$model" "$digest" "${cold0:-}" "${warm0:-}" "$total_seconds" "$oom_flag" \
+           > "$BASE_DIR/resources-$safe.json" <<PYEOF
 import json
-import re
 import sys
 
-(model, digest, cold, warm, total, raw_mem, raw_cpu,
- swap_before, swap_peak, swap_after, oom_flag, keep_alive) = sys.argv[1:13]
+model, digest, cold, warm, total, oom_flag = sys.argv[1:7]
+peak = json.loads('''$peak_json''')
 
 
 def to_float(x):
@@ -368,29 +384,20 @@ def to_float(x):
         return None
 
 
-def parse_size_mb(text):
-    m = re.match(r"([\d.]+)\s*([A-Za-z]+)", text.strip())
-    if not m:
-        return None
-    val, unit = float(m.group(1)), m.group(2)
-    mult = {"B": 1e-6, "KB": 1e-3, "KiB": 1.048576e-3 * 1000 / 1024,
-            "MB": 1.0, "MiB": 1.048576, "GB": 1000.0, "GiB": 1073.741824}
-    return round(val * mult.get(unit, 1.0), 3)
-
-
-used_mem = raw_mem.split("/")[0]
 print(json.dumps({
     "model": model, "model_digest": digest,
     "cold_latency_seconds": to_float(cold),
     "warm_latency_seconds": to_float(warm),
     "total_benchmark_seconds": to_float(total),
-    "peak_rss_mb": parse_size_mb(used_mem),
-    "peak_cpu_percent": to_float(raw_cpu.strip().rstrip("%")),
-    "swap_before_mb": to_float(swap_before),
-    "swap_peak_mb": to_float(swap_peak),
-    "swap_after_mb": to_float(swap_after),
+    "peak_rss_mb": peak["peak_rss_mb"],
+    "peak_cpu_percent": peak["peak_cpu_percent"],
+    "swap_before_mb": peak["swap_before_mb"],
+    "swap_peak_mb": peak["swap_peak_mb"],
+    "swap_after_mb": peak["swap_after_mb"],
     "oom_occurred": {"true": True, "false": False}.get(oom_flag),
-    "keep_alive_policy": keep_alive,
+    "keep_alive_policy": "0",
+    "min_host_available_ram_mb": peak["min_host_available_ram_mb"],
+    "resource_samples_count": peak["samples_count"],
 }, indent=2))
 PYEOF
   cat "$BASE_DIR/resources-$safe.json"
