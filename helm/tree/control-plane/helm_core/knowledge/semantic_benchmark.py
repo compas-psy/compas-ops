@@ -31,6 +31,7 @@ import time
 from dataclasses import dataclass, field
 
 from . import semantic_extract as semantic_extract_module
+from .relation_compiler import compile_relations
 from .semantic_benchmark_fixtures import GOLDEN_CASES, GoldenCase
 from .semantic_benchmark_metrics import AggregateMetrics, CaseScore, aggregate, evaluate_case
 from .semantic_extract import (
@@ -156,6 +157,14 @@ def _run_case(case: GoldenCase, *, model: str, keep_alive: str | None, extract_f
     finally:
         logger.removeHandler(capture)
     latency = time.monotonic() - t0
+
+    # R4.7 (владелец 03.09.2026): production-путь больше не доверяет
+    # `extraction.edges`, предложенные моделью — единственный источник
+    # рёбер начиная с R4.7 это deterministic compiler, на уже
+    # провалидированных entities/atoms этого же прогона. Заменяем ДО
+    # `_validate_structure`/`evaluate_case`, чтобы бенчмарк измерял
+    # ровно то, что попадёт в production, а не устаревший LLM-путь.
+    extraction.edges = compile_relations(extraction.entities, extraction.atoms, case.text)
 
     if not _validate_structure(extraction):
         return CaseRun(case_id=case.case_id, categories=case.categories, outcome="malformed",
@@ -328,6 +337,7 @@ def run_shadow_benchmark(samples: list[ShadowWindowSample], *, model: str,
                 entities_count=0, atoms_count=0, edges_count=0, rejected_count=0))
             continue
         latency = time.monotonic() - t0
+        extraction.edges = compile_relations(extraction.entities, extraction.atoms, sample.text)
         outcome = "no_knowledge" if extraction.is_empty else "processed"
         results.append(ShadowCaseResult(
             source_id=sample.source_id, domain=sample.domain, window_ordinal=sample.window_ordinal,

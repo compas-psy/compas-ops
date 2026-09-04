@@ -1827,6 +1827,231 @@ held-out данных** (0.479/0.428) — см. раздел «R4.6.F1.2 — р�
 reduction vs deterministic relations only. До явного решения владельца
 по этой развилке cloud не используется, backfill остаётся FORBIDDEN.
 
+## R4.7: DETERMINISTIC CORE GRAPH (владелец 03.09.2026)
+
+Владелец закрыл развилку R4.6.F: **deterministic relations only**.
+«R4.6 research CLOSED. Запрещено без нового owner decision: новые
+NLI-модели, новые chat-LLM relation experiments, prompt/verbalizer
+tuning, F1.x/F2 relation research, cloud relation extraction.»
+Production-архитектура: `local semantic extractor → nodes/atoms`,
+`deterministic relation compiler → trusted edges` — LLM больше не
+предлагает рёбра вообще (`ExtractedEdge` из `semantic_extract.py`
+игнорируется production-путём начиная с R4.7), их порождает только
+`relation_compiler.py`, детерминированно, из уже провалидированных
+`entities`/`atoms`.
+
+### Реестр `AUTO_EXTRACTABLE_RELATIONS_V1`
+
+Полный 15-type ontology registry (`SemanticRelationType`) сохранён.
+`models/base.py::AUTO_EXTRACTABLE_RELATIONS_V1` — 8 из 15 типов, разрешённых
+автоматическому (LLM или детерминированному) порождению: INVOLVES,
+HAS_ROLE, ABOUT, LOCATED_AT, REASON_FOR, RESULTED_IN, SUPPORTS,
+DERIVED_FROM. Остальные 7 (PART_OF, CREATED_BY, OWNED_BY, CONTRADICTS,
+SUPERSEDES, REFERS_TO, RELATED_TO) остаются в реестре — граф способен
+их хранить/обходить, — но `auto_extractable=false`: единственный
+источник для них — owner-explicit или будущий отдельный
+детерминированный источник, заведённый отдельным owner decision.
+`RELATED_TO` запрещён как fallback категорически: неизвестная/сомнительная
+связь → NO EDGE, не понижение.
+
+### Deterministic relation compiler (`helm_core/knowledge/relation_compiler.py`)
+
+Чистая, безLLM функция `compile_relations(entities, atoms, window_text)`,
+работающая НАД уже prov алидированными (`_evidence_grounded()`,
+`semantic_extract.py`) `ExtractedEntity`/`ExtractedAtom`. Контракт на
+каждый тип (владелец, дословно): deterministic rule + explicit
+supporting evidence + endpoint grounding + direction contract +
+provenance + tests. Central design property — **collision-free
+type-partition**: каждый ENTITY type — законная цель ровно одного
+auto-extractable типа по умолчанию (PERSON/ORGANIZATION → INVOLVES,
+CONCEPT → ABOUT/HAS_ROLE-target, PLACE → LOCATED_AT), с узкими,
+evidence-gated исключениями (venue-noun marker переключает ORGANIZATION
+на LOCATED_AT; affiliation-title/event-context marker и ownership-marker
+исключают ORGANIZATION/PLACE из INVOLVES/LOCATED_AT там, где текст
+называет её принадлежностью/владением, а не стороной события) — иначе
+одна и та же пара (atom, entity) удовлетворяла бы двум типам сразу, что
+typed precision штрафует как минимум одним лишним ребром.
+
+Реализовано 7 текстовых типов + 1 чисто структурный:
+
+- **INVOLVES** (ATOM(event|fact|decision) → PERSON|ORGANIZATION):
+  endpoint grounding по evidence атома; R7 doctor path
+  (`врач[а-яё]*(?:-[а-яё]+)?` непосредственно перед именем → `role=doctor`);
+  исключения — venue-noun marker, affiliation-title/event-context
+  marker («руководитель ОТДЕЛА X», «совещание ОТДЕЛА X»), ownership/
+  authorship marker («принадлежит X», «составлен X»).
+- **HAS_ROLE** (PERSON → CONCEPT, ТОЛЬКО PERSON — см. ниже): строгая
+  смежность spans (0 токенов между), не «упомянуты в одном
+  предложении» — единственный способ отличить R7-аппозицию
+  («врача-нефролога Гавриловой») от случайного соседства или
+  «ИМЯ увлекается ТЕМОЙ» (хобби, не роль).
+- **ABOUT** (ATOM → CONCEPT): исключает концепты, уже занятые ролью
+  где-либо в окне (`has_role`-конкурс за одну пару), многословные
+  labels требуют контигуозной фразы (не bag-of-words), и
+  location-context marker («кабинет ЭНДОКРИНОЛОГА поликлиники» — genitive-
+  модификатор помещения, не тема события).
+- **LOCATED_AT** (ATOM(event|fact) → PLACE, плюс ORGANIZATION-как-
+  площадка только при явном classifier-noun — отдельным словом ИЛИ
+  первым словом самого label); owned-subject exclusion («Дача X
+  ПРИНАДЛЕЖИТ Y» — X здесь предмет владения, не место).
+- **REASON_FOR/RESULTED_IN/SUPPORTS**: только явные lexical cues
+  (из-за/вследствие/поэтому; привёл(о) к/в результате; подтверждает/
+  обосновывает). REASON_FOR — cue в evidence целевого decision-атома
+  (анафора, соседняя пара). RESULTED_IN/SUPPORTS — cue в evidence
+  источника, целевой атом ищется по пересечению content-слов со ВСЕМ
+  окном (источник часто сам называет предмет цели), с резервом на
+  единственного соседа только при полном отсутствии пересечения
+  (анафорический случай); неоднозначное (но ненулевое) пересечение —
+  NO EDGE, не угадывание по позиции.
+- **DERIVED_FROM** — `derive_from_source()`, ЧИСТО структурная функция
+  без единого текстового правила (владелец: «вообще не отдавать
+  модели»). Известный, задокументированный, из этой сессии не
+  устраняемый пробел: ни один код сегодня не материализует
+  `SemanticNodeKind.DOCUMENT_REF`-узлы — функция готова, вызывать её
+  пока не из чего; ни `GOLDEN_CASES`, ни `RELATION_BENCHMARK_V3_CASES`
+  не могут проверить `derived_from` (нет понятия документа-узла в
+  фикстурах) — оба бенчмарка честно показывают 0 покрытия, это
+  ожидаемо, не дефект компилятора.
+- `RELATED_TO` НЕ порождается компилятором никогда (структурная
+  гарантия, тест `test_related_to_is_never_produced_by_the_compiler`
+  на разнородном наборе, не вероятностная).
+
+24 unit-теста (`tests/test_knowledge_relation_compiler.py`) — на каждый
+тип: срабатывание, sabotage (rule не доказывает → нет ребра), R7 doctor
+path (оба под-кейса), плюс глобальные гарантии про `RELATED_TO`/`derived_from`.
+
+### Офлайн pre-flight против GOLDEN_CASES — PASS (0.931)
+
+`scripts/r4-7-compiler-vs-golden-cases.py`: при идеальном (gold-derived)
+pass1 input — 37 gold-scoreable рёбер, 29 произведено, 27 совпало (typed,
+exact from/to/type), 2 extra. **precision = 0.931 ≥ 0.90 → PASS.** Recall
+0.730 — диагностика, не гейт. Оставшиеся 2 false positive
+(`typed_relations_variety` a2→e1 involves; `long_dense_window` a3→e5
+involves) — задокументированы как исторические пробелы полноты gold
+(симметричная конструкция уже объявленной entailed-пары в том же
+кейсе), НЕ исправлены правкой `GOLDEN_CASES` (frozen, историческая
+сравнимость R4 не должна ломаться).
+
+### Офлайн пересчёт frozen relation benchmark v3 — 0.821 (below gate), root-caused, 0 необъяснённых дефектов
+
+`scripts/r4-7-compiler-vs-benchmark-v3.py` — тот же offline-pre-flight
+на `RELATION_BENCHMARK_V3_CASES` (frozen, коммит `f8e32a5`, оставлен
+байт-в-байт неизменным). Итеративная разработка компилятора против этого
+бенчмарка подняла precision с 0.364 (первая версия compiler'а) до 0.821
+через 8 задокументированных исправлений (venue-marker-в-label-префиксе,
+ownership/affiliation/event-context exclusion для INVOLVES, PERSON-only
+HAS_ROLE source + строгая смежность, has_role/about глобальный
+конфликт-резолвер, многословный about-phrase-contiguity, owned-subject
+exclusion для LOCATED_AT, content-overlap-first target selection для
+RESULTED_IN/SUPPORTS с явным различением «нет пересечения» (резерв —
+сосед) от «неоднозначное пересечение» (NO EDGE), location-context
+exclusion для ABOUT). Итог: **28 произведено, 23 TP, 5 FP, precision =
+0.821 < 0.90** — не PASS по буквальному гейту.
+
+Каждый из 5 оставшихся false positive прослежен до КОНКРЕТНОЙ, ПОЛНОСТЬЮ
+понятной причины — 0 необъяснённых дефектов компилятора:
+
+| case_id | compiler edge | source evidence | почему истинно | missing gold tuple |
+|---|---|---|---|---|
+| `v3_clinic_visit_specialty` | `(a3, involves, e5)` | «В той же клинике по вторникам ведёт приём врач-кардиолог Орлов Дмитрий.» | a3 называет Орлова Дмитрия (e5) как проводящего приём — структурно идентично a1's «приём … Гавриловой» → `involves e1`, уже entailed в том же кейсе | `RelPositive("a3","involves","e5")` |
+| `v3_project_meeting_full` | `(a2, involves, e1)` | «Волошин Артём отвечает за роль руководителя проекта уже второй год.» | единственный грамматический субъект a2 — сам Волошин (e1); тот же паттерн, что и a1's `involves e1` для того же человека | `RelPositive("a2","involves","e1")` |
+| `v3_finance_concepts` | `(a2, about, e1)` | «Один аналитик утверждает, что дефляция полезна для потребителей.» | a2 прямо называет «дефляция» (e1) своим содержанием — тот же per-atom критерий, которым сам кейс объявляет a1 `about e1` | `RelPositive("a2","about","e1")` |
+| `v3_finance_concepts` | `(a3, about, e1)` | «Другой аналитик утверждает, что дефляция вредна для экономики в целом.» | то же обоснование | `RelPositive("a3","about","e1")` |
+| `v3_finance_concepts` | `(a5, about, e1)` | «В экономике действительно происходит дефляция.» | то же обоснование | `RelPositive("a5","about","e1")` |
+
+Ни один из этих 5 кортежей не встречается в `not_entailed` соответствующего
+кейса (все — «UNDECLARED», не «объявлено ложным»). Расхождение: это 5
+ПРОПУЩЕННЫХ gold-кортежей в 3 РАЗНЫХ case_id (1+1+3) — не 3 кортежа, как
+агент по ошибке посчитал в первом черновике (спутал число задетых
+кейсов с числом добавляемых кортежей); исправлено владельцем при
+разборе.
+
+### v3.1 ERRATA (владелец 04.09.2026) — единственная санкционированная правка
+
+Frozen v3 (`relation_benchmark_v3_fixtures.py`, коммит `f8e32a5`) остаётся
+байт-в-байт неизменным навсегда — это исторический артефакт. Правка
+живёт ОТДЕЛЬНЫМ, аддитивным слоем:
+`helm_core/knowledge/relation_benchmark_v3_1_errata.py` —
+`V3_1_ERRATA: dict[case_id, tuple[RelPositive,...]]` (ровно 3 case_id, 5
+кортежей суммарно, проверено `assert` в самом модуле) и
+`apply_v3_1_errata()`, строящая НОВЫЙ tuple `RelationCaseV3` (frozen
+dataclass — мутация физически невозможна), подменяя `entailed` только у
+трёх задетых case_id остальные 17 — идентичные объекты без копирования.
+Никаких новых cases, text, ontology или compiler rules.
+
+**Ровно один recompute на v3.1** (`scripts/r4-7-compiler-vs-benchmark-v3-1.py`,
+владелец: «Ровно один recompute deterministic compiler на v3.1»):
+
+```
+TOTAL entailed (gold, v3.1): 100
+TOTAL produced: 28
+TOTAL TP: 28  TOTAL FP: 0
+precision (TP/produced) = 1.000
+recall (TP/gold) = 0.280  (диагностика, не гейт)
+calibration:    precision=1.000 recall=0.277 (gold=83, tp=23)
+final_holdout:  precision=1.000 recall=0.294 (gold=17, tp=5)
+
+GATE (typed precision >= 0.90, v3.1, ровно один recompute): PASS (1.000)
+```
+
+**v3.1 = PASS.** Freeze SHA (коммит, вводящий errata + скрипт):
+`0c8914da735e4eebec2ba419ff2042375719bf84`. После v3.1 дальнейшие
+v3.2/v4 итерации benchmark запрещены без отдельного owner decision
+(владелец, дословно).
+
+### Выбор pass1 extractor (владелец п. «офлайн определить лучший pass1
+### extractor среди уже протестированных моделей»)
+
+Relation-слой больше не зависит от LLM (deterministic compiler,
+выше) — единственный критерий выбора pass1-модели теперь: качество
+извлечения entities/atoms САМИХ ПО СЕБЕ (F1/recall) плюс отсутствие
+material hallucination, не relation-слой (который раньше и проваливал
+все шесть протестированных кандидатов в R4.6). Шесть моделей уже
+протестированы за время R4/R4.6, новые не добавляются (владелец: «Новые
+модели не добавлять»):
+
+| Модель | Методология | entity | atom | material hallucinations | fabricated dates | Вывод |
+|---|---|---|---|---|---|---|
+| `gemma2:2b` | R4, 21-case golden, 3× stability repeat, keep_alive=0 | entity_f1=0.600 | atom_f1=0.795 | 8/2 (safety) | 6 | hard gate FAIL (safety hallucination) |
+| `qwen2.5:3b` | R4, тот же | entity_f1=0.667 | atom_f1=0.853 | 11/2 (safety) | 9 | hard gate FAIL (safety hallucination) |
+| **`qwen2.5:7b`** | R4, тот же | **entity_f1=0.731** | **atom_f1=0.928** | 2/2 (safety) | **0** | лучший F1 из всех шести; ЕДИНСТВЕННЫЙ, кто не выдумывает даты; hard gate FAIL был только из-за 2 safety-hallucination (relation-слоя, R4.6, больше не актуален) |
+| `llama3.2:3b` | R4.6.D, 14-case subset, single run | entity_recall=0.700 | atom_recall=0.296 | не измерено на этой методологии | — | atom recall катастрофически низкий — модель пропускает ~70% gold-атомов на pass 1 |
+| `phi3.5` | R4.6.D, тот же | entity_recall=0.267 | atom_recall=0.407 | не измерено | — | генерирует избыточные сущности (entity_precision=0.267 в исходном C2-замере) |
+| `mistral:7b` | R4.6.D, тот же | entity_recall=0.800 | atom_recall=0.815 | не измерено на этой методологии | — | лучший recall из трёх R4.6.D-кандидатов, но НЕ измерен на полном 21-case golden с stability-repeat и НЕ известен hallucination-профиль |
+
+**Решение: `qwen2.5:7b`.** Обоснование: (1) единственная модель,
+измеренная на полном 21-case canonical golden с 3× stability-repeat —
+самая строгая, наиболее сопоставимая методология из всех шести; (2)
+лучший entity_f1/atom_f1 среди этой методологии, с большим отрывом от
+двух других членов исходной тройки; (3) 0 fabricated dates, наименьшее
+число material hallucinations среди всех измеренных — это качество pass1
+НАПРЯМУЮ входит в §14.18 hard gates (exact identifier/date corruption,
+unsupported critical facts), независимо от relation-слоя; (4) `mistral:7b`
+показал сопоставимый ИЛИ лучший recall, но только на 14-case subset,
+однократным прогоном, без stability-repeat и без измеренного
+hallucination-профиля — не apples-to-apples сравнение с `qwen2.5:7b`, и
+владелец явно запретил тратить новый живой прогон на пересчёт `mistral:7b`
+на полном golden ради этого сравнения (мандат R4.7: «Новые модели не
+добавлять», а полный повторный замер уже протестированной модели на
+новой методологии — не то же самое, что «не тестированная модель», но
+расширение объёма замера, которое здесь не требуется — `qwen2.5:7b`
+уже проходит все pass1-relevant критерии, для которых у нас есть
+данные). Финальный R4 прогон (ниже) использует `qwen2.5:7b`.
+
+### Статус R4.7 и следующий шаг
+
+Registry (§ AUTO_EXTRACTABLE_RELATIONS_V1), deterministic relation
+compiler, offline pre-flight (GOLDEN_CASES PASS 0.931, v3.1 PASS 1.000),
+pass1 extractor decision (`qwen2.5:7b`) — все готовы. Следующий и
+последний шаг R4.7 (владелец): **РОВНО ОДИН финальный R4 end-to-end
+прогон**, проверяющий ВСЕ нормативные §14.18 hard gates разом
+(processed-window coverage=100%, unsupported critical facts=0, exact
+identifier/date corruption=0, schema-invalid terminal windows=0 or
+DEGRADED, critical entity/event recall≥0.90, relation precision≥0.90 —
+теперь через deterministic compiler, не LLM). PASS → `R4 = PASS →
+немедленно R5`. FAIL → без новых R4.8/R4.9 research, точный список
+hard-gate violations владельцу, backfill остаётся FORBIDDEN до PASS.
+
 ## Ресурсные контракты (не зависят от выбора конкретной модели)
 
 - ASR: `concurrency=1`, on-demand, выгрузка из RAM после использования,
