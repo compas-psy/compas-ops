@@ -39,9 +39,10 @@ from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
 from .health_schema import health_schema_configured, health_session, is_health_domain
+from .relation_compiler import compile_relations
 from .semantic_extract import (
     ExtractionFailed, MAX_ATOMS_PER_WINDOW, WindowExtraction, WindowTruncated,
-    extract_window,
+    extract_nodes_window,
 )
 from .semantic_windows import SemanticWindow, build_windows, split_window
 from ..config import get_settings
@@ -147,6 +148,36 @@ def _window_row(models: _Models, *, window: SemanticWindow, run_id: uuid.UUID,
     )
 
 
+def _locate_span(evidence_quote: str, window: SemanticWindow) -> tuple[int, int] | None:
+    """Точные границы цитаты в тексте ИСТОЧНИКА (R5, §30.8.5 F: «resolves
+    to exact source + page/chunk/time/span»).
+
+    Grounding в `semantic_extract` сравнивает цитату с окном «с точностью
+    до пробелов» (`_WS.sub(" ", ...)`), поэтому буквальный `find()` может
+    не найти уже проверенную цитату — например, когда перенос строки в
+    источнике схлопнулся в пробел. Поэтому второй попыткой идёт поиск с
+    гибким пробелом; смещение всё равно берётся по ИСХОДНОМУ тексту, так
+    что возвращённые границы указывают в реальный документ, а не в его
+    нормализованную копию.
+
+    `None` — «точных границ нет», и вызывающий обязан записать NULL, а не
+    подставить границы окна: упоминание с диапазоном во весь экран текста
+    выглядит как точное происхождение, не будучи им.
+    """
+    parts = evidence_quote.split()
+    if not parts:
+        return None
+    idx = window.text.find(evidence_quote)
+    if idx >= 0:
+        start, end = idx, idx + len(evidence_quote)
+    else:
+        match = re.search(r"\s+".join(re.escape(part) for part in parts), window.text)
+        if match is None:
+            return None
+        start, end = match.start(), match.end()
+    return window.char_start + start, window.char_start + end
+
+
 def _result_hash(extraction: WindowExtraction) -> str:
     """Отпечаток результата окна (§14.4.1: «stores a result hash/count
     even when it produced zero nodes»). Считается по разобранным полям,
@@ -174,6 +205,9 @@ def _write_extraction(graph, models: _Models, *, extraction: WindowExtraction,
     решается осознанным слиянием, а не побочным эффектом записи.
     """
     by_local: dict[str, uuid.UUID] = {}
+    #: local_id → цитата, которой узел обоснован. Нужна для точного
+    #: происхождения (R5): по ней вычисляется диапазон узла внутри окна.
+    quote_by_local: dict[str, str] = {}
     nodes = 0
 
     for entity in extraction.entities:
@@ -192,6 +226,7 @@ def _write_extraction(graph, models: _Models, *, extraction: WindowExtraction,
         graph.add(node)
         graph.flush()
         by_local[entity.local_id] = node.id
+        quote_by_local[entity.local_id] = entity.evidence_quote
         nodes += 1
         for alias in entity.aliases:
             graph.add(models.alias(
@@ -212,25 +247,31 @@ def _write_extraction(graph, models: _Models, *, extraction: WindowExtraction,
         graph.add(node)
         graph.flush()
         by_local[atom.local_id] = node.id
+        quote_by_local[atom.local_id] = atom.evidence_quote
         nodes += 1
 
     # Упоминание на КАЖДЫЙ узел окна: §14.5 требует происхождения на
     # уровне источника, а не «где-то в этом документе». Без него ответ
     # нельзя проследить до места в тексте (§30.8.5 F).
     #
-    # ДОЛГ, зафиксированный владельцем 02.09.2026 (R3.1, не блокирует R3):
-    # диапазон здесь — границы ВСЕГО окна (до WINDOW_MAX_CHARS символов),
-    # не точный фрагмент внутри него, где на самом деле стоит узел. Для
-    # приёмки R5 (§30.8.5 F «точное происхождение») этого недостаточно —
-    # нужен диапазон внутри окна, который модель пока не отдаёт. Разбор
-    # результата от исходного текста уже дал бы точные смещения; здесь
-    # сознательно не делается, чтобы не расширять R3.1 сверх найденных
-    # владельцем двух потерь данных.
-    for node_id in by_local.values():
+    # R5 закрывает долг, зафиксированный владельцем 02.09.2026: диапазон
+    # был границами ВСЕГО окна (до WINDOW_MAX_CHARS символов), одинаковыми
+    # у всех узлов окна. Теперь это границы конкретной цитаты узла в
+    # тексте источника — то самое «exact span» из §30.8.5 F.
+    #
+    # Цитату найти не удалось — пишется NULL, а не границы окна. Диапазон
+    # во всё окно неотличим от точного при чтении, то есть выглядел бы как
+    # происхождение, которого нет; NULL честен и проверяем запросом
+    # (`WHERE char_start IS NULL`), а грубое место всё равно остаётся
+    # восстановимым через `window_id` → строку окна.
+    for local_id, node_id in by_local.items():
+        span = _locate_span(quote_by_local.get(local_id, ""), window)
         graph.add(models.mention(
             knowledge_user_id=tenant_id, node_id=node_id, source_id=source_id,
-            window_id=window_row.ordinal, char_start=window.char_start,
-            char_end=window.char_end, evidence_text_hash=window.text_hash,
+            window_id=window_row.ordinal,
+            char_start=span[0] if span else None,
+            char_end=span[1] if span else None,
+            evidence_text_hash=window.text_hash,
             evidence_type=SemanticEvidenceType.EXTRACTED, semantic_run_id=run_id))
 
     edges = 0
@@ -293,6 +334,15 @@ def _process(graph, models: _Models, *, window: SemanticWindow, ordinal: int,
         graph.flush()
         return next_ordinal
 
+    # R5.1: рёбра строит компилятор, а не модель. Ровно тот путь, который
+    # аттестован R4 (§14.18): `extract_nodes_window()` возвращает только
+    # entities+atoms, `compile_relations()` — единственный источник связей.
+    # До R5 продакшн звал `extract_window()` и писал `extraction.edges`
+    # модели напрямую — то есть выкатывал НЕ тот путь, который меряли
+    # гейты. Присваивание идёт до `_result_hash()`: отпечаток окна обязан
+    # описывать то, что реально записано, а не промежуточный вид разбора.
+    extraction.edges = compile_relations(extraction.entities, extraction.atoms, window.text)
+
     row.rejected_count = len(extraction.rejected)
     row.result_hash = _result_hash(extraction)
     if extraction.is_empty:
@@ -321,7 +371,7 @@ def _process(graph, models: _Models, *, window: SemanticWindow, ordinal: int,
 
 
 def publish_semantic_run(session: Session, *, source: KnowledgeSource, text: str,
-                         model: str | None = None, extract=extract_window,
+                         model: str | None = None, extract=extract_nodes_window,
                          semantic_version: int = 2) -> PublishResult:
     """Разобрать источник целиком и опубликовать ревизию, если она годна.
 
