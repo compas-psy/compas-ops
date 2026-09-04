@@ -21,6 +21,7 @@ for f in "$BASE_DIR/R4_FINAL_ACCEPTANCE.json" \
          "$BASE_DIR/resources-qwen2_5_7b.json" \
          "$RUN_DIR/fingerprint.json" \
          "$RUN_DIR/result.json" \
+         "$RUN_DIR/raw_diagnostics.json" \
          "$RUN_DIR/stderr.log"; do
   echo
   echo "############ FILE: $f ############"
