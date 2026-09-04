@@ -57,6 +57,16 @@ class CaseRun:
     repair_attempts: int
     score: CaseScore | None = None
     error: str | None = None
+    #: R4.7 (владелец 04.09.2026, final acceptance requirement 5) —
+    #: провенанс рёбер: `proposed` — то, что вернула модель в
+    #: `extraction.edges` ДО перезаписи; `compiled` — вывод
+    #: `compile_relations()`, который и стал `extraction.edges` для
+    #: `evaluate_case()` ниже. Оба поля существуют для того, чтобы
+    #: R4 final acceptance могла показать разницу (модель предлагает,
+    #: компилятор решает), не для скоринга — `score` уже посчитан
+    #: только по `compiled`.
+    proposed_edges_count: int = 0
+    compiled_edges_count: int = 0
 
 
 @dataclass
@@ -164,17 +174,37 @@ def _run_case(case: GoldenCase, *, model: str, keep_alive: str | None, extract_f
     # провалидированных entities/atoms этого же прогона. Заменяем ДО
     # `_validate_structure`/`evaluate_case`, чтобы бенчмарк измерял
     # ровно то, что попадёт в production, а не устаревший LLM-путь.
-    extraction.edges = compile_relations(extraction.entities, extraction.atoms, case.text)
+    proposed_edges_count = len(extraction.edges)
+    compiled_edges = compile_relations(extraction.entities, extraction.atoms, case.text)
+    # R4.7 final acceptance (владелец 04.09.2026, requirement 5) —
+    # `compile_relations()` документирован как чистая детерминированная
+    # функция без единого случайного/LLM источника; здесь это не
+    # оптимистичное допущение, а проверяемый инвариант — повторный вызов
+    # на ТЕХ ЖЕ входах обязан дать тот же результат. Расхождение здесь
+    # означало бы реальный баг компилятора (скрытая недетерминированность),
+    # и по требованию owner такая ошибка обязана провалить прогон целиком
+    # (`RuntimeError` → `evaluator exception → FAIL`), а не тихо
+    # разойтись с тем, что попадёт в `R4_FINAL_ACCEPTANCE.json`.
+    verification_edges = compile_relations(extraction.entities, extraction.atoms, case.text)
+    key = lambda edges: sorted((e.from_local_id, e.relation_type, e.to_local_id, e.role) for e in edges)
+    if key(compiled_edges) != key(verification_edges):
+        raise RuntimeError(
+            f"{case.case_id}: compile_relations() недетерминирован — "
+            f"два вызова на тех же entities/atoms дали разные рёбра")
+    extraction.edges = compiled_edges
 
     if not _validate_structure(extraction):
         return CaseRun(case_id=case.case_id, categories=case.categories, outcome="malformed",
                        latency_seconds=latency, repair_attempts=len(handler_records),
-                       error="структурный инвариант нарушен после validate()")
+                       error="структурный инвариант нарушен после validate()",
+                       proposed_edges_count=proposed_edges_count,
+                       compiled_edges_count=len(compiled_edges))
 
     score = evaluate_case(case, extraction)
     outcome = "no_knowledge" if extraction.is_empty else "processed"
     return CaseRun(case_id=case.case_id, categories=case.categories, outcome=outcome,
-                   latency_seconds=latency, repair_attempts=len(handler_records), score=score)
+                   latency_seconds=latency, repair_attempts=len(handler_records), score=score,
+                   proposed_edges_count=proposed_edges_count, compiled_edges_count=len(compiled_edges))
 
 
 @dataclass
@@ -371,7 +401,9 @@ def golden_report_from_dict(data: dict) -> GoldenBenchmarkReport:
     runs = [
         CaseRun(case_id=r["case_id"], categories=tuple(r["categories"]), outcome=r["outcome"],
                 latency_seconds=r["latency_seconds"], repair_attempts=r["repair_attempts"],
-                score=_score_from_dict(r["score"]), error=r["error"])
+                score=_score_from_dict(r["score"]), error=r["error"],
+                proposed_edges_count=r.get("proposed_edges_count", 0),
+                compiled_edges_count=r.get("compiled_edges_count", 0))
         for r in data["runs"]
     ]
     return GoldenBenchmarkReport(
