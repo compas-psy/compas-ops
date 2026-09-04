@@ -21,7 +21,9 @@ import json
 import pytest
 
 from helm_core.knowledge.semantic_extract import (
-    MAX_ATOMS_PER_WINDOW, ExtractionFailed, WindowTruncated, extract_window, validate,
+    MAX_ATOMS_PER_WINDOW, MAX_SPLIT_DEPTH, NODE_RESPONSE_SCHEMA, NODE_SYSTEM_PROMPT,
+    ExtractionFailed, ExtractionTimedOut, WindowTruncated, extract_nodes_window, extract_window,
+    validate,
 )
 
 WINDOW_TEXT = (
@@ -259,6 +261,163 @@ def test_call_ollama_requests_deterministic_generation(monkeypatch) -> None:
     module._call_ollama("окно", model="gemma2:2b")
     assert captured["body"]["options"]["temperature"] == 0
     assert captured["body"]["options"]["seed"] == module.DETERMINISTIC_SEED
+
+
+class TestNodeOnlyProductionPath:
+    """P1/P2 (владелец 2026-09-04, remediation после R4 RCA run 241):
+    node-only схема/промпт для `extract_nodes_window()` и timeout→split
+    вместо identical retry. `extract_window()` (старая схема, с edges)
+    остаётся нетронутым — эти тесты не про него."""
+
+    def test_schema_has_no_edges_and_strict_enums(self) -> None:
+        assert "edges" not in NODE_RESPONSE_SCHEMA["properties"]
+        assert NODE_RESPONSE_SCHEMA["required"] == ["entities", "atoms"]
+        entity_type_enum = (
+            NODE_RESPONSE_SCHEMA["properties"]["entities"]["items"]["properties"]["entity_type"]["enum"])
+        assert set(entity_type_enum) == {"PERSON", "ORGANIZATION", "PLACE", "CONCEPT"}
+        kind_enum = NODE_RESPONSE_SCHEMA["properties"]["atoms"]["items"]["properties"]["kind"]["enum"]
+        assert set(kind_enum) == {"event", "fact", "decision", "concept"}
+
+    def test_prompt_never_mentions_edges_or_relations(self) -> None:
+        """P1: «Prompt тоже не должен упоминать создание relations/local-id
+        edges»."""
+        lowered = NODE_SYSTEM_PROMPT.lower()
+        assert "edge" not in lowered
+        assert "связ" not in lowered
+
+    def test_accepts_response_without_edges_key(self, monkeypatch) -> None:
+        import helm_core.knowledge.semantic_extract as module
+
+        def fake_call_ollama(prompt, *, model, keep_alive=None, system=None, response_schema=None):
+            assert response_schema is NODE_RESPONSE_SCHEMA
+            assert system is NODE_SYSTEM_PROMPT
+            return json.dumps({
+                "entities": [{"local_id": "e1", "entity_type": "PLACE", "label": "Казань",
+                             "evidence_quote": "Казани"}],
+                "atoms": [],
+            })
+
+        monkeypatch.setattr(module, "_call_ollama", fake_call_ollama)
+        result = extract_nodes_window("В Казани.", domain="personal")
+        assert [e.local_id for e in result.entities] == ["e1"]
+        assert result.edges == []
+
+    def test_transport_timeout_is_not_retried_identically(self, monkeypatch) -> None:
+        """R4 RCA run 241: `long_dense_window` получило 3 identical
+        120-секундных timeout подряд (360.32с, 0 новой информации). На
+        timeout полный текст окна уходит на вход РОВНО ОДИН раз — вместо
+        повтора окно делится и отправляется частями."""
+        import helm_core.knowledge.semantic_extract as module
+
+        original_text = "Первое предложение тут. Второе предложение там."
+        fragment_marker = f"Фрагмент:\n{original_text}"
+        seen_prompts = []
+
+        def fake(prompt, *, model, keep_alive=None, system=None, response_schema=None):
+            seen_prompts.append(prompt)
+            if fragment_marker in prompt:
+                try:
+                    raise TimeoutError("timed out")
+                except TimeoutError as exc:
+                    raise ExtractionFailed(f"извлекатель недоступен: {exc}") from exc
+            return json.dumps({"entities": [], "atoms": []})
+
+        monkeypatch.setattr(module, "_call_ollama", fake)
+        extract_nodes_window(original_text, domain="personal")
+
+        full_window_calls = sum(1 for p in seen_prompts if fragment_marker in p)
+        assert full_window_calls == 1
+        assert len(seen_prompts) > 1, "после timeout окно должно быть поделено и отправлено частями"
+
+    def test_timeout_then_split_pieces_merge_without_colliding_local_ids(self, monkeypatch) -> None:
+        """Результаты кусков после деления по timeout склеиваются в один
+        `WindowExtraction`, а local_id из разных кусков не путаются, даже
+        если модель независимо назвала оба куска `e1`."""
+        import helm_core.knowledge.semantic_extract as module
+
+        original_text = "Встречу вёл Иванов. Встречу вела Петрова."
+        fragment_marker = f"Фрагмент:\n{original_text}"
+
+        def fake(prompt, *, model, keep_alive=None, system=None, response_schema=None):
+            if fragment_marker in prompt:
+                try:
+                    raise TimeoutError("timed out")
+                except TimeoutError as exc:
+                    raise ExtractionFailed(f"извлекатель недоступен: {exc}") from exc
+            if "Петрова" in prompt:
+                return json.dumps({"entities": [{"local_id": "e1", "entity_type": "PERSON",
+                                                 "label": "Петрова", "evidence_quote": "Петрова"}],
+                                   "atoms": []})
+            return json.dumps({"entities": [{"local_id": "e1", "entity_type": "PERSON",
+                                             "label": "Иванов", "evidence_quote": "Иванов"}],
+                               "atoms": []})
+
+        monkeypatch.setattr(module, "_call_ollama", fake)
+        result = extract_nodes_window(original_text, domain="personal")
+        labels = sorted(e.label for e in result.entities)
+        assert labels == ["Иванов", "Петрова"]
+        assert len({e.local_id for e in result.entities}) == 2
+
+    def test_malformed_json_still_uses_repair_retry_not_split(self, monkeypatch) -> None:
+        """P2: «Repair retries сохранить только для malformed JSON/schema
+        failure» — не транспортный timeout, значит окно НЕ делится, а
+        чинится тем же identical-с-жалобой retry, что и раньше."""
+        import helm_core.knowledge.semantic_extract as module
+
+        seen = []
+
+        def broken(prompt, *, model, keep_alive=None, system=None, response_schema=None):
+            seen.append(prompt)
+            return "не json"
+
+        monkeypatch.setattr(module, "_call_ollama", broken)
+        with pytest.raises(ExtractionFailed):
+            extract_nodes_window("текст окна", domain="personal", attempts=3)
+
+        assert len(seen) == 3
+        assert "Прошлый ответ отклонён" not in seen[0]
+        assert "Прошлый ответ отклонён" in seen[1]
+
+    def test_split_gives_up_when_text_is_unsplittable(self, monkeypatch) -> None:
+        """P2: «bounded recursion» — текст без границ абзаца/предложения,
+        который всё равно timeout-ит, не крутится бесконечно: явный провал
+        (coverage contract), не тихая потеря содержимого."""
+        import helm_core.knowledge.semantic_extract as module
+
+        calls = []
+
+        def always_timeout(prompt, *, model, keep_alive=None, system=None, response_schema=None):
+            calls.append(prompt)
+            try:
+                raise TimeoutError("timed out")
+            except TimeoutError as exc:
+                raise ExtractionFailed(f"извлекатель недоступен: {exc}") from exc
+
+        monkeypatch.setattr(module, "_call_ollama", always_timeout)
+        with pytest.raises(ExtractionTimedOut):
+            extract_nodes_window("однопредложениебезточкиибезграниц", domain="personal")
+        assert len(calls) == 1
+
+    def test_split_recursion_is_bounded_by_max_split_depth(self, monkeypatch) -> None:
+        """Даже когда текст ДЕЛИТСЯ (в отличие от предыдущего теста), но
+        каждый кусок всё равно timeout-ит — рекурсия не бесконечна: рано
+        или поздно кусок становится неделимым (одно предложение), и
+        исключение поднимается, а не проглатывается."""
+        import helm_core.knowledge.semantic_extract as module
+
+        calls = []
+
+        def always_timeout(prompt, *, model, keep_alive=None, system=None, response_schema=None):
+            calls.append(prompt)
+            try:
+                raise TimeoutError("timed out")
+            except TimeoutError as exc:
+                raise ExtractionFailed(f"извлекатель недоступен: {exc}") from exc
+
+        monkeypatch.setattr(module, "_call_ollama", always_timeout)
+        with pytest.raises(ExtractionTimedOut):
+            extract_nodes_window("Первое. Второе.", domain="personal")
+        assert 1 < len(calls) <= 2 * (MAX_SPLIT_DEPTH + 1)
 
 
 class TestEvidenceGrounding:

@@ -40,6 +40,44 @@ def test_perfect_answer_scores_full_marks_on_doctor_visit():
     assert score.material_hallucinations == 0
 
 
+def test_related_to_gold_edge_is_not_scoreable_for_a_compiler_driven_run():
+    """P6 (владелец 2026-09-04, R4 RCA `lecture_concept`: подтверждённый
+    evaluator-дефект, не fixture-дефект) — `RELATED_TO` сознательно
+    исключён из `AUTO_EXTRACTABLE_RELATIONS_V1`: детерминированный
+    compiler структурно не может его произвести ни при каком качестве
+    extraction. `lecture_concept` — реальный golden-кейс с таким
+    ребром (`e3 related_to e1`) — не редактируется; вместо этого оно не
+    должно входить в `edges_gold_scoreable`, иначе даже ИДЕАЛЬНОЕ
+    покрытие трёх auto-extractable рёбер этого кейса не даёт полный
+    recall/отсутствие «связь не найдена»."""
+    case = _BY_ID["lecture_concept"]
+    extraction = WindowExtraction(
+        entities=[
+            ExtractedEntity(local_id="c1", entity_type="CONCEPT", label="инфляция"),
+            ExtractedEntity(local_id="p1", entity_type="PERSON", label="Соколов"),
+            ExtractedEntity(local_id="c2", entity_type="CONCEPT", label="гиперинфляция"),
+        ],
+        atoms=[
+            ExtractedAtom(local_id="a1", kind="concept", title="Инфляция",
+                         text="Инфляция — устойчивый рост общего уровня цен."),
+            ExtractedAtom(local_id="a2", kind="fact", title="Пример",
+                         text="Лектор Соколов привёл пример гиперинфляции как крайней формы этого явления."),
+        ],
+        edges=[
+            ExtractedEdge(from_local_id="a1", relation_type="about", to_local_id="c1"),
+            ExtractedEdge(from_local_id="a2", relation_type="involves", to_local_id="p1"),
+            ExtractedEdge(from_local_id="a2", relation_type="about", to_local_id="c2"),
+            # Намеренно НЕТ ребра c2->related_to->c1 — компилятор не
+            # производит related_to ни при каких обстоятельствах.
+        ],
+    )
+    score = evaluate_case(case, extraction)
+    assert score.edges_gold_scoreable == 3, "related_to не должен входить в знаменатель"
+    assert score.edges_matched == 3
+    assert score.edges_extracted_extra == 0
+    assert not any("не найдена" in note for note in score.notes)
+
+
 def test_empty_answer_is_all_misses_not_a_crash():
     case = _BY_ID["doctor_visit"]
     score = evaluate_case(case, WindowExtraction())

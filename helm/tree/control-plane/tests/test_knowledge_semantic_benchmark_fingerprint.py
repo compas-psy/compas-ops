@@ -59,7 +59,7 @@ def test_fingerprint_captures_the_actual_deployed_code_hash():
 def test_cli_golden_embeds_fingerprint_when_git_sha_and_digest_given(monkeypatch, capsys):
     import helm_core.knowledge.semantic_extract as extract_module
 
-    def fake_call_ollama(prompt, *, model, keep_alive=None):
+    def fake_call_ollama(prompt, *, model, keep_alive=None, **kwargs):
         return json.dumps({"entities": [], "atoms": [], "edges": []})
 
     monkeypatch.setattr(extract_module, "_call_ollama", fake_call_ollama)
@@ -81,7 +81,7 @@ def test_cli_golden_omits_fingerprint_when_git_sha_not_given(monkeypatch, capsys
     fingerprint — он нужен только у канонического полного прогона."""
     import helm_core.knowledge.semantic_extract as extract_module
 
-    def fake_call_ollama(prompt, *, model, keep_alive=None):
+    def fake_call_ollama(prompt, *, model, keep_alive=None, **kwargs):
         return json.dumps({"entities": [], "atoms": [], "edges": []})
 
     monkeypatch.setattr(extract_module, "_call_ollama", fake_call_ollama)

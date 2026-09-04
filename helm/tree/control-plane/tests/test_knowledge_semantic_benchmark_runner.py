@@ -52,6 +52,49 @@ def test_perfect_extractor_yields_zero_hallucinations_and_full_schema_success():
     assert all(s.reproducible for s in report.stability)
 
 
+def test_raw_diagnostics_capture_entities_atoms_edges_and_rejected_per_case():
+    """P7 (владелец 2026-09-04) — synthetic-only raw diagnostics: передан
+    пустой список -> получаем per-case entities/atoms/compiled_edges,
+    не только агрегатные счётчики `GoldenBenchmarkReport`."""
+    def fake_extract(text, *, domain, heading_path=(), model, keep_alive=None):
+        case = next(c for c in GOLDEN_CASES if c.text == text)
+        return _perfect_extraction(case)
+
+    diagnostics: list[dict] = []
+    case = _BY_ID["doctor_visit"]
+    run_golden_benchmark(model="fake", extract_fn=fake_extract, stability_repeats=1,
+                         cases=(case,), raw_diagnostics=diagnostics)
+    assert len(diagnostics) == 1
+    entry = diagnostics[0]
+    assert entry["case_id"] == "doctor_visit"
+    assert entry["entities"] and entry["entities"][0]["label"] == "Кириченко Сергей Александрович"
+    assert entry["atoms"]
+    assert entry["compiled_edges"]
+    assert entry["rejected"] == []
+    assert entry["split_lineage"] == []
+
+
+def test_raw_diagnostics_default_to_none_and_add_no_overhead():
+    """По умолчанию (без `raw_diagnostics=`) поведение не меняется —
+    P7 строго opt-in."""
+    def fake_extract(text, *, domain, heading_path=(), model, keep_alive=None):
+        case = next(c for c in GOLDEN_CASES if c.text == text)
+        return _perfect_extraction(case)
+
+    report = run_golden_benchmark(model="fake", extract_fn=fake_extract, stability_repeats=1,
+                                  cases=(_BY_ID["doctor_visit"],))
+    assert report.schema_stats.cases_total == 1
+
+
+def test_run_shadow_benchmark_has_no_raw_diagnostics_parameter():
+    """P7: для реального пользовательского корпуса raw diagnostics не
+    собираются НИКОГДА — проверяется структурно (сигнатура функции), не
+    «по умолчанию выключено», чтобы это нельзя было случайно включить."""
+    import inspect
+
+    assert "raw_diagnostics" not in inspect.signature(run_shadow_benchmark).parameters
+
+
 def test_failed_case_is_isolated_and_does_not_break_the_rest():
     def fake_extract(text, *, domain, heading_path=(), model, keep_alive=None):
         case = next(c for c in GOLDEN_CASES if c.text == text)
@@ -158,7 +201,7 @@ def test_cli_golden_prints_valid_json_report(monkeypatch, capsys):
     import helm_core.knowledge.semantic_benchmark as module
     import helm_core.knowledge.semantic_extract as extract_module
 
-    def fake_call_ollama(prompt, *, model, keep_alive=None):
+    def fake_call_ollama(prompt, *, model, keep_alive=None, **kwargs):
         return json.dumps({"entities": [], "atoms": [], "edges": []})
 
     monkeypatch.setattr(extract_module, "_call_ollama", fake_call_ollama)
@@ -172,6 +215,41 @@ def test_cli_golden_prints_valid_json_report(monkeypatch, capsys):
     assert printed["model"] == "fake-model"
     assert printed["schema_stats"]["cases_total"] == 1
     assert printed["metrics"]["cases_scored"] == 1
+
+
+def test_cli_golden_writes_raw_diagnostics_file_when_requested(monkeypatch, capsys, tmp_path):
+    """P7 (владелец 2026-09-04): `--raw-diagnostics-out` пишет отдельный
+    файл с сырыми entities/atoms/compiled_edges, не смешивая его с
+    печатаемым (aggregate-only) report'ом."""
+    import helm_core.knowledge.semantic_benchmark as module
+    import helm_core.knowledge.semantic_extract as extract_module
+
+    def fake_call_ollama(prompt, *, model, keep_alive=None, **kwargs):
+        # evidence_quote обязан быть дословной подстрокой окна
+        # (`no_knowledge`: «Документ сформирован автоматически...») —
+        # иначе `validate()` отбросит сущность как негрундированную.
+        return json.dumps({
+            "entities": [{"local_id": "e1", "entity_type": "ORGANIZATION", "label": "Документ",
+                         "evidence_quote": "Документ"}],
+            "atoms": [],
+        })
+
+    out_path = tmp_path / "raw.json"
+    monkeypatch.setattr(extract_module, "_call_ollama", fake_call_ollama)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["semantic_benchmark", "golden", "--model", "fake-model",
+         "--case", "no_knowledge", "--stability-repeats", "1",
+         "--raw-diagnostics-out", str(out_path)],
+    )
+    module.main()
+    printed = json.loads(capsys.readouterr().out)
+    assert "raw_diagnostics" not in printed, "report остаётся aggregate-only"
+
+    diagnostics = json.loads(out_path.read_text(encoding="utf-8"))
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["case_id"] == "no_knowledge"
+    assert diagnostics[0]["entities"][0]["label"] == "Документ"
 
 
 def test_golden_report_json_round_trip_survives_a_full_run():

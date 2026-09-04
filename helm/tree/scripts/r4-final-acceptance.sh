@@ -256,8 +256,18 @@ else
     python3 -m helm_core.knowledge.semantic_benchmark golden \
     --model "$MODEL" --keep-alive "0" --stability-repeats 3 \
     --git-sha "$GIT_SHA" --model-digest "$DIGEST" \
+    --raw-diagnostics-out /tmp/r4-raw-diagnostics.json \
     > "$TMP_OUT" 2> "$RUN_DIR/stderr.log"
   GOLDEN_RC=$?
+  # P7 (владелец 2026-09-04): synthetic-only raw diagnostics — забрать
+  # НЕЗАВИСИМО от исхода validate() ниже (упавший/malformed прогон —
+  # именно тот случай, где сырые entities/atoms/compiled_edges нужны
+  # больше всего, чтобы не гадать по агрегатным counters). Файл живёт
+  # только внутри контейнера (нет bind-mount на /opt/helm-state/benchmarks) —
+  # `docker compose cp` копирует его на хост тем же способом, что и любой
+  # другой артефакт контейнера.
+  sudo docker compose cp helm-core:/tmp/r4-raw-diagnostics.json \
+    "$RUN_DIR/raw_diagnostics.json" 2>/dev/null || true
   if [ "$GOLDEN_RC" -ne 0 ]; then
     echo "::error::golden benchmark завершился с кодом $GOLDEN_RC — см. $RUN_DIR/stderr.log"
   elif ! sudo docker compose exec -T helm-core \

@@ -441,6 +441,28 @@ _ABOUT_ATOM_KINDS = frozenset({"event", "fact", "decision", "concept"})
 #: involves — только для ABOUT, не для involves/has_role).
 _ABOUT_LOCATION_CONTEXT_MARKER_RE = re.compile(r"кабинет\w*|офис\w*|приёмн\w*", re.IGNORECASE)
 
+#: P5 (владелец 2026-09-04, precision-first после R4 RCA `fact_plain`):
+#: голого совпадения label концепта в evidence недостаточно — ABOUT
+#: требует явного textual evidence того, что атом ДЕЙСТВИТЕЛЬНО вводит
+#: тему/понятие/определение, а не того, что extractor решил назвать
+#: какой-то кусок текста CONCEPT. `atom.kind == "concept"` уже сам по
+#: себе такое доказательство (это и есть контракт SemanticNodeKind.CONCEPT
+#: — «описание понятия», см. `NODE_SYSTEM_PROMPT` в `semantic_extract.py`)
+#: — для него доп. маркер не нужен. Для остальных kind (event/fact/decision)
+#: требуем явный топикальный/дефиниционный оборот: предлог «о/об/про»,
+#: слово «тема/понятие/определение», либо «пример X» (см. GOLDEN_CASES
+#: `lecture_concept`: «привёл пример гиперинфляции» — fact-атом, тема
+#: вводится явно словом «пример», не голым упоминанием).
+_ABOUT_TOPIC_MARKER_RE = re.compile(
+    r"\bо\b|\bоб\b|\bпро\b|тем[а-я]*|понят[а-я]*|определени[а-я]*|пример[а-я]*",
+    re.IGNORECASE)
+
+
+def _has_about_topic_evidence(atom: ExtractedAtom, evidence: str) -> bool:
+    if atom.kind == "concept":
+        return True
+    return bool(_ABOUT_TOPIC_MARKER_RE.search(evidence))
+
 
 def _compile_about(atoms: Sequence[ExtractedAtom], entities: Sequence[ExtractedEntity],
                    ambiguous: frozenset[tuple[str, str]],
@@ -464,6 +486,8 @@ def _compile_about(atoms: Sequence[ExtractedAtom], entities: Sequence[ExtractedE
         if atom.kind not in _ABOUT_ATOM_KINDS:
             continue
         evidence = _atom_evidence(atom)
+        if not _has_about_topic_evidence(atom, evidence):
+            continue
         for concept in concepts:
             if concept.local_id in has_role_concepts:
                 continue
@@ -499,6 +523,24 @@ def _compile_about(atoms: Sequence[ExtractedAtom], entities: Sequence[ExtractedE
 
 _LOCATED_AT_ATOM_KINDS = frozenset({"event", "fact"})
 
+#: P4 (владелец 2026-09-04, remediation после R4 RCA run 241, B5): «если
+#: evidence/type combination противоречит контракту relation family — NO
+#: EDGE, не догадка». Контракт LOCATED_AT — физическое место САМОГО
+#: факта/события, не любое упоминание PLACE-сущности рядом с атомом; до
+#: этой правки PLACE-ветка (в отличие от ORGANIZATION-venue-ветки чуть
+#: ниже, у которой уже был `_has_venue_marker_before`) грундинг проверяла,
+#: но локативный контекст — нет, и мнимый PLACE (extractor присвоил
+#: entity_type=PLACE тому, что не место, но грундинг всё равно
+#: срабатывает по голому совпадению label) получал LOCATED_AT без единого
+#: locative-маркера. Симметрично уже принятому паттерну (venue-marker для
+#: ORGANIZATION, ownership-marker для owned subject) — не generic type
+#: coercion, а тот же класс evidence-контракта, что уже есть в этом файле.
+_LOCATIVE_PREPOSITION_RE = re.compile(r"в|во|на|у", re.IGNORECASE)
+
+
+def _has_locative_marker_before(evidence: str, label: str) -> bool:
+    return _has_marker_before(evidence, label, _LOCATIVE_PREPOSITION_RE, window_size=1)
+
 
 def _compile_located_at(atoms: Sequence[ExtractedAtom], entities: Sequence[ExtractedEntity],
                         ambiguous: frozenset[tuple[str, str]]) -> list[ExtractedEdge]:
@@ -518,6 +560,11 @@ def _compile_located_at(atoms: Sequence[ExtractedAtom], entities: Sequence[Extra
                 # «Дача X принадлежит Y» — X здесь предмет владения
                 # (owned_by, не auto-extractable), не место, где произошёл
                 # сам факт; найдено офлайн-сверкой с v3 `v3_family_property`.
+                continue
+            if not _has_locative_marker_before(evidence, place.label):
+                # Fail-close (P4): грундинг сам по себе не доказывает
+                # локативную роль — без «в/во/на/у» перед именем места
+                # это не контракт LOCATED_AT, NO EDGE, а не догадка.
                 continue
             edges.append(ExtractedEdge(
                 from_local_id=atom.local_id, relation_type=SemanticRelationType.LOCATED_AT.value,

@@ -18,8 +18,21 @@ import difflib
 import re
 from dataclasses import dataclass, field
 
+from ..models.base import AUTO_EXTRACTABLE_RELATIONS_V1
 from .semantic_benchmark_fixtures import ForbiddenEdge, GoldAtom, GoldEntity, GoldenCase
 from .semantic_extract import ExtractedAtom, ExtractedEdge, ExtractedEntity, WindowExtraction
+
+#: R4.7 P6 (владелец 2026-09-04, R4 RCA `lecture_concept`: подтверждённый
+#: evaluator-дефект, не fixture-дефект) — production-путь с R4.7 оценивает
+#: ИМЕННО compiler-driven extraction (`relation_compiler.py`), а
+#: `RELATED_TO` сознательно исключён из `AUTO_EXTRACTABLE_RELATIONS_V1`
+#: (owner decision, `models/base.py`): детерминированный compiler
+#: структурно не может произвести эту связь ни при каком качестве
+#: extraction. Golden-ожидание такого типа не редактируется (текст/
+#: сущности фикстуры остаются verbatim), но и не входит в
+#: `edges_gold_scoreable`/recall — иначе метрика штрафует compiler за
+#: то, что ему запрещено производить.
+_AUTO_EXTRACTABLE_RELATION_VALUES = frozenset(rt.value for rt in AUTO_EXTRACTABLE_RELATIONS_V1)
 
 ENTITY_MATCH_THRESHOLD = 0.6
 ATOM_MATCH_THRESHOLD = 0.5
@@ -334,6 +347,7 @@ def evaluate_case(case: GoldenCase, extraction: WindowExtraction) -> CaseScore:
     scoreable_gold_edges = [
         edge for edge in case.edges
         if edge.from_ref in ref_to_local_id and edge.to_ref in ref_to_local_id
+        and edge.relation_type in _AUTO_EXTRACTABLE_RELATION_VALUES
     ]
     score.edges_gold_scoreable = len(scoreable_gold_edges)
 

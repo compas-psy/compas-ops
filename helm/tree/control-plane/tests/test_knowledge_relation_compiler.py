@@ -34,6 +34,35 @@ def test_registry_has_exactly_the_eight_mandated_types():
     assert SemanticRelationType.RELATED_TO not in AUTO_EXTRACTABLE_RELATIONS_V1
 
 
+def test_compile_relations_is_deterministic_across_repeated_calls():
+    """P9 (владелец 2026-09-04): «compiler deterministic replay» —
+    `_run_case()` полагается на этот инвариант живьём (два вызова на тех
+    же входах обязаны совпасть, иначе RuntimeError → FAIL), здесь он
+    проверяется офлайн, на плотном многотипном входе (сущности + атомы
+    всех auto-extractable семейств сразу), а не только на тривиальном
+    одном-двух объектах."""
+    entities = [
+        _entity("e1", "PERSON", "Смирнов Олег"),
+        _entity("e2", "PLACE", "кафе «Пушкинъ»"),
+        _entity("e3", "CONCEPT", "уролог"),
+        _entity("e4", "ORGANIZATION", "ООО «Ромашка»"),
+    ]
+    atoms = [
+        _atom("a1", "event", "Встреча состоялась в кафе «Пушкинъ» с участием Смирнова Олега."),
+        _atom("a2", "concept", "Уролог — врач, специализирующийся на болезнях мочеполовой системы."),
+        _atom("a3", "fact", "Смирнов Олег работает в ООО «Ромашка»."),
+        _atom("a4", "decision", "Из-за этого было решено перенести встречу."),
+    ]
+    first = compile_relations(entities, atoms, "")
+    second = compile_relations(entities, atoms, "")
+
+    def key(edges):
+        return sorted((e.from_local_id, e.relation_type, e.to_local_id, e.role) for e in edges)
+
+    assert key(first) == key(second)
+    assert len(first) > 0, "тест должен реально упражнять правила, не сравнивать два пустых списка"
+
+
 def test_is_mentioned_handles_russian_case_declension():
     """entity.label — нормализованный именительный падеж; evidence несёт
     исходный текст в падеже, требуемом грамматикой."""
@@ -119,6 +148,26 @@ class TestAbout:
         edges = compile_relations([concept], [atom])
         assert _edge_keys(edges) == {("a1", "about", "e1")}
 
+    def test_fact_atom_with_explicit_topic_marker_creates_about(self):
+        """Не только `kind == "concept"` доказывает тему — явный оборот
+        («пример X») в fact-атоме тоже (GOLDEN_CASES `lecture_concept`:
+        «привёл пример гиперинфляции» — fact, не concept)."""
+        atom = _atom("a2", "fact", "Лектор Соколов привёл пример гиперинфляции как крайней формы.")
+        concept = _entity("e3", "CONCEPT", "гиперинфляции")
+        edges = compile_relations([concept], [atom])
+        assert _edge_keys(edges) == {("a2", "about", "e3")}
+
+    def test_bare_mention_in_fact_atom_without_topic_marker_produces_no_about(self):
+        """P5 (владелец 2026-09-04, precision-first после R4 RCA
+        `fact_plain`): fact-атом, просто содержащий label CONCEPT-сущности
+        без единого топикального/дефиниционного оборота, не должен
+        автоматически становиться ABOUT — extractor мог назвать
+        CONCEPT произвольный кусок текста, это не доказывает, что атом
+        действительно про эту тему."""
+        atom = _atom("a1", "fact", "Рост курса доллара к концу года превысил ожидания аналитиков.")
+        concept = _entity("e1", "CONCEPT", "доллара")
+        assert compile_relations([concept], [atom]) == []
+
     def test_about_never_targets_organization_even_if_mentioned(self):
         """ORGANIZATION зарезервирована за involves — about на неё не
         порождается, иначе одна пара давала бы два типа сразу."""
@@ -135,6 +184,16 @@ class TestLocatedAt:
         place = _entity("e1", "PLACE", "кафе «Пушкинъ»")
         edges = compile_relations([place], [atom])
         assert _edge_keys(edges) == {("a1", "located_at", "e1")}
+
+    def test_place_grounded_without_locative_marker_produces_no_edge(self):
+        """P4 (владелец 2026-09-04, fail-close после R4 RCA B5): голого
+        совпадения label в evidence недостаточно для LOCATED_AT — без
+        предлога «в/во/на/у» непосредственно перед именем места это не
+        локативный контекст, а простое упоминание (например, тема
+        обсуждения), и правило обязано отказаться, а не угадать."""
+        atom = _atom("a1", "fact", "Мы обсуждали Казань на совещании.")
+        place = _entity("e1", "PLACE", "Казань")
+        assert compile_relations([place], [atom]) == []
 
     def test_located_at_never_targets_organization_without_venue_marker(self):
         """Без classifier-noun (ни перед именем, ни в самом label)

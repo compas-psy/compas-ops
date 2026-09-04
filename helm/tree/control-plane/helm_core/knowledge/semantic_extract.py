@@ -30,7 +30,7 @@ import logging
 import re
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from ..config import get_settings
 from ..models.base import (
@@ -64,6 +64,16 @@ MAX_REPAIR_ATTEMPTS = 3
 
 class ExtractionFailed(RuntimeError):
     """Окно не удалось разобрать после всех попыток."""
+
+
+class ExtractionTimedOut(ExtractionFailed):
+    """Транспортный таймаут вызова Ollama (P2, владелец 2026-09-04, R4 RCA
+    run 241: `long_dense_window` — 3 identical 120-секундных попытки подряд
+    дали 360.32с и 0 новой информации). При temperature=0 + fixed seed
+    идентичный повтор того же запроса — не починка, а гарантированный тот
+    же таймаут медленнее. Отличается от `ExtractionFailed` тем, что не
+    чинится repair-retry с тем же текстом окна — сигнал `extract_nodes_window()`
+    поделить окно и повторить на частях."""
 
 
 class WindowTruncated(RuntimeError):
@@ -172,6 +182,102 @@ RESPONSE_SCHEMA = {
     },
     "required": ["entities", "atoms", "edges"],
 }
+
+#: P1 (владелец 2026-09-04) — production-путь и final acceptance больше не
+#: просят модель за один вызов сразу entities+atoms+edges: relation_compiler.py
+#: уже единственный источник рёбер (`extraction.edges` модели перезаписывается
+#: в `_run_case()`/`run_shadow_benchmark()` целиком), значит просьба вернуть
+#: edges — не проверяемый контракт, а архитектурное противоречие и лишняя
+#: когнитивная нагрузка на модель. Схема без `edges` вовсе — не «edges:
+#: []», а отсутствие поля: модель не тратит внимание на связи, которые
+#: всё равно будут выброшены. `extract_window()` (со старой схемой, с
+#: edges) остаётся нетронутым — им пользуются только historical/
+#: experimental пути (`semantic_extract_c2.py`, `semantic_extract_twopass.py`)
+#: и их старые benchmark artifacts.
+#:
+#: `entity_type`/`kind` — strict enum прямо в схеме (не проверка постфактум
+#: в `validate()`, которая осталась той же для обоих путей): Ollama
+#: `format`-constrained decoding не даёт модели физически вернуть значение
+#: вне перечня. PERSON/ORGANIZATION/PLACE/CONCEPT — не новый список, а уже
+#: единственные 4 значения, встречающиеся во всём golden/frozen корпусе
+#: (проверено программно по semantic_benchmark_fixtures.py и
+#: relation_benchmark_v3_fixtures.py).
+_ENTITY_TYPES = ("PERSON", "ORGANIZATION", "PLACE", "CONCEPT")
+
+NODE_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "entities": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "local_id": {"type": "string"},
+                    "entity_type": {"type": "string", "enum": list(_ENTITY_TYPES)},
+                    "subtype": {"type": "string"},
+                    "label": {"type": "string"},
+                    "aliases": {"type": "array", "items": {"type": "string"}},
+                    "evidence_quote": {"type": "string"},
+                },
+                "required": ["local_id", "entity_type", "label", "evidence_quote"],
+            },
+        },
+        "atoms": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "local_id": {"type": "string"},
+                    "kind": {"type": "string", "enum": [
+                        SemanticNodeKind.EVENT.value, SemanticNodeKind.FACT.value,
+                        SemanticNodeKind.DECISION.value, SemanticNodeKind.CONCEPT.value,
+                    ]},
+                    "subtype": {"type": "string"},
+                    "title": {"type": "string"},
+                    "text": {"type": "string"},
+                    "occurred_at": {"type": "string"},
+                    "date_precision": {"type": "string"},
+                    "evidence_quote": {"type": "string"},
+                },
+                "required": ["local_id", "kind", "title", "text", "evidence_quote"],
+            },
+        },
+    },
+    "required": ["entities", "atoms"],
+}
+
+NODE_SYSTEM_PROMPT = (
+    "Ты — детерминированный извлекатель структурированных знаний из личного "
+    "архива владельца: здоровье, работа, покупки, обучение, встречи, проекты. "
+    "Работаешь с ОДНИМ фрагментом документа.\n\n"
+    "Верни объект с двумя списками.\n"
+    "entities — участники: люди, организации, места, понятия. У сущности "
+    "только личность: кто это, а не что с ним произошло. entity_type строго "
+    "один из четырёх:\n"
+    "PERSON = конкретный человек;\n"
+    "ORGANIZATION = организация/учреждение как субъект;\n"
+    "PLACE = физическое место/локация события;\n"
+    "CONCEPT = понятие, специальность, категория, термин.\n"
+    "atoms — отдельные утверждения из текста: EVENT (событие), FACT (факт), "
+    "DECISION (решение), CONCEPT (описание понятия). Одно утверждение — один "
+    "атом.\n\n"
+    "Правила, нарушать которые нельзя:\n"
+    "- пиши только то, что сказано в тексте буквально; не додумывай, не "
+    "оценивай, не советуй;\n"
+    "- даты пиши в occurred_at как ГГГГ-ММ-ДД, ГГГГ-ММ или ГГГГ и ставь "
+    "date_precision day/month/year; относительную дату («в прошлый вторник»), "
+    "которую не к чему привязать, оставь пустой с date_precision unknown — "
+    "выдумывать точную дату запрещено;\n"
+    "- local_id уникальны внутри этого ответа;\n"
+    "- у каждой сущности и атома заполняй evidence_quote — дословную цитату "
+    "из фрагмента (без пересказа и обобщения), которая доказывает именно эту "
+    "находку; цитата должна быть точной подстрокой фрагмента;\n"
+    "- служебный текст документа (колонтитул, номер страницы, штамп версии "
+    "шаблона, «не редактировать вручную» и подобное форматирование) не "
+    "несёт долговременного знания о владельце — по нему верни два пустых "
+    "списка, даже если формально это предложение с подлежащим и сказуемым;\n"
+    "- если во фрагменте нечего извлекать, верни два пустых списка."
+)
 
 #: Виды, которые модель может выдать за атом. DOCUMENT_REF/MEMORY_REF
 #: сюда не входят намеренно: это узлы-личности документа и памяти,
@@ -481,3 +587,147 @@ def extract_window(window_text: str, *, domain: str, heading_path: tuple[str, ..
             complaint = str(exc)
             logger.warning("окно не разобрано, попытка %d из %d: %s", attempt, attempts, exc)
     raise ExtractionFailed(f"не удалось разобрать окно за {attempts} попыток: {complaint}")
+
+
+#: P2 (владелец 2026-09-04) — на сколько уровней вглубь можно делить окно
+#: на transport timeout, прежде чем сдаться (не бесконечная рекурсия на
+#: патологическом единственном неразделимом предложении).
+MAX_SPLIT_DEPTH = 3
+
+#: Сколько символов хвоста предыдущего куска переносить в начало следующего
+#: при разбиении по предложениям — минимальный контекст для анафоры/
+#: продолжения мысли (P2: «минимальный overlap, если он нужен для
+#: сохранения соседнего контекста»). Только для sentence-split: абзацы
+#: обычно уже самодостаточные единицы контекста.
+SENTENCE_SPLIT_OVERLAP_CHARS = 80
+
+_PARAGRAPH_SPLIT_RE = re.compile(r"\n\s*\n")
+_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+(?=[A-ZА-ЯЁ«\"“])")
+
+
+def _split_paragraphs(text: str) -> list[str] | None:
+    """Границы абзацев — первый, самый дешёвый уровень деления (P2: «paragraph
+    boundary first»). `None`, если делить некуда (один абзац)."""
+    parts = [p.strip() for p in _PARAGRAPH_SPLIT_RE.split(text) if p.strip()]
+    return parts if len(parts) > 1 else None
+
+
+def _split_sentences(text: str) -> list[str] | None:
+    """Второй уровень (P2: «sentence boundary second»), с overlap-хвостом
+    предыдущего предложения — без него ссылка вида «Из-за этого...» в
+    начале куска теряет контекст, на который ссылается."""
+    parts = [p.strip() for p in _SENTENCE_BOUNDARY_RE.split(text) if p.strip()]
+    if len(parts) <= 1:
+        return None
+    pieces = [parts[0]]
+    for prev, cur in zip(parts, parts[1:]):
+        # Хвост СТРОГО короче prev (не вся prev целиком) — иначе для
+        # короткого предыдущего предложения кусок с overlap воспроизводит
+        # исходный текст побайтово, и деление на timeout зацикливается на
+        # той же строке вместо прогресса.
+        overlap_len = min(SENTENCE_SPLIT_OVERLAP_CHARS, max(len(prev) - 1, 0))
+        tail = prev[-overlap_len:] if overlap_len else ""
+        pieces.append(f"{tail} {cur}" if tail else cur)
+    return pieces
+
+
+def _merge_node_extractions(parts: list[WindowExtraction]) -> WindowExtraction:
+    """Склеить результаты дочерних кусков в один `WindowExtraction` для
+    родительского окна. local_id из разных кусков — разные пространства
+    имён (модель нумерует их независимо в каждом вызове), поэтому
+    переименовываем с префиксом куска, а не полагаемся на совпадение.
+    Кто с кем одно лицо между кусками (в т.ч. дубликаты из overlap) —
+    решает разрешение сущностей (R6), не эта функция."""
+    merged = WindowExtraction()
+    for i, part in enumerate(parts):
+        prefix = f"p{i}_"
+        for e in part.entities:
+            merged.entities.append(replace(e, local_id=prefix + e.local_id))
+        for a in part.atoms:
+            merged.atoms.append(replace(a, local_id=prefix + a.local_id))
+        merged.rejected.extend(part.rejected)
+    return merged
+
+
+def _extract_nodes_once(window_text: str, *, domain: str, heading_path: tuple[str, ...],
+                        model: str, keep_alive: str | None, attempts: int) -> WindowExtraction:
+    """Один узел рекурсии `extract_nodes_window()`: repair-retry (P2:
+    «сохранить для malformed JSON, schema failure») на месте, без деления
+    текста. Transport timeout — не чинится повтором того же текста, сразу
+    поднимается `ExtractionTimedOut` вызывающему для деления."""
+    complaint: str | None = None
+    for attempt in range(1, attempts + 1):
+        prompt = _prompt(window_text, domain=domain, heading_path=heading_path,
+                         complaint=complaint)
+        try:
+            raw = _call_ollama(prompt, model=model, keep_alive=keep_alive,
+                               system=NODE_SYSTEM_PROMPT, response_schema=NODE_RESPONSE_SCHEMA)
+        except ExtractionFailed as exc:
+            if isinstance(exc.__cause__, TimeoutError):
+                raise ExtractionTimedOut(str(exc)) from exc
+            complaint = str(exc)
+            logger.warning("окно не разобрано (node-only), попытка %d из %d: %s",
+                           attempt, attempts, exc)
+            continue
+        try:
+            return validate(raw, window_text=window_text)
+        except WindowTruncated:
+            raise
+        except ExtractionFailed as exc:
+            complaint = str(exc)
+            logger.warning("окно не разобрано (node-only), попытка %d из %d: %s",
+                           attempt, attempts, exc)
+    raise ExtractionFailed(f"не удалось разобрать окно за {attempts} попыток: {complaint}")
+
+
+def extract_nodes_window(window_text: str, *, domain: str, heading_path: tuple[str, ...] = (),
+                         model: str = DEFAULT_MODEL, keep_alive: str | None = None,
+                         attempts: int = MAX_REPAIR_ATTEMPTS, _depth: int = 0,
+                         _lineage: list[dict] | None = None) -> WindowExtraction:
+    """P1/P2 (владелец 2026-09-04) — production/final-acceptance путь:
+    просит модель только entities+atoms (edges строит исключительно
+    `relation_compiler.py` — см. `NODE_RESPONSE_SCHEMA`), и на transport
+    timeout делит окно детерминированно (paragraph boundary → sentence
+    boundary, `MAX_SPLIT_DEPTH` уровней) вместо identical retry (R4 RCA
+    run 241: 3×120с подряд на `long_dense_window` не дали новой
+    информации). Результаты кусков склеиваются `_merge_node_extractions()`.
+    Не заменяет `extract_window()` — тот остаётся нетронутым для
+    historical/experimental путей.
+
+    `WindowTruncated` не ловится по тем же причинам, что у `extract_window()`.
+    Если делить уже некуда (один неразделимый абзац из одного предложения)
+    или глубина исчерпана — исключение уходит наверх: coverage contract
+    требует явный провал, не тихую потерю содержимого.
+
+    `_lineage` (P7, владелец 2026-09-04) — необязательный out-параметр:
+    если передан список, в него добавляются записи о каждом узле рекурсии
+    (глубина/длина/исход), БЕЗ единого символа самого текста окна — это
+    метаданные разбиения, не содержимое. Используется только
+    `run_golden_benchmark()` для synthetic-only diagnostics (P7);
+    `run_shadow_benchmark()` этот параметр не передаёт вовсе."""
+    try:
+        result = _extract_nodes_once(window_text, domain=domain, heading_path=heading_path,
+                                     model=model, keep_alive=keep_alive, attempts=attempts)
+        if _lineage is not None:
+            _lineage.append({"depth": _depth, "window_chars": len(window_text), "outcome": "ok"})
+        return result
+    except ExtractionTimedOut:
+        if _depth >= MAX_SPLIT_DEPTH:
+            if _lineage is not None:
+                _lineage.append({"depth": _depth, "window_chars": len(window_text),
+                                 "outcome": "timeout_depth_exhausted"})
+            raise
+        pieces = _split_paragraphs(window_text) or _split_sentences(window_text)
+        if pieces is None:
+            if _lineage is not None:
+                _lineage.append({"depth": _depth, "window_chars": len(window_text),
+                                 "outcome": "timeout_unsplittable"})
+            raise
+        if _lineage is not None:
+            _lineage.append({"depth": _depth, "window_chars": len(window_text),
+                             "outcome": "timeout_split", "pieces": len(pieces)})
+        parts = [extract_nodes_window(piece, domain=domain, heading_path=heading_path,
+                                      model=model, keep_alive=keep_alive, attempts=attempts,
+                                      _depth=_depth + 1, _lineage=_lineage)
+                for piece in pieces]
+        return _merge_node_extractions(parts)

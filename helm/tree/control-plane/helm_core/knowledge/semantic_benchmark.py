@@ -14,7 +14,9 @@
     (health или нет, из какого source) решает вызывающий live-скрипт, не он.
 
 Golden-прогон (`run_golden_benchmark`) и shadow-прогон (`run_shadow_benchmark`)
-оба работают через РЕАЛЬНЫЙ `extract_window()` — не копию логики, иначе
+оба работают через РЕАЛЬНЫЙ `extract_nodes_window()` (P1, владелец
+2026-09-04: node-only production path — модель возвращает entities+atoms,
+edges строит исключительно `relation_compiler.py`) — не копию логики, иначе
 бенчмарк мерил бы не то, что окажется в production.
 """
 
@@ -28,6 +30,7 @@ import json
 import logging
 import statistics
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from . import semantic_extract as semantic_extract_module
@@ -35,7 +38,8 @@ from .relation_compiler import compile_relations
 from .semantic_benchmark_fixtures import GOLDEN_CASES, GoldenCase
 from .semantic_benchmark_metrics import AggregateMetrics, CaseScore, aggregate, evaluate_case
 from .semantic_extract import (
-    MAX_ATOMS_PER_WINDOW, ExtractionFailed, WindowExtraction, WindowTruncated, extract_window,
+    MAX_ATOMS_PER_WINDOW, ExtractedAtom, ExtractedEdge, ExtractedEntity, ExtractionFailed,
+    WindowExtraction, WindowTruncated, extract_nodes_window,
 )
 
 #: Представительное подмножество golden-кейсов для замера стабильности
@@ -128,8 +132,9 @@ def _extraction_signature(extraction: WindowExtraction) -> tuple:
 def _validate_structure(extraction: WindowExtraction) -> bool:
     """Защитный повторный контроль инвариантов схемы (R4 п.7, gate
     «validator/repair can publish malformed result»). При реальном пути
-    через `validate()` сработать не должен никогда — `extract_window()`
-    физически не может вернуть иное; это дублирующая проверка САМОГО
+    через `validate()` сработать не должен никогда — ни `extract_window()`,
+    ни `extract_nodes_window()` физически не могут вернуть иное (оба
+    проходят через ту же `validate()`); это дублирующая проверка САМОГО
     харнесса, а не признак того, что production-путь её не делает."""
     for e in extraction.entities:
         if not e.local_id or not e.label or not e.entity_type:
@@ -142,7 +147,46 @@ def _validate_structure(extraction: WindowExtraction) -> bool:
     return True
 
 
-def _run_case(case: GoldenCase, *, model: str, keep_alive: str | None, extract_fn) -> CaseRun:
+#: P7 (владелец 2026-09-04) — synthetic-only raw diagnostics: полные
+#: entities/atoms/compiled_edges/rejected/split_lineage конкретного golden
+#: run'а, чтобы упавший final acceptance можно было разобрать по точным
+#: mismatch, а не гадать по агрегатным счётчикам (см. R4 RCA data gap).
+#: НИКОГДА не заполняется для `run_shadow_benchmark()` (реальный
+#: пользовательский корпус) — тот вызов `_run_case`/`extract_fn` этот
+#: параметр не передаёт вовсе, не полагается на «не забыть выключить».
+def _entity_diagnostic(e: ExtractedEntity) -> dict:
+    return {"local_id": e.local_id, "entity_type": e.entity_type, "label": e.label,
+            "evidence_quote": e.evidence_quote}
+
+
+def _atom_diagnostic(a: ExtractedAtom) -> dict:
+    return {"local_id": a.local_id, "kind": a.kind, "text": a.text,
+            "evidence_quote": a.evidence_quote}
+
+
+def _edge_diagnostic(e: ExtractedEdge) -> dict:
+    return {"from_local_id": e.from_local_id, "relation_type": e.relation_type,
+            "to_local_id": e.to_local_id, "evidence_quote": e.evidence_quote}
+
+
+def _append_raw_diagnostic(raw_diagnostics: list[dict] | None, case_id: str,
+                           extraction: WindowExtraction | None = None,
+                           compiled_edges: Sequence[ExtractedEdge] = (),
+                           lineage: Sequence[dict] = ()) -> None:
+    if raw_diagnostics is None:
+        return
+    raw_diagnostics.append({
+        "case_id": case_id,
+        "entities": [_entity_diagnostic(e) for e in (extraction.entities if extraction else [])],
+        "atoms": [_atom_diagnostic(a) for a in (extraction.atoms if extraction else [])],
+        "compiled_edges": [_edge_diagnostic(e) for e in compiled_edges],
+        "rejected": list(extraction.rejected) if extraction else [],
+        "split_lineage": list(lineage),
+    })
+
+
+def _run_case(case: GoldenCase, *, model: str, keep_alive: str | None, extract_fn,
+             raw_diagnostics: list[dict] | None = None) -> CaseRun:
     handler_records: list[str] = []
 
     class _Capture(logging.Handler):
@@ -152,15 +196,20 @@ def _run_case(case: GoldenCase, *, model: str, keep_alive: str | None, extract_f
     logger = logging.getLogger("helm_core.knowledge.semantic_extract")
     capture = _Capture()
     logger.addHandler(capture)
+    lineage: list[dict] = []
+    extract_kwargs = {"_lineage": lineage} if (
+        raw_diagnostics is not None and extract_fn is extract_nodes_window) else {}
     t0 = time.monotonic()
     try:
         extraction = extract_fn(case.text, domain=case.domain, heading_path=case.heading_path,
-                                model=model, keep_alive=keep_alive)
+                                model=model, keep_alive=keep_alive, **extract_kwargs)
     except WindowTruncated as exc:
+        _append_raw_diagnostic(raw_diagnostics, case.case_id, lineage=lineage)
         return CaseRun(case_id=case.case_id, categories=case.categories, outcome="truncated",
                        latency_seconds=time.monotonic() - t0, repair_attempts=len(handler_records),
                        error=str(exc))
     except ExtractionFailed as exc:
+        _append_raw_diagnostic(raw_diagnostics, case.case_id, lineage=lineage)
         return CaseRun(case_id=case.case_id, categories=case.categories, outcome="failed",
                        latency_seconds=time.monotonic() - t0, repair_attempts=len(handler_records),
                        error=str(exc))
@@ -194,6 +243,8 @@ def _run_case(case: GoldenCase, *, model: str, keep_alive: str | None, extract_f
     extraction.edges = compiled_edges
 
     if not _validate_structure(extraction):
+        _append_raw_diagnostic(raw_diagnostics, case.case_id, extraction=extraction,
+                               compiled_edges=compiled_edges, lineage=lineage)
         return CaseRun(case_id=case.case_id, categories=case.categories, outcome="malformed",
                        latency_seconds=latency, repair_attempts=len(handler_records),
                        error="структурный инвариант нарушен после validate()",
@@ -202,6 +253,8 @@ def _run_case(case: GoldenCase, *, model: str, keep_alive: str | None, extract_f
 
     score = evaluate_case(case, extraction)
     outcome = "no_knowledge" if extraction.is_empty else "processed"
+    _append_raw_diagnostic(raw_diagnostics, case.case_id, extraction=extraction,
+                           compiled_edges=compiled_edges, lineage=lineage)
     return CaseRun(case_id=case.case_id, categories=case.categories, outcome=outcome,
                    latency_seconds=latency, repair_attempts=len(handler_records), score=score,
                    proposed_edges_count=proposed_edges_count, compiled_edges_count=len(compiled_edges))
@@ -231,12 +284,22 @@ class GoldenBenchmarkReport:
 
 
 def run_golden_benchmark(*, model: str, keep_alive: str | None = None,
-                         extract_fn=extract_window, stability_repeats: int = 3,
-                         cases: tuple[GoldenCase, ...] = GOLDEN_CASES) -> GoldenBenchmarkReport:
+                         extract_fn=extract_nodes_window, stability_repeats: int = 3,
+                         cases: tuple[GoldenCase, ...] = GOLDEN_CASES,
+                         raw_diagnostics: list[dict] | None = None) -> GoldenBenchmarkReport:
+    """`raw_diagnostics` (P7, владелец 2026-09-04): передай пустой список,
+    чтобы получить per-case entities/atoms/compiled_edges/rejected/
+    split_lineage synthetic golden-корпуса (см. `_append_raw_diagnostic`)
+    — НЕ хранится в `GoldenBenchmarkReport`/`R4_FINAL_ACCEPTANCE.json`,
+    только в этом отдельном списке, вызывающий код сам решает, куда его
+    писать. `run_shadow_benchmark()` этот параметр не принимает вовсе —
+    для реального пользовательского корпуса сырые diagnostics не
+    собираются НИКОГДА, не «выключены по умолчанию»."""
     runs: list[CaseRun] = []
     schema = SchemaStats(cases_total=len(cases))
     for case in cases:
-        run = _run_case(case, model=model, keep_alive=keep_alive, extract_fn=extract_fn)
+        run = _run_case(case, model=model, keep_alive=keep_alive, extract_fn=extract_fn,
+                        raw_diagnostics=raw_diagnostics)
         runs.append(run)
         if run.outcome == "failed":
             schema.failed_cases += 1
@@ -340,7 +403,7 @@ class ShadowBenchmarkReport:
 
 def run_shadow_benchmark(samples: list[ShadowWindowSample], *, model: str,
                          keep_alive: str | None = None,
-                         extract_fn=extract_window) -> ShadowBenchmarkReport:
+                         extract_fn=extract_nodes_window) -> ShadowBenchmarkReport:
     """Операционный прогон на реальных окнах: считает ТОЛЬКО поведение
     (успех схемы/латентность/счётчики), не «правильность» — для реального
     корпуса нет заранее известного gold, и выдавать самопорождённый ответ
@@ -513,14 +576,24 @@ def _cli_golden(args: argparse.Namespace) -> None:
         missing = set(args.case) - {c.case_id for c in cases}
         if missing:
             raise SystemExit(f"неизвестные case_id: {sorted(missing)}")
+    # P7 (владелец 2026-09-04): raw diagnostics — отдельный файл, НЕ поле
+    # печатаемого report'а — R4 п.2Б требует, чтобы result.json (и всё,
+    # что попадёт в R4_FINAL_ACCEPTANCE.json) оставался только агрегатом;
+    # сырые entities/atoms/compiled_edges существуют исключительно для
+    # синтетического golden-корпуса и только если явно запрошены флагом.
+    raw_diagnostics: list[dict] | None = [] if args.raw_diagnostics_out else None
     report = run_golden_benchmark(model=args.model, keep_alive=args.keep_alive,
-                                  stability_repeats=args.stability_repeats, cases=cases)
+                                  stability_repeats=args.stability_repeats, cases=cases,
+                                  raw_diagnostics=raw_diagnostics)
     data = golden_report_to_dict(report)
     if args.git_sha and args.model_digest:
         data["fingerprint"] = compute_fingerprint(
             git_sha=args.git_sha, model_tag=args.model, model_digest=args.model_digest,
             keep_alive=args.keep_alive, run_id=args.run_id or "")
     print(json.dumps(data, ensure_ascii=False, indent=2))
+    if args.raw_diagnostics_out:
+        with open(args.raw_diagnostics_out, "w", encoding="utf-8") as f:
+            json.dump(raw_diagnostics, f, ensure_ascii=False, indent=2)
 
 
 def main() -> None:
@@ -537,6 +610,10 @@ def main() -> None:
                         help="Вместе с --model-digest включает fingerprint в вывод (R4 п.4)")
     golden.add_argument("--model-digest", default=None)
     golden.add_argument("--run-id", default=None)
+    golden.add_argument("--raw-diagnostics-out", default=None,
+                        help="P7 (владелец 2026-09-04): путь для synthetic-only raw "
+                             "diagnostics (entities/atoms/compiled_edges/rejected/split_lineage "
+                             "по каждому golden case) — НИКОГДА не для реального корпуса")
 
     fingerprint = sub.add_parser("fingerprint",
                                  help="Только fingerprint, без обращения к Ollama (для решения reuse/new-run)")
