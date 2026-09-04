@@ -13,7 +13,12 @@ BASE_DIR=/opt/helm-state/benchmarks/r4-final-acceptance
 echo "############ ЛИСТИНГ ############"
 sudo find "$BASE_DIR" -type f -printf '%s\t%p\n' 2>/dev/null | sort -k2
 
-RUN_DIR=$(sudo find "$BASE_DIR" -maxdepth 1 -type d -name 'qwen2_5_7b-*' | sort | tail -1)
+# По времени изменения, а не по алфавиту: имя каталога — это отпечаток
+# конфигурации, и новый прогон запросто сортируется РАНЬШЕ старых
+# (`21ebf099…` < `e076787b…`). Алфавитный выбор молча отдал бы артефакты
+# предыдущего прогона под видом свежих.
+RUN_DIR=$(sudo find "$BASE_DIR" -maxdepth 1 -type d -name 'qwen2_5_7b-*' -printf '%T@\t%p\n' \
+          | sort -n | tail -1 | cut -f2-)
 echo
 echo "############ RUN_DIR: $RUN_DIR ############"
 
