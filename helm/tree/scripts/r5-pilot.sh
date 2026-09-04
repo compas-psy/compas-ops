@@ -49,8 +49,10 @@ sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.semantic_pi
 RC=$?
 
 if [ "$RC" -eq 0 ]; then
-  CID=$(sudo docker compose ps -q helm-core)
-  sudo docker cp "$CID:/tmp/r5-pilot.json" "$OUT_DIR/$RUN_ID.json" 2>/dev/null \
+  # Тот же способ, которым r4-final-acceptance.sh забирает свой
+  # raw_diagnostics.json: по имени сервиса, а не по id контейнера —
+  # проверено живыми прогонами.
+  sudo docker compose cp helm-core:/tmp/r5-pilot.json "$OUT_DIR/$RUN_ID.json" \
     && echo "отчёт: $OUT_DIR/$RUN_ID.json" \
     || echo "отчёт не забран из контейнера (сам прогон при этом отработал)"
 fi
