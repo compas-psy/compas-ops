@@ -366,6 +366,44 @@ class SemanticRelationType(enum.StrEnum):
     RELATED_TO = "related_to"
 
 
+#: R4.7 (владелец 03.09.2026) — «R4.6 research CLOSED», production
+#: архитектура: local semantic extractor → nodes/atoms, deterministic
+#: relation compiler → trusted edges. Полный реестр 15 типов выше
+#: НЕ сокращается — это по-прежнему единственный закрытый список
+#: значений `knowledge_edges.relation_type`. Но автоматически (без
+#: участия владельца) сейчас порождаются только эти 8 — каждый
+#: реализован детерминированным правилом с explicit evidence,
+#: endpoint grounding, direction contract и provenance
+#: (`helm_core/knowledge/relation_compiler.py`).
+#:
+#: `RELATED_TO` НЕ входит намеренно: владелец явно запретил его как
+#: fallback для сомнительной/неизвестной связи — «Неизвестный/сомнительный
+#: relation → NO EDGE», не понижение до RELATED_TO (это меняет и старое
+#: поведение `semantic_extract.py::validate()`, см. его docstring и
+#: R4.6.F1.2-ому предку — тот код остаётся для чужого, LLM-edges пути,
+#: но production-путь через compiler в RELATED_TO никогда не понижает).
+AUTO_EXTRACTABLE_RELATIONS_V1: frozenset[SemanticRelationType] = frozenset({
+    SemanticRelationType.INVOLVES,
+    SemanticRelationType.HAS_ROLE,
+    SemanticRelationType.ABOUT,
+    SemanticRelationType.LOCATED_AT,
+    SemanticRelationType.REASON_FOR,
+    SemanticRelationType.RESULTED_IN,
+    SemanticRelationType.SUPPORTS,
+    SemanticRelationType.DERIVED_FROM,
+})
+
+#: Остальные 7 — PART_OF, CREATED_BY, OWNED_BY, CONTRADICTS, SUPERSEDES,
+#: REFERS_TO, RELATED_TO — остаются в реестре (граф способен их хранить
+#: и обходить), но `auto_extractable=false`: ни LLM, ни deterministic
+#: compiler их не порождают. Единственный источник — owner-explicit
+#: (`SemanticEvidenceType.OWNER_EXPLICIT`, §14.9) или будущий отдельный
+#: детерминированный источник, заведённый отдельным owner decision.
+NOT_AUTO_EXTRACTABLE_RELATIONS_V1: frozenset[SemanticRelationType] = (
+    frozenset(SemanticRelationType) - AUTO_EXTRACTABLE_RELATIONS_V1
+)
+
+
 class SemanticWindowStatus(enum.StrEnum):
     """§14.4.1 `knowledge_semantic_windows.status`.
 
