@@ -1,0 +1,234 @@
+{
+  "run_id": "r4final-20260904T072754Z",
+  "workflow_run": "https://github.com/compas-psy/compas-ops/actions/runs/33848827917",
+  "git_sha": "ddaa419be04f601106c68afc20a7f8c1b18d99a6",
+  "model": "qwen2.5:7b",
+  "model_digest": "845dbda0ea48",
+  "overall_pass": false,
+  "hard_gate_violations_as_reported": [
+    "failed_cases = 1 (processed-window coverage < 100%)",
+    "processed-window coverage = 95.2% (требуется 100%)",
+    "relation precision on labeled edges = 70.0% (требуется >= 90%)",
+    "critical expected entity/event recall = 85.2% (требуется >= 90%)"
+  ],
+  "note": "первые два пункта — одна и та же причина (1 failed case), названная дважды двумя метриками одного факта. По существу нарушений три: coverage, relation precision, critical recall.",
+  "structural_checks": {
+    "compiler_is_sole_edge_source": "PASS",
+    "zero_cloud_relation_extraction": "PASS",
+    "non_vacuous_run": "PASS",
+    "note": "R4.7 compiler wiring и zero-cloud invariant не под вопросом — все три нарушения ниже относятся к качеству pass1-извлечения и/или скоринга, не к тому, что скомпилировано не то, что должно."
+  },
+  "blockers": [
+    {
+      "id": "B1",
+      "gate": "processed-window coverage",
+      "case_id": "long_dense_window",
+      "summary": "Единственное упавшее окно — самый плотный кейс корпуса (6 сущностей, 7 атомов, 9 рёбер, 9 категорий) — извлечение не завершилось за 3 попытки.",
+      "evidence": {
+        "outcome": "failed",
+        "error": "не удалось разобрать окно за 3 попыток: извлекатель недоступен: timed out",
+        "repair_attempts": 3,
+        "latency_seconds": 360.3221935170004,
+        "arithmetic_check": "360.32с ≈ 3 × REQUEST_TIMEOUT(120с, semantic_extract.py:45) — все 3 попытки упёрлись в HTTP-таймаут по отдельности, ни одна не вернула валидный JSON",
+        "stderr_log": "пуст (0 байт) — сверх error-строки в result.json дополнительной трассировки нет"
+      },
+      "classification": "WINDOWING/RETRY",
+      "confidence": "HIGH",
+      "reasoning": "Таймаут фиксированный (120с/попытка) и не масштабируется по объёму ожидаемого JSON-ответа; окно объективно самое тяжёлое в корпусе. Это не свойство конкретной модели (любая модель с сопоставимой скоростью упрётся в тот же потолок на этом окне), а свойство harness-политики ретраев.",
+      "gates_it_would_fix_if_resolved": ["processed-window coverage (→100%)", "failed_cases (→0)"],
+      "gates_it_would_NOT_automatically_fix": [
+        "critical expected entity/event recall — этот кейс СЕЙЧАС исключён из числителя И знаменателя (score=None не попадает в aggregate()); включение добавит 6 critical entities + 3 critical atoms = 9 новых critical items в знаменатель. Если качество извлечения на этом самом сложном окне окажется хуже среднего (правдоподобно для самого плотного кейса), recall может и УПАСТЬ после починки coverage, а не вырасти."
+      ],
+      "minimal_remediation_proposed": "Не выбирать сейчас (нужно owner decision) — варианты: (a) увеличить REQUEST_TIMEOUT пропорционально длине окна/ожидаемому числу сущностей, (b) предварительно разбивать окна выше порога плотности на подокна до вызова extract_window(). Оба — изменение semantic_extract.py, не relation_compiler.py."
+    },
+    {
+      "id": "B2",
+      "gate": "critical expected entity/event recall",
+      "case_id": "organization_fact",
+      "summary": "Один из двух критичных объектов текста («Иванова Мария», PERSON или «ООО «Ромашка»», ORGANIZATION) не извлечён вовсе.",
+      "evidence": {
+        "text": "Иванова Мария работает менеджером по продажам в ООО «Ромашка». Трудовой договор подписан в 2023 году.",
+        "gold_critical_entities": ["e1 PERSON Иванова Мария", "e2 ORGANIZATION ООО «Ромашка»"],
+        "entities_gold": 2, "entities_matched": 1, "critical_entities_gold": 2, "critical_entities_matched": 1,
+        "notes_in_result_json": []
+      },
+      "classification": "EXTRACTOR",
+      "confidence": "MEDIUM",
+      "reasoning": "Один из двух объектов текста не найден. GoldenBenchmarkReport не хранит сырые extraction.entities — какой именно (PERSON или ORGANIZATION) пропущен, программно не восстановить из текущих артефактов.",
+      "data_gap": "нужна сырая WindowExtraction (entities с evidence_quote) этого кейса, чтобы назвать конкретный пропущенный объект и его гипотетическую причину.",
+      "minimal_remediation_proposed": "Не применимо без диагностики (см. §7 отчёта)."
+    },
+    {
+      "id": "B3",
+      "gate": "critical expected entity/event recall",
+      "case_id": "date_year",
+      "summary": "Единственная критичная сущность (PLACE «Казань») и единственный критичный атом полностью пропущены; вместо них извлечён посторонний объект.",
+      "evidence": {
+        "text": "В 2023 году компания открыла новый филиал в Казани.",
+        "gold": {"entity": "e1 PLACE Казань (critical)", "atom": "a1 event ... (critical)"},
+        "entities_matched": 0, "entities_extracted_extra": 1, "entity_type_correct": 0,
+        "atoms_matched": 0, "critical_atoms_gold": 1, "critical_atoms_matched": 0
+      },
+      "classification": "EXTRACTOR",
+      "confidence": "HIGH",
+      "reasoning": "Полный промах по единственному факту короткого предложения: вместо «Казань»(PLACE) извлечён другой, неверно типизированный объект (правдоподобно «компания»/«филиал», но не подтверждено сырыми данными). Компилятор здесь ни при чём — извлечённых верных entities/atoms для него не было.",
+      "minimal_remediation_proposed": "Изолированный офлайн-прогон этого одного case_id с сохранением сырого WindowExtraction — самый дешёвый способ подтвердить гипотезу без нового полного acceptance run."
+    },
+    {
+      "id": "B4",
+      "gate": "critical expected entity/event recall",
+      "case_id": "same_label_different_entities",
+      "summary": "Обе сущности-омонима («Иванов» ×2) правильно разрешены (entities_matched=2/2) — дизамбигуация сработала. Пропущен только первый критичный атом (событие приёма).",
+      "evidence": {
+        "text": "Приём вёл терапевт Иванов. Позже документы по этому визиту подписал юрист Иванов из страховой компании.",
+        "gold_critical_atom_missed": "a1 event «Приём вёл терапевт Иванов.»",
+        "entities_matched": 2, "atoms_matched": 1, "atoms_gold": 2, "critical_atoms_matched": 0,
+        "edges_gold_scoreable": 1, "edges_matched": 1
+      },
+      "classification": "EXTRACTOR",
+      "confidence": "HIGH",
+      "reasoning": "entities_matched=2/2 доказывает, что same-label disambiguation (проверенная офлайн ранее в этой сессии) на живом прогоне сработала. Пропуск — на уровне pass1 atom-извлечения первого предложения, не на уровне компилятора или дизамбигуации.",
+      "minimal_remediation_proposed": "Не применимо без диагностики."
+    },
+    {
+      "id": "B5",
+      "gate": ["relation precision", "critical expected entity/event recall (non-critical entity here, но влияет на relation gate)"],
+      "case_id": "place_event",
+      "summary": "PLACE-сущность «кафе «Пушкинъ»» найдена (grounded) с НЕВЕРНЫМ entity_type; из-за этого LOCATED_AT не скомпилирован (recall-потеря), а вместо него скомпилировано другое, неверное ребро (precision-потеря).",
+      "evidence": {
+        "text": "Встреча с друзьями состоялась в кафе «Пушкинъ» 5 сентября 2026 года.",
+        "gold_edge_missing": "a1 located_at e1",
+        "entities_matched": 1, "entity_type_correct": 0,
+        "edges_gold_scoreable": 1, "edges_matched": 0, "edges_extracted_extra": 1
+      },
+      "classification": "EXTRACTOR",
+      "confidence": "HIGH",
+      "reasoning": "relation_compiler.py реализует collision-free type-partition: каждый ENTITY type — легальная конечная точка ровно одного семейства auto-extractable-связей по умолчанию. Верно сгруундированная, но неверно типизированная сущность направляется компилятором в ДРУГОЕ семейство правил — компилятор ведёт себя ровно так, как спроектирован, на некорректном входе.",
+      "minimal_remediation_proposed": "Не применимо без диагностики — но паттерн («matched, entity_type_correct=0») уже сам по себе достаточен для классификации; правкой ждёт либо pass1 промпт/схему (дисциплина типов для венью-подобных PLACE), либо (owner decision) type-tolerant fallback в компиляторе."
+    },
+    {
+      "id": "B6",
+      "gate": ["relation precision", "recall (non-critical entity)"],
+      "case_id": "concept_medical_specialty",
+      "summary": "Тот же паттерн, что B5: CONCEPT-сущность «уролог» найдена с неверным entity_type → ABOUT не скомпилирован.",
+      "evidence": {
+        "text": "Уролог — врач, специализирующийся на заболеваниях мочеполовой системы. Также специальность называют урологией.",
+        "gold_edge_missing": "a1 about e1",
+        "entities_matched": 1, "entity_type_correct": 0, "aliases_applicable": 1, "aliases_correct": 0,
+        "edges_gold_scoreable": 1, "edges_matched": 0, "compiled_edges_count": 0
+      },
+      "classification": "EXTRACTOR",
+      "confidence": "HIGH",
+      "reasoning": "Идентичный B5 паттерн (matched + wrong type → компилятор не выдаёт ожидаемое семейство). compiled_edges_count=0 (не просто неверное ребро, а полное отсутствие) согласуется с тем, что неверный тип вывел сущность из CONCEPT-области действия _compile_about().",
+      "minimal_remediation_proposed": "См. B5 — тот же класс дефекта, вероятно общая причина в pass1 typing на редких/специфических entity_type (CONCEPT, PLACE-как-venue)."
+    },
+    {
+      "id": "B7",
+      "gate": ["relation precision", "relation recall (не гейтится напрямую)"],
+      "case_id": "typed_relations_variety",
+      "summary": "2 golden-рёбер не найдены (a2 resulted_in a3; a4 involves e2), при этом компилятор выдал БОЛЬШЕ рёбер, чем модель предложила (proposed=2 → compiled=3).",
+      "evidence": {
+        "text": "Смирнов Олег отвечает за раздел «Регионы». Из-за высокой нагрузки Смирнов Олег попросил помощника. В результате скорость подготовки отчётов выросла. Данные Петровой Анны подтверждают этот вывод.",
+        "notes": ["связь не найдена: a2 resulted_in a3", "связь не найдена: a4 involves e2"],
+        "entities_matched": 2, "edges_gold_scoreable": 3, "edges_matched": 1, "edges_extracted_extra": 2,
+        "proposed_edges_count": 2, "compiled_edges_count": 3
+      },
+      "classification": "AMBIGUOUS — не менее 1 из 2 лишних рёбер компилятор-attributable (compiled > proposed), но по какому конкретно правилу и что именно пропущено на уровне atom-грундинга — без сырых данных не восстановить.",
+      "confidence": "LOW",
+      "reasoning": "compiled(3) > proposed(2) доказывает, что минимум одно ребро — синтез компилятора сверх предложенного моделью, а не пропуск экстрактора. Обратное (2 пропущенных gold-ребра) требует знать, были ли a2/a3/a4 вообще извлечены как атомы — этого в result.json нет.",
+      "data_gap": "нужна сырая WindowExtraction + список скомпилированных рёбер с evidence_quote, чтобы отделить extractor-miss от compiler-over-fire.",
+      "minimal_remediation_proposed": "Не применимо без диагностики."
+    },
+    {
+      "id": "B8",
+      "gate": ["relation recall (не гейтится напрямую, критичных сущностей это не касается)"],
+      "case_id": "provocative_no_relation_invention",
+      "summary": "Оба golden-INVOLVES ребра от атома a3 («Они не участвуют в одних и тех же проектах.») к обеим сущностям пропущены, хотя обе сущности сматчены.",
+      "evidence": {
+        "text": "В отчёте упомянуты два сотрудника: Кузнецов Игорь работает в отделе продаж, а Волкова Елена — в отделе кадров. Они не участвуют в одних и тех же проектах.",
+        "atom_a3_text": "Они не участвуют в одних и тех же проектах.",
+        "notes": ["связь не найдена: a3 involves e1", "связь не найдена: a3 involves e2"],
+        "entities_matched": 2, "edges_gold_scoreable": 4, "edges_matched": 2,
+        "fabricated_relations": 0
+      },
+      "classification": "COMPILER",
+      "confidence": "MEDIUM",
+      "reasoning": "evidence_quote атома a3 использует местоимение «Они», а не повторяет имена сущностей — relation_compiler.py грундит INVOLVES через literal label-matching (is_mentioned()/_label_words()), не через анафору/coreference. Это архитектурный пробел, не баг конкретного правила: местоимённая ссылка структурно не резолвится текущим label-based подходом. Разрешение сущностей и анафоры уже явно вынесено в отдельную будущую фазу R5-трека (task #51 «R6 — Markdown v2 и разрешение сущностей»), т.е. это ожидаемая, а не случайная граница R4.7 compiler scope.",
+      "minimal_remediation_proposed": "Осознанное владельческое решение: считать анафору вне scope R4.7 (тогда это не «дефект», а известная граница) либо расширять компилятор — оба варианта требуют отдельного owner decision, не входят в текущий root-cause-only мандат."
+    },
+    {
+      "id": "B9",
+      "gate": ["relation recall (не гейтится напрямую)"],
+      "case_id": "provocative_no_fact_invention",
+      "summary": "Единственное golden-ребро (a1 involves e1) пропущено, при этом обе конечные точки (e1 сущность, a1 атом) сматчены.",
+      "evidence": {
+        "text": "В списке участников значится Соколов Артём. Подробности его роли в документе не указаны.",
+        "notes": ["связь не найдена: a1 involves e1"],
+        "entities_matched": 1, "atoms_matched": 1, "edges_gold_scoreable": 1, "edges_matched": 0
+      },
+      "classification": "COMPILER",
+      "confidence": "LOW",
+      "reasoning": "Обе конечные точки сматчены (сгруундированы) — то есть у компилятора БЫЛ корректный вход, но ожидаемое ребро не выдано. Это указывает на компилятор (правило не сработало на корректных данных), но без сырого evidence_quote/kind атома a1 нельзя назвать, какое именно условие правила (proximity, marker-исключение, atom kind) не совпало.",
+      "data_gap": "нужен точный kind/evidence_quote атома a1 и то, сработало ли какое-то из marker-исключений (_has_venue_marker_before, _has_ownership_marker_near и т.п.) ошибочно.",
+      "minimal_remediation_proposed": "Целевой офлайн unit-test relation_compiler.py именно на этом предложении — дёшево, не требует live run."
+    },
+    {
+      "id": "B10",
+      "gate": "relation precision",
+      "case_id": "fact_plain",
+      "summary": "Кейс без единой golden-сущности/ребра — модель предложила 1 ребро, компилятор его 1-в-1 пропустил дальше (без синтеза сверху).",
+      "evidence": {
+        "entities_gold": 0, "entities_extracted_extra": 1,
+        "edges_gold_scoreable": 0, "edges_extracted_extra": 1,
+        "proposed_edges_count": 1, "compiled_edges_count": 1
+      },
+      "classification": "EXTRACTOR",
+      "confidence": "HIGH",
+      "reasoning": "compiled == proposed ровно — компилятор здесь чистый passthrough, ничего не добавил. Лишняя сущность/ребро целиком từ pass1-галлюцинации.",
+      "minimal_remediation_proposed": "pass1 prompt-тюнинг на подавление фактов сверх текста в коротких/бедных окнах — отдельное owner decision, не сейчас."
+    },
+    {
+      "id": "B11",
+      "gate": ["relation precision", "relation recall (не гейтится напрямую)"],
+      "case_id": "lecture_concept",
+      "summary": "ПОДТВЕРЖДЁННЫЙ ДЕФЕКТ ФИКСТУРЫ/EVALUATOR: единственное пропущенное golden-ребро («e3 related_to e1») имеет relation_type=RELATED_TO — тип, СОЗНАТЕЛЬНО и явно исключённый из AUTO_EXTRACTABLE_RELATIONS_V1 (helm_core/models/base.py, owner decision, комментарий: «RELATED_TO НЕ входит намеренно... Неизвестный/сомнительный relation → NO EDGE, не понижение до RELATED_TO»). Детерминированный компилятор структурно НЕ МОЖЕТ произвести RELATED_TO — это не пропуск, а гарантированный, спроектированный NO-OP на любом входе.",
+      "evidence": {
+        "text": "На лекции по экономике рассматривалось понятие инфляции — устойчивого роста общего уровня цен. Лектор Соколов привёл пример гиперинфляции как крайней формы этого явления.",
+        "gold_edges": ["a1 about e1", "a2 involves e2", "a2 about e3", "e3 related_to e1"],
+        "missing_edge": "e3 related_to e1",
+        "entities_matched": 3, "edges_gold_scoreable": 4, "edges_matched": 3,
+        "corpus_wide_scan": "единственный такой gold-edge во всех 21 golden cases (37 gold edges всего, ровно 1 вне auto-extractable registry)"
+      },
+      "classification": "EVALUATOR/FIXTURE",
+      "confidence": "CONFIRMED",
+      "reasoning": "Не вопрос интерпретации: AUTO_EXTRACTABLE_RELATIONS_V1 не содержит RELATED_TO по явному owner decision, задокументированному прямо в коде. Golden fixture включает RELATED_TO-ребро как edges_gold_scoreable (обе точки сматчены) для прогона, который по контракту оценивает ИМЕННО compiler-driven pass — то есть эта golden-ожидание недостижимо by design, независимо от качества любой модели или компилятора.",
+      "measured_impact_if_fixed": "Если исключить нескомпилируемые relation_type из edges_gold_scoreable: relation_gold_scoreable 22→21, relation_recall 0.6364→0.6667 (метрика НЕ входит в перечень §14.18 нарушений выше). relation_precision (14/(14+6)=0.70) НЕ меняется — эта правка не переводит НИ ОДНО из трёх реальных нарушений в PASS. Т.е. дефект реален и подтверждён, но не является причиной текущего R4=BLOCKED.",
+      "minimal_remediation_proposed": "Не редактировать golden fixture (текст/сущности верны) — править методологию скоринга: исключать relation_type ∉ AUTO_EXTRACTABLE_RELATIONS_V1 из edges_gold_scoreable/recall для compiler-driven acceptance прогонов (semantic_benchmark_metrics.py), т.к. цель метрики — измерять то, что компилятор МОЖЕТ произвести. Требует отдельного owner decision (это правка кода оценки, не только данных)."
+    },
+    {
+      "id": "B12",
+      "gate": "relation precision",
+      "case_id": "lecture_concept",
+      "summary": "Помимо B11, компилятор синтезировал 2 ребра сверх предложенных моделью (proposed=3 → compiled=5), оба — лишние (edges_extracted_extra=2).",
+      "evidence": {
+        "entities_matched": 3, "atoms_extracted_extra": 2, "atom_kind_correct": "1/2 (среди сматченных атомов)",
+        "proposed_edges_count": 3, "compiled_edges_count": 5, "edges_extracted_extra": 2
+      },
+      "classification": "COMPILER",
+      "confidence": "MEDIUM",
+      "reasoning": "compiled(5) > proposed(3) — компилятор добавил рёбра, которых модель не предлагала, на входе с 3 верно сматченными сущностями (плотное окно с 3 сущностями + 2 экстра-галлюцинированными атомами) — правдоподобная почва для over-firing proximity-based правил (ABOUT/INVOLVES) на близко расположенных, но несвязанных сущностях.",
+      "data_gap": "нужны сырые compiled edges с evidence_quote, чтобы назвать конкретное сработавшее правило.",
+      "minimal_remediation_proposed": "Не применимо без диагностики."
+    }
+  ],
+  "harness_infra_findings": [
+    {
+      "id": "H1",
+      "summary": "R4_FINAL_ACCEPTANCE.json, result.json, fingerprint.json, resources-*.json — все валидны, полны, консистентны друг с другом и с локально пересчитанными агрегатами (relation_precision, critical_entity_event_recall, processed_window_coverage сверены программно и совпадают до 16 знака после запятой). stderr.log пуст (0 байт) — harness не пишет доп. трассировку сверх error-строки в CaseRun.",
+      "classification": "HARNESS/INFRA — нет находок, всё работает как спроектировано."
+    }
+  ],
+  "data_gaps_for_future_acceptance": [
+    "GoldenBenchmarkReport/CaseRun намеренно не хранит сырые entities/atoms/edges (R4 п.2Б) — это верно для zero-cloud/no-backfill гарантии, но делает невозможным edge-by-edge/entity-by-entity atribution постфактум (см. B2, B3(частично), B7, B9, B12). Для СЛЕДУЮЩЕГО acceptance run нужен privacy-safe диагностический слой: per-case JSON с {entities, atoms, compiled_edges} включая evidence_quote (уже присутствует на объектах в памяти — semantic_extract.py:80,92,101), без сырого текста источника за пределами golden fixtures (golden-тексты не приватны — это синтетический корпус, не реальные пользовательские данные, так что evidence_quote здесь не создаёт privacy-риска — этого не будет верно для будущих R5+ прогонов на реальных источниках, там нужна отдельная маскировка/redaction политика)."
+  ]
+}
