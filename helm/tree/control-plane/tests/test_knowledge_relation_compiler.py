@@ -77,6 +77,17 @@ class TestInvolves:
         edges = compile_relations([person], [atom])
         assert _edge_keys(edges) == {("a1", "involves", "e1")}
 
+    def test_shared_raw_numeral_across_entity_and_atom_ids_is_unambiguous(self):
+        """R4 EXIT FIX (владелец 2026-09-04): после исправления
+        `_validate_nodes()` entity и atom из одного окна могут получить
+        canonical id из одного и того же raw-номера ("e:1"/"a:1") —
+        компилятор обязан адресовать edge однозначно на каждый endpoint,
+        не путая их только потому, что raw-номер совпал."""
+        atom = _atom("a:1", "event", "приём Иванова")
+        person = _entity("e:1", "PERSON", "Иванов")
+        edges = compile_relations([person], [atom])
+        assert _edge_keys(edges) == {("a:1", "involves", "e:1")}
+
     def test_person_not_mentioned_in_this_atoms_evidence_creates_nothing(self):
         atom = _atom("a1", "event", "совещание отдела")
         person = _entity("e1", "PERSON", "Иванов")

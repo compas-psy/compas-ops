@@ -263,7 +263,15 @@ def evaluate_case(case: GoldenCase, extraction: WindowExtraction) -> CaseScore:
         ref_to_local_id[g.ref] = e.local_id
         if g.critical:
             score.critical_entities_matched += 1
-            if _normalize(g.label) != _normalize(e.label):
+            # Владелец, R4 EXIT FIX (2026-09-04): «идентификатор корректен,
+            # если exact match с gold.label ИЛИ любым gold.alias» — модель,
+            # выдавшая более полную форму имени из списка алиасов (напр.
+            # «ПАО Сбербанк» при gold.label="Сбербанк", alias="ПАО
+            # Сбербанк"), не портит идентификатор. Точное совпадение
+            # (`_normalize`), без fuzzy similarity — это отдельная,
+            # намеренно более мягкая проверка `aliases_correct` ниже.
+            valid_labels = {_normalize(g.label)} | {_normalize(a) for a in g.aliases}
+            if _normalize(e.label) not in valid_labels:
                 score.exact_identifier_corruptions += 1
                 score.notes.append(
                     f"{g.ref}: identifier corruption — gold={g.label!r} extracted={e.label!r}")

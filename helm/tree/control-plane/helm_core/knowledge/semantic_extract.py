@@ -196,12 +196,13 @@ RESPONSE_SCHEMA = {
 #: и их старые benchmark artifacts.
 #:
 #: `entity_type`/`kind` — strict enum прямо в схеме (не проверка постфактум
-#: в `validate()`, которая осталась той же для обоих путей): Ollama
-#: `format`-constrained decoding не даёт модели физически вернуть значение
-#: вне перечня. PERSON/ORGANIZATION/PLACE/CONCEPT — не новый список, а уже
-#: единственные 4 значения, встречающиеся во всём golden/frozen корпусе
-#: (проверено программно по semantic_benchmark_fixtures.py и
-#: relation_benchmark_v3_fixtures.py).
+#: в парсере): Ollama `format`-constrained decoding не даёт модели физически
+#: вернуть значение вне перечня. PERSON/ORGANIZATION/PLACE/CONCEPT — не новый
+#: список, а уже единственные 4 значения, встречающиеся во всём golden/frozen
+#: корпусе (проверено программно по semantic_benchmark_fixtures.py и
+#: relation_benchmark_v3_fixtures.py). Парсинг ответа — не `validate()`
+#: (владелец, R4 P10 2026-09-04): у node-only свой `_validate_nodes()`,
+#: см. ниже.
 _ENTITY_TYPES = ("PERSON", "ORGANIZATION", "PLACE", "CONCEPT")
 
 NODE_RESPONSE_SCHEMA = {
@@ -649,6 +650,128 @@ def _merge_node_extractions(parts: list[WindowExtraction]) -> WindowExtraction:
     return merged
 
 
+def _validate_nodes(raw: str, *, window_text: str) -> WindowExtraction:
+    """Разбор ответа node-only схемы (`NODE_RESPONSE_SCHEMA`, без edges).
+
+    Владелец, R4 EXIT FIX (2026-09-04), после run 247: `_extract_nodes_once()`
+    раньше делегировала парсинг общей `validate()`, у которой ОДНО
+    пространство `local_id` на entities+atoms вместе — обязательный
+    контракт старой edge-схемы (ребро адресует любой из двух типов по
+    local_id, значит оба обязаны делить один реестр имён). Node-only-путь
+    edges не просит и не производит (P1) — `NODE_SYSTEM_PROMPT` не
+    требует от модели единого счётчика, и модель, как любая LLM без такой
+    инструкции, нумерует entities и atoms НЕЗАВИСИМО с 1. Общий `known` из
+    `validate()` топил как «дубликат» почти каждый атом, чей raw local_id
+    совпал с local_id уже виденной сущности (run 247: 29 ложных
+    отклонений на 21 кейс, critical_entity_event_recall 58.3%).
+
+    Раздельные множества `known_entities`/`known_atoms` + канонический
+    префикс типа (`e:`/`a:`) снимают эту ложную коллизию, сохраняя дедуп
+    настоящих повторов (два entity или два atom с одним raw id внутри
+    одного списка — по-прежнему reject). Ни один даунстрим (relation_compiler.py,
+    _merge_node_extractions) не сравнивает local_id entity с local_id
+    atom — каждый читает local_id как непрозрачную строку своего же
+    списка, так что канонизация с префиксом ничего не ломает.
+
+    `validate()`/`extract_window()` НЕ трогаются — ими продолжают
+    пользоваться historical/experimental edge-aware пути
+    (`semantic_extract_c2.py`, `semantic_extract_twopass.py`)."""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ExtractionFailed(f"невалидный JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ExtractionFailed(f"ожидался объект, пришёл {type(data).__name__}")
+
+    result = WindowExtraction()
+    known_entities: set[str] = set()
+    known_atoms: set[str] = set()
+
+    for item in data.get("entities") or []:
+        if not isinstance(item, dict):
+            result.rejected.append("сущность не объект")
+            continue
+        raw_id = str(item.get("local_id") or "").strip()
+        label = str(item.get("label") or "").strip()
+        entity_type = str(item.get("entity_type") or "").strip().upper()
+        if not raw_id or not label or not entity_type:
+            result.rejected.append(f"сущность без обязательного поля: {item!r:.80}")
+            continue
+        if raw_id in known_entities:
+            result.rejected.append(f"повтор local_id {raw_id!r} (entity)")
+            continue
+        evidence_quote = str(item.get("evidence_quote") or "").strip()
+        if not evidence_quote:
+            result.rejected.append(f"сущность без evidence_quote: {item!r:.80}")
+            continue
+        if not _evidence_grounded(evidence_quote, window_text):
+            result.rejected.append(f"evidence_quote сущности не найден в тексте окна: {evidence_quote!r:.80}")
+            continue
+        known_entities.add(raw_id)
+        aliases = tuple(str(a).strip() for a in item.get("aliases") or [] if str(a).strip())
+        result.entities.append(ExtractedEntity(
+            local_id=f"e:{raw_id}", entity_type=entity_type, label=label,
+            subtype=(str(item.get("subtype")).strip() or None) if item.get("subtype") else None,
+            aliases=aliases, evidence_quote=evidence_quote))
+
+    for item in data.get("atoms") or []:
+        if not isinstance(item, dict):
+            result.rejected.append("атом не объект")
+            continue
+        raw_id = str(item.get("local_id") or "").strip()
+        kind = str(item.get("kind") or "").strip().lower()
+        title = str(item.get("title") or "").strip()
+        text = str(item.get("text") or "").strip()
+        if not raw_id or not title or not text:
+            result.rejected.append(f"атом без обязательного поля: {item!r:.80}")
+            continue
+        if kind not in _ATOM_KINDS:
+            result.rejected.append(f"вид {kind!r} вне реестра")
+            continue
+        if raw_id in known_atoms:
+            result.rejected.append(f"повтор local_id {raw_id!r} (atom)")
+            continue
+        evidence_quote = str(item.get("evidence_quote") or "").strip()
+        if not evidence_quote:
+            result.rejected.append(f"атом без evidence_quote: {item!r:.80}")
+            continue
+        if not _evidence_grounded(evidence_quote, window_text):
+            result.rejected.append(f"evidence_quote атома не найден в тексте окна: {evidence_quote!r:.80}")
+            continue
+        if _NEGATION_RE.search(evidence_quote) and not _NEGATION_RE.search(text):
+            result.rejected.append(f"отрицание есть в evidence, но потеряно в тексте атома: {text!r:.80}")
+            continue
+
+        precision = str(item.get("date_precision") or "").strip().lower() or None
+        if precision and precision not in _DATE_PRECISIONS:
+            # Точность вне реестра — не повод терять весь атом: сама
+            # дата остаётся, точность становится «неизвестна».
+            result.rejected.append(f"точность даты {precision!r} вне реестра")
+            precision = SemanticDatePrecision.UNKNOWN.value
+        occurred_at = (str(item.get("occurred_at")).strip() or None) if item.get("occurred_at") else None
+
+        if occurred_at and _RELATIVE_DATE_MARKERS_RE.search(evidence_quote):
+            result.rejected.append(
+                f"evidence описывает относительную дату, но occurred_at выставлен: {occurred_at!r}")
+            continue
+        if occurred_at and precision in _PRECISE_DATE_PRECISIONS and not _ABSOLUTE_DATE_RE.search(evidence_quote):
+            result.rejected.append(
+                f"occurred_at {occurred_at!r} не подтверждён абсолютной датой в evidence: "
+                f"{evidence_quote!r:.80}")
+            continue
+
+        known_atoms.add(raw_id)
+        result.atoms.append(ExtractedAtom(
+            local_id=f"a:{raw_id}", kind=kind, title=title, text=text,
+            subtype=(str(item.get("subtype")).strip() or None) if item.get("subtype") else None,
+            occurred_at=occurred_at, date_precision=precision, evidence_quote=evidence_quote))
+
+    if len(result.atoms) >= MAX_ATOMS_PER_WINDOW:
+        raise WindowTruncated(
+            f"окно дало {len(result.atoms)} атомов при потолке {MAX_ATOMS_PER_WINDOW}")
+    return result
+
+
 def _extract_nodes_once(window_text: str, *, domain: str, heading_path: tuple[str, ...],
                         model: str, keep_alive: str | None, attempts: int) -> WindowExtraction:
     """Один узел рекурсии `extract_nodes_window()`: repair-retry (P2:
@@ -670,7 +793,7 @@ def _extract_nodes_once(window_text: str, *, domain: str, heading_path: tuple[st
                            attempt, attempts, exc)
             continue
         try:
-            return validate(raw, window_text=window_text)
+            return _validate_nodes(raw, window_text=window_text)
         except WindowTruncated:
             raise
         except ExtractionFailed as exc:

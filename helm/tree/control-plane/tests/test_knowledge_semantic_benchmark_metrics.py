@@ -309,3 +309,35 @@ def test_aggregate_reduces_over_multiple_cases_without_crashing():
     # per_category: каждая категория из фикстур должна быть представлена.
     all_categories = {cat for case in GOLDEN_CASES for cat in case.categories}
     assert set(agg.per_category) == all_categories
+
+
+def _aliases_case_extraction(label: str) -> WindowExtraction:
+    return WindowExtraction(
+        entities=[ExtractedEntity(local_id="e:1", entity_type="ORGANIZATION", label=label)],
+        atoms=[ExtractedAtom(local_id="a:1", kind="fact", title="Оплата",
+                             text="Оплата прошла через Сбербанк.")],
+        edges=[ExtractedEdge(from_local_id="a:1", relation_type="involves", to_local_id="e:1")],
+    )
+
+
+def test_gold_label_or_any_gold_alias_is_not_identifier_corruption():
+    """Владелец, R4 EXIT FIX (2026-09-04): «extracted identifier считается
+    корректным, если exact match: gold.label OR любой gold.alias». run 247
+    дал ложный `exact_identifier_corruptions=1` на `aliases` именно
+    потому, что чек сравнивал только с gold.label ('Сбербанк'), считая
+    порчей более полную форму 'ПАО Сбербанк' — которая прямо перечислена
+    в gold.aliases этой же фикстуры."""
+    case = _BY_ID["aliases"]
+    for label in ("Сбербанк", "СБЕР", "ПАО Сбербанк"):
+        score = evaluate_case(case, _aliases_case_extraction(label))
+        assert score.entities_matched == 1, label
+        assert score.exact_identifier_corruptions == 0, label
+
+
+def test_label_outside_gold_label_and_aliases_is_still_identifier_corruption():
+    """Sabotage к предыдущему: смягчение не должно обнулить сам гейт —
+    форма, которой нет ни в label, ни в aliases, по-прежнему порча."""
+    case = _BY_ID["aliases"]
+    score = evaluate_case(case, _aliases_case_extraction("Сбербанк России"))
+    assert score.entities_matched == 1
+    assert score.exact_identifier_corruptions == 1

@@ -131,11 +131,12 @@ def _extraction_signature(extraction: WindowExtraction) -> tuple:
 
 def _validate_structure(extraction: WindowExtraction) -> bool:
     """Защитный повторный контроль инвариантов схемы (R4 п.7, gate
-    «validator/repair can publish malformed result»). При реальном пути
-    через `validate()` сработать не должен никогда — ни `extract_window()`,
-    ни `extract_nodes_window()` физически не могут вернуть иное (оба
-    проходят через ту же `validate()`); это дублирующая проверка САМОГО
-    харнесса, а не признак того, что production-путь её не делает."""
+    «validator/repair can publish malformed result»). На реальном пути
+    сработать не должен никогда — ни `extract_window()` (через
+    `validate()`), ни `extract_nodes_window()` (через `_validate_nodes()`,
+    R4 EXIT FIX 2026-09-04) физически не могут вернуть иное; это
+    дублирующая проверка САМОГО харнесса, а не признак того, что
+    production-путь её не делает."""
     for e in extraction.entities:
         if not e.local_id or not e.label or not e.entity_type:
             return False

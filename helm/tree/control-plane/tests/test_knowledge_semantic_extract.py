@@ -299,8 +299,68 @@ class TestNodeOnlyProductionPath:
 
         monkeypatch.setattr(module, "_call_ollama", fake_call_ollama)
         result = extract_nodes_window("В Казани.", domain="personal")
-        assert [e.local_id for e in result.entities] == ["e1"]
+        assert [e.local_id for e in result.entities] == ["e:e1"]
         assert result.edges == []
+
+    def test_entity_and_atom_sharing_a_raw_local_id_are_both_kept(self, monkeypatch) -> None:
+        """R4 EXIT FIX (владелец 2026-09-04, после run 247): entities и
+        atoms нумеруются моделью НЕЗАВИСИМО (никто не просил её шарить
+        счётчик) — раздельный дедуп + канонический префикс типа не
+        должны терять атом только из-за того, что его raw local_id
+        совпал с local_id какой-то сущности."""
+        import helm_core.knowledge.semantic_extract as module
+
+        def fake_call_ollama(prompt, *, model, keep_alive=None, system=None, response_schema=None):
+            return json.dumps({
+                "entities": [{"local_id": "1", "entity_type": "PERSON", "label": "Иванов",
+                             "evidence_quote": "Иванов"}],
+                "atoms": [{"local_id": "1", "kind": "fact", "title": "т", "text": "Приём прошёл.",
+                          "evidence_quote": "Приём прошёл."}],
+            })
+
+        monkeypatch.setattr(module, "_call_ollama", fake_call_ollama)
+        result = extract_nodes_window("Иванов. Приём прошёл.", domain="personal")
+        assert [e.local_id for e in result.entities] == ["e:1"]
+        assert [a.local_id for a in result.atoms] == ["a:1"]
+        assert result.rejected == []
+
+    def test_duplicate_raw_entity_local_id_is_rejected(self, monkeypatch) -> None:
+        import helm_core.knowledge.semantic_extract as module
+
+        def fake_call_ollama(prompt, *, model, keep_alive=None, system=None, response_schema=None):
+            return json.dumps({
+                "entities": [
+                    {"local_id": "1", "entity_type": "PERSON", "label": "первый",
+                     "evidence_quote": "первый"},
+                    {"local_id": "1", "entity_type": "PERSON", "label": "второй",
+                     "evidence_quote": "второй"},
+                ],
+                "atoms": [],
+            })
+
+        monkeypatch.setattr(module, "_call_ollama", fake_call_ollama)
+        result = extract_nodes_window("первый второй", domain="personal")
+        assert [e.label for e in result.entities] == ["первый"]
+        assert any("повтор local_id" in note for note in result.rejected)
+
+    def test_duplicate_raw_atom_local_id_is_rejected(self, monkeypatch) -> None:
+        import helm_core.knowledge.semantic_extract as module
+
+        def fake_call_ollama(prompt, *, model, keep_alive=None, system=None, response_schema=None):
+            return json.dumps({
+                "entities": [],
+                "atoms": [
+                    {"local_id": "1", "kind": "fact", "title": "т", "text": "первый факт",
+                     "evidence_quote": "первый факт"},
+                    {"local_id": "1", "kind": "fact", "title": "т", "text": "второй факт",
+                     "evidence_quote": "второй факт"},
+                ],
+            })
+
+        monkeypatch.setattr(module, "_call_ollama", fake_call_ollama)
+        result = extract_nodes_window("первый факт второй факт", domain="personal")
+        assert [a.text for a in result.atoms] == ["первый факт"]
+        assert any("повтор local_id" in note for note in result.rejected)
 
     def test_transport_timeout_is_not_retried_identically(self, monkeypatch) -> None:
         """R4 RCA run 241: `long_dense_window` получило 3 identical
