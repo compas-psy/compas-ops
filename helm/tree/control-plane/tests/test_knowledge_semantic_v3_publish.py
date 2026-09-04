@@ -321,7 +321,7 @@ def test_provenance_span_points_at_the_node_quote_not_the_whole_window(session, 
         KnowledgeNodeMention.semantic_run_id == result.run_id)).all()
     assert mentions
 
-    by_window: dict[int, set[tuple[int, int]]] = {}
+    by_window: dict[int, list[tuple[int, int]]] = {}
     for mention in mentions:
         window = windows[mention.window_id]
         assert mention.char_start is not None, "точный диапазон обязан быть найден"
@@ -330,11 +330,17 @@ def test_provenance_span_points_at_the_node_quote_not_the_whole_window(session, 
         assert (mention.char_end - mention.char_start) < (window.char_end - window.char_start)
         # И указывает на реальный текст источника, а не на абстрактное смещение.
         assert text[mention.char_start:mention.char_end].split()
-        by_window.setdefault(mention.window_id, set()).add(
+        by_window.setdefault(mention.window_id, []).append(
             (mention.char_start, mention.char_end))
 
-    assert any(len(spans) > 1 for spans in by_window.values()), (
+    assert any(len(set(spans)) > 1 for spans in by_window.values()), (
         "у всех узлов окна один диапазон — происхождение снова пооконное")
+    # Unique-span guard (владелец 05.09.2026): два узла одного окна не
+    # делят диапазон. Иначе по ссылке нельзя сказать, о каком из
+    # упоминаний речь, — точность была бы показной.
+    for window_id, spans in by_window.items():
+        assert len(spans) == len(set(spans)), (
+            f"окно {window_id}: узлы делят один диапазон")
 
 
 def test_edges_are_typed_and_bound_to_the_run(session, source):

@@ -72,3 +72,33 @@ class TestExactSpan:
         window = _window("Приём вёл Иванов.")
         assert semantic_publish._locate_span("", window) is None
         assert semantic_publish._locate_span("   ", window) is None
+
+
+class TestUniqueSpanGuard:
+    """Владелец, 05.09.2026: два узла не могут делить один диапазон.
+
+    Берётся первое вхождение цитаты, поэтому без guard два узла с
+    одинаковой цитатой указывали бы на одни и те же символы — и по такой
+    ссылке нельзя сказать, о каком из упоминаний речь. Это тот же порок,
+    что и границы окна вместо цитаты: выглядит точным, не будучи им.
+    """
+
+    def test_repeated_quote_walks_to_the_next_occurrence(self):
+        window = _window("Иванов пришёл. Позже Иванов ушёл.")
+        first = semantic_publish._locate_span("Иванов", window, set())
+        second = semantic_publish._locate_span("Иванов", window, {first})
+        assert first == (0, 6)
+        assert second == (21, 27)
+        assert window.text[21:27] == "Иванов"
+
+    def test_when_occurrences_run_out_the_span_is_none_not_a_shared_one(self):
+        """Цитата в тексте одна, а узла два — второй остаётся без
+        диапазона. Отдать ему чужой значило бы соврать о происхождении."""
+        window = _window("Приём вёл Иванов.")
+        first = semantic_publish._locate_span("Иванов", window, set())
+        assert first is not None
+        assert semantic_publish._locate_span("Иванов", window, {first}) is None
+
+    def test_guard_is_applied_when_mentions_are_written(self):
+        source = inspect.getsource(semantic_publish._write_extraction)
+        assert "used_spans" in source, "guard обязан работать на записи, не только в функции"

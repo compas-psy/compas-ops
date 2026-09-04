@@ -148,34 +148,41 @@ def _window_row(models: _Models, *, window: SemanticWindow, run_id: uuid.UUID,
     )
 
 
-def _locate_span(evidence_quote: str, window: SemanticWindow) -> tuple[int, int] | None:
+def _locate_span(evidence_quote: str, window: SemanticWindow,
+                 taken: set[tuple[int, int]] | None = None) -> tuple[int, int] | None:
     """Точные границы цитаты в тексте ИСТОЧНИКА (R5, §30.8.5 F: «resolves
     to exact source + page/chunk/time/span»).
 
-    Grounding в `semantic_extract` сравнивает цитату с окном «с точностью
-    до пробелов» (`_WS.sub(" ", ...)`), поэтому буквальный `find()` может
-    не найти уже проверенную цитату — например, когда перенос строки в
-    источнике схлопнулся в пробел. Поэтому второй попыткой идёт поиск с
-    гибким пробелом; смещение всё равно берётся по ИСХОДНОМУ тексту, так
-    что возвращённые границы указывают в реальный документ, а не в его
-    нормализованную копию.
+    Поиск идёт с гибким пробелом, потому что grounding в
+    `semantic_extract` признаёт цитату обоснованной «с точностью до
+    пробелов» (`_WS.sub(" ", ...)`): буквальное сравнение не нашло бы уже
+    проверенную цитату, в которой перенос строки схлопнулся в пробел.
+    Смещения при этом считаются по ИСХОДНОМУ тексту, так что границы
+    указывают в реальный документ, а не в его нормализованную копию.
 
-    `None` — «точных границ нет», и вызывающий обязан записать NULL, а не
-    подставить границы окна: упоминание с диапазоном во весь экран текста
-    выглядит как точное происхождение, не будучи им.
+    `taken` — диапазоны, уже отданные другим узлам этого окна (владелец,
+    05.09.2026: «unique-span guard»). Без него два узла с одинаковой
+    цитатой получили бы ОДИН диапазон, потому что берётся первое
+    вхождение, — и происхождение снова стало бы выглядеть точным, не
+    будучи им: по такой ссылке нельзя сказать, о каком из двух упоминаний
+    речь. Поэтому берётся первое СВОБОДНОЕ вхождение: повторы в тексте
+    расходятся по своим местам.
+
+    `None` — «точных границ нет» (цитата не найдена или все её вхождения
+    уже заняты), и вызывающий обязан записать NULL, а не подставить
+    границы окна: диапазон во всё окно тоже выглядит как точное
+    происхождение, не будучи им.
     """
     parts = evidence_quote.split()
     if not parts:
         return None
-    idx = window.text.find(evidence_quote)
-    if idx >= 0:
-        start, end = idx, idx + len(evidence_quote)
-    else:
-        match = re.search(r"\s+".join(re.escape(part) for part in parts), window.text)
-        if match is None:
-            return None
-        start, end = match.start(), match.end()
-    return window.char_start + start, window.char_start + end
+    occupied = taken or frozenset()
+    pattern = r"\s+".join(re.escape(part) for part in parts)
+    for match in re.finditer(pattern, window.text):
+        span = (window.char_start + match.start(), window.char_start + match.end())
+        if span not in occupied:
+            return span
+    return None
 
 
 def _result_hash(extraction: WindowExtraction) -> str:
@@ -264,8 +271,16 @@ def _write_extraction(graph, models: _Models, *, extraction: WindowExtraction,
     # происхождение, которого нет; NULL честен и проверяем запросом
     # (`WHERE char_start IS NULL`), а грубое место всё равно остаётся
     # восстановимым через `window_id` → строку окна.
+    #: Диапазоны, уже отданные узлам ЭТОГО окна: два узла не могут
+    #: ссылаться на одни и те же символы (владелец, 05.09.2026,
+    #: unique-span guard). Повторяющаяся в тексте цитата разводится по
+    #: своим вхождениям, а когда свободных не осталось — узел получает
+    #: NULL, а не чужой диапазон.
+    used_spans: set[tuple[int, int]] = set()
     for local_id, node_id in by_local.items():
-        span = _locate_span(quote_by_local.get(local_id, ""), window)
+        span = _locate_span(quote_by_local.get(local_id, ""), window, used_spans)
+        if span:
+            used_spans.add(span)
         graph.add(models.mention(
             knowledge_user_id=tenant_id, node_id=node_id, source_id=source_id,
             window_id=window_row.ordinal,
