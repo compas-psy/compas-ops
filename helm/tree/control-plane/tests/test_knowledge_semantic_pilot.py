@@ -154,8 +154,9 @@ class TestCountsUseTheSchemaThatWasWrittenTo:
             return dict(self.ZEROS)
 
         monkeypatch.setattr(semantic_pilot, "_counts", fake_counts)
-        monkeypatch.setattr(semantic_pilot, "_breakdown",
-                            lambda *_a: {"entity_types": {}, "atom_kinds": {}, "windows": {}})
+        monkeypatch.setattr(
+            semantic_pilot, "_breakdown",
+            lambda *_a: {"entity_types": {}, "atom_kinds": {}, "windows": {}, "grounding": {}})
         return seen
 
     def _mirror(self, monkeypatch, *, configured, graph=None):
@@ -200,18 +201,67 @@ class TestBreakdownAccumulates:
     def test_counts_from_several_sources_are_summed(self):
         report = semantic_pilot.PilotReport(limit=2, selected=2)
         report.add_kinds({"entity_types": {"PERSON": 2}, "atom_kinds": {"fact": 3},
-                          "windows": {"both": 1}})
+                          "windows": {"both": 1}, "grounding": {"pairs": 4}})
         report.add_kinds({"entity_types": {"PERSON": 1, "CONCEPT": 4},
                           "atom_kinds": {"fact": 1, "event": 2},
-                          "windows": {"both": 1, "atoms_only": 2}})
+                          "windows": {"both": 1, "atoms_only": 2},
+                          "grounding": {"pairs": 2, "grounded": 1}})
         assert report.by_kind == {"entity_types": {"PERSON": 3, "CONCEPT": 4},
                                   "atom_kinds": {"fact": 4, "event": 2},
-                                  "windows": {"both": 2, "atoms_only": 2}}
+                                  "windows": {"both": 2, "atoms_only": 2},
+                                  "grounding": {"pairs": 6, "grounded": 1}}
 
     def test_two_reports_do_not_share_one_dict(self):
         """`field(default_factory=...)` здесь не формальность: общий
         словарь по умолчанию складывал бы разные пилоты в одну кучу."""
         first = semantic_pilot.PilotReport(limit=1, selected=1)
-        first.add_kinds({"entity_types": {"PERSON": 1}, "atom_kinds": {}, "windows": {}})
+        first.add_kinds({"entity_types": {"PERSON": 1}, "atom_kinds": {},
+                         "windows": {}, "grounding": {}})
         second = semantic_pilot.PilotReport(limit=1, selected=1)
-        assert second.by_kind == {"entity_types": {}, "atom_kinds": {}, "windows": {}}
+        assert second.by_kind == {"entity_types": {}, "atom_kinds": {},
+                                  "windows": {}, "grounding": {}}
+
+
+class _Rows:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+
+class _RowsSession:
+    """Строки задаются напрямую: проверяется правило подсчёта, а не SQL."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def execute(self, _query):
+        return _Rows(self._rows)
+
+
+class TestGroundingAudit:
+    """Именно это правило стоит последним между материалом и ребром:
+    подпись сущности должна быть ВНУТРИ цитаты атома, а не где-то в том
+    же окне. Считать его надо той же функцией, которой пользуется
+    компилятор, иначе замер описывает не тот конвейер."""
+
+    TEXT = "Приём вёл врач Иванов. Анализ крови сдан."
+
+    def test_pair_counts_only_inside_one_window_and_only_with_a_span(self):
+        rows = [
+            (0, "entity", "Иванов", 15, 21),
+            (0, "event", "приём", 0, 21),        # цитата называет Иванова
+            (0, "fact", "анализ", 23, 41),       # цитата его не называет
+            (0, "fact", "без диапазона", None, None),   # в пару не идёт
+            (1, "event", "другое окно", 0, 10),  # сущностей в окне нет
+        ]
+        assert semantic_pilot._grounding(
+            _RowsSession(rows), semantic_pilot.PUBLIC_MODELS,
+            _RUN_ID, self.TEXT) == {"pairs": 2, "grounded": 1}
+
+    def test_no_entities_means_no_pairs_not_a_division_by_zero(self):
+        rows = [(0, "event", "приём", 0, 21)]
+        assert semantic_pilot._grounding(
+            _RowsSession(rows), semantic_pilot.PUBLIC_MODELS,
+            _RUN_ID, self.TEXT) == {"pairs": 0, "grounded": 0}

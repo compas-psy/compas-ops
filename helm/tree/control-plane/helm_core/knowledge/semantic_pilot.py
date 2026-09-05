@@ -27,6 +27,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from .health_schema import health_schema_configured, health_session, is_health_domain
+from .relation_compiler import is_mentioned
 from .semantic_publish import HEALTH_MODELS, PUBLIC_MODELS, publish_semantic_run
 from .tenancy import bind_knowledge_user
 from ..config import get_settings
@@ -73,7 +74,8 @@ class PilotReport:
     #: Раскладка по всему пилоту, не по источнику: она отвечает на вопрос
     #: «почему компилятор молчит», а он про корпус целиком.
     by_kind: dict[str, dict[str, int]] = field(
-        default_factory=lambda: {"entity_types": {}, "atom_kinds": {}, "windows": {}})
+        default_factory=lambda: {"entity_types": {}, "atom_kinds": {},
+                                 "windows": {}, "grounding": {}})
 
     def add_kinds(self, breakdown: dict[str, dict[str, int]]) -> None:
         for group, counts in breakdown.items():
@@ -230,13 +232,57 @@ def _window_mix(session: Session, models, run_id: uuid.UUID) -> dict[str, int]:
     return mix
 
 
-def _breakdown(session: Session, models, run_id: uuid.UUID) -> dict[str, dict[str, int]]:
-    return {**_by_kind(session, models, run_id),
-            "windows": _window_mix(session, models, run_id)}
+def _grounding(session: Session, models, run_id: uuid.UUID, text: str) -> dict[str, int]:
+    """Сколько пар «атом × сущность одного окна» проходят endpoint grounding.
+
+    Это последнее, что стоит между материалом и ребром: компилятор
+    требует, чтобы подпись сущности стояла ВНУТРИ цитаты самого атома
+    (`relation_compiler.is_mentioned`), а не где-то в том же окне. На
+    golden-корпусе окно — один плотный абзац, и требование выполняется
+    само собой; у реального документа цитата атома может не называть
+    участника вовсе.
+
+    Цитата берётся по точному диапазону упоминания — тому самому, который
+    R5.2 научился находить. Атом без диапазона в паре не участвует.
+    Псевдонимы не учитываются (их отдельная таблица), поэтому число
+    прошедших — нижняя оценка, и завышенным быть не может.
+
+    Наружу уходят только два числа. Текст источника читается здесь же, на
+    сервере, и остаётся здесь.
+    """
+    rows = session.execute(
+        select(models.mention.window_id, models.node.kind, models.node.canonical_label,
+               models.mention.char_start, models.mention.char_end)
+        .join(models.node, models.node.id == models.mention.node_id)
+        .where(models.mention.semantic_run_id == run_id)).all()
+    entities: dict[int | None, list[str]] = {}
+    atoms: dict[int | None, list[str]] = {}
+    for window_id, kind, label, start, end in rows:
+        if kind == SemanticNodeKind.ENTITY:
+            entities.setdefault(window_id, []).append(label)
+        elif start is not None and end is not None:
+            atoms.setdefault(window_id, []).append(text[start:end])
+
+    pairs = grounded = 0
+    for window_id, quotes in atoms.items():
+        for quote in quotes:
+            for label in entities.get(window_id, ()):
+                pairs += 1
+                grounded += is_mentioned(quote, label)
+    return {"pairs": pairs, "grounded": grounded}
+
+
+def _breakdown(session: Session, models, run_id: uuid.UUID,
+               text: str | None) -> dict[str, dict[str, int]]:
+    breakdown = {**_by_kind(session, models, run_id),
+                 "windows": _window_mix(session, models, run_id)}
+    if text is not None:
+        breakdown["grounding"] = _grounding(session, models, run_id, text)
+    return breakdown
 
 
 def run_counts(session: Session, run_id: uuid.UUID, *, domain: str,
-               knowledge_user_id: uuid.UUID
+               knowledge_user_id: uuid.UUID, text: str | None = None
                ) -> tuple[dict[str, int], dict[str, dict[str, int]]]:
     """Что прогон реально положил в граф: узлы, рёбра и упоминания.
 
@@ -254,8 +300,10 @@ def run_counts(session: Session, run_id: uuid.UUID, *, domain: str,
     """
     if is_health_domain(domain) and health_schema_configured():
         with health_session(knowledge_user_id) as graph:
-            return _counts(graph, HEALTH_MODELS, run_id), _breakdown(graph, HEALTH_MODELS, run_id)
-    return _counts(session, PUBLIC_MODELS, run_id), _breakdown(session, PUBLIC_MODELS, run_id)
+            return (_counts(graph, HEALTH_MODELS, run_id),
+                    _breakdown(graph, HEALTH_MODELS, run_id, text))
+    return (_counts(session, PUBLIC_MODELS, run_id),
+            _breakdown(session, PUBLIC_MODELS, run_id, text))
 
 
 def inspect_published(session: Session, *, limit: int = DEFAULT_LIMIT,
@@ -282,11 +330,13 @@ def inspect_published(session: Session, *, limit: int = DEFAULT_LIMIT,
                 source_id=str(source.id), domain=source.domain,
                 run_status="нет текущей ревизии"))
             continue
+        text = source_text(source)
         counts, breakdown = run_counts(session, run.id, domain=source.domain,
-                                       knowledge_user_id=tenant_id)
+                                       knowledge_user_id=tenant_id, text=text)
         report.add_kinds(breakdown)
         report.sources.append(SourceOutcome(
             source_id=str(source.id), domain=source.domain, run_status=str(run.status),
+            chars=len(text) if text is not None else None,
             windows_total=run.windows_total, windows_processed=run.windows_processed,
             windows_failed=run.windows_failed,
             coverage_ratio=float(run.coverage_ratio or 0), **counts))
@@ -311,7 +361,7 @@ def run_pilot(session: Session, *, limit: int = DEFAULT_LIMIT,
         result = publish_semantic_run(session, source=source, text=text)
         session.flush()
         counts, breakdown = run_counts(session, result.run_id, domain=source.domain,
-                                       knowledge_user_id=tenant_id)
+                                       knowledge_user_id=tenant_id, text=text)
         report.add_kinds(breakdown)
         report.sources.append(SourceOutcome(
             source_id=str(source.id), domain=source.domain, chars=len(text),
