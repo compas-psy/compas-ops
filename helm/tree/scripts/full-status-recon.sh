@@ -25,7 +25,7 @@ psql "select rolname||' | '||rolsuper||' | '||rolbypassrls from pg_roles where r
 
 echo "############ КОРПУС ############"
 echo "источники по домену/статусу:"
-psql "select domain||' | '||status||' | '||count(*) from knowledge_sources group by 1,2 order by 1,2"
+psql "select domain||' | '||status||' | '||count(*)::text from knowledge_sources group by domain, status order by domain, status"
 echo "чанки public | health:"
 psql "select (select count(*) from public.knowledge_chunks)||' | '||(select count(*) from health.knowledge_chunks)"
 echo "векторы public | health:"
@@ -37,7 +37,7 @@ psql "select (select count(*) from public.knowledge_notes)||' | '||(select count
 
 echo "############ SEMANTIC-V2 ############"
 echo "ревизии разбора по статусу:"
-psql "select status||' | '||count(*) from knowledge_semantic_runs group by 1 order by 1"
+psql "select status||' | '||count(*)::text from knowledge_semantic_runs group by status order by status"
 echo "источники с текущей ревизией:"
 psql "select count(*) from knowledge_sources where current_semantic_run_id is not null"
 echo "узлы | рёбра | упоминания (public):"
@@ -66,8 +66,9 @@ echo "локальные точки возврата:"
 sudo ls -1 /opt/helm/checkpoints 2>/dev/null | wc -l
 
 echo "############ СЛУЖБЫ ############"
-echo "guardian:"
-systemctl is-active helm-guardian 2>/dev/null || echo "нет юнита"
+echo "guardian (юнит может называться иначе — печатаем все подходящие):"
+sudo systemctl list-units --type=service --all --no-legend 2>/dev/null \
+  | grep -i guardian || echo "юнита с таким именем нет"
 echo "публичный статус guardian:"
 sudo cat /var/lib/helm-guardian/public-status.json 2>/dev/null | head -1 || echo "нет файла"
 probe() {
@@ -75,11 +76,11 @@ probe() {
   code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' --noproxy '*' "$2" 2>/dev/null || echo "нет ответа")
   echo "$1: $code"
 }
-probe helm-core http://127.0.0.1:8080/health
+probe helm-core http://127.0.0.1:8080/internal/status
 probe litellm   http://127.0.0.1:4000/health/liveliness
 probe n8n       http://127.0.0.1:5678/healthz
 probe ollama    http://127.0.0.1:11434/api/version
-probe embed     http://127.0.0.1:8081/health
+probe embed     http://127.0.0.1:8000/health
 echo "forgejo снаружи:"
 curl -s -o /dev/null -m 8 -w '%{http_code}\n' https://git.cmpas.ru/ 2>/dev/null || echo "нет ответа"
 echo "панель снаружи:"
