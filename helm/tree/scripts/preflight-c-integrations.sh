@@ -29,18 +29,37 @@ state=$(sudo docker compose ps --format '{{.Service}}\t{{.State}}' | awk -F'\t' 
 verdict "Community поднят" "${state:-нет сервиса}"
 verdict "локальный healthz" "$(http http://127.0.0.1:5678/healthz)"
 
-# Редактор не должен быть доступен снаружи ни по одному пути, кроме
-# точного OAuth-callback. Проверяем корень и типичные пути редактора.
-for path in "/n8n/" "/n8n" "/rest/login" "/workflow"; do
-  verdict "снаружи $path (ожидается не 200)" "$(http "https://helm.cmpas.ru$path")"
+# Редактор не должен быть доступен снаружи. Одного кода 200 тут мало:
+# панель — SPA, и Caddy отдаёт её index.html на ЛЮБОЙ неизвестный путь.
+# Прогон 290 так и сделал: четыре «200», из которых ни одно ничего не
+# доказывало. Смотрим не код, а КТО ответил.
+probe_editor() {
+  local path="$1" body marker
+  body=$(curl -s -m 8 --noproxy '*' "https://helm.cmpas.ru$path" 2>/dev/null | head -c 4000)
+  if printf '%s' "$body" | grep -qi 'n8n-app\|window.REST_ENDPOINT\|n8n.io\|__n8n'; then
+    marker="РЕДАКТОР N8N ОТВЕЧАЕТ"
+  elif printf '%s' "$body" | grep -qi 'HELM'; then
+    marker="панель HELM (SPA-заглушка, не n8n)"
+  elif [ -z "$body" ]; then
+    marker="пусто"
+  else
+    marker="что-то другое"
+  fi
+  verdict "снаружи $path" "$(http "https://helm.cmpas.ru$path") · $marker"
+}
+for path in "/n8n/" "/rest/login" "/workflow" "/rest/settings"; do
+  probe_editor "$path"
 done
 
 echo "-- ключ шифрования --"
-if sudo grep -qs 'N8N_ENCRYPTION_KEY' /opt/helm/compose/.env /etc/helm/secrets/* 2>/dev/null; then
-  verdict "N8N_ENCRYPTION_KEY заведён (имя, не значение)" "да"
-else
-  verdict "N8N_ENCRYPTION_KEY заведён (имя, не значение)" "НЕ НАЙДЕН"
-fi
+# Спрашиваем сам контейнер, а не догадываемся по файлам: ключ может быть
+# задан в compose, в env-файле или в окружении. Печатается СЧЁТЧИК,
+# значение не покидает сервер ни при каком исходе.
+inenv=$(sudo docker compose exec -T n8n printenv 2>/dev/null \
+        | grep -c '^N8N_ENCRYPTION_KEY=..*' || echo 0)
+verdict "ключ в окружении контейнера (переменных с непустым значением)" "$inenv"
+found_files=$(sudo grep -rls 'N8N_ENCRYPTION_KEY' /opt/helm/compose /etc/helm/secrets 2>/dev/null | wc -l)
+verdict "файлов конфигурации, где встречается имя ключа" "$found_files"
 if sudo grep -qs 'N8N_ENCRYPTION_KEY' /opt/helm/scripts/backup.sh; then
   verdict "ключ входит в бэкап" "да"
 else
@@ -66,7 +85,15 @@ if [ -x /opt/helm/scripts/n8n-workflows.py ] || [ -f /opt/helm/scripts/n8n-workf
 else
   verdict "скрипт выгрузки/восстановления на месте" "НЕТ"
 fi
-verdict "хотя бы один реальный коннектор" "ТРЕБУЕТ ВЛАДЕЛЬЦА (нужен API-ключ n8n)"
+# Сколько вообще workflow заведено — видно из БД n8n, без её API и без
+# единого значения учётных данных: только счётчик строк.
+wf=$(sudo docker exec helm-postgres-1 psql -U helm -d n8n -tAc \
+     "select count(*) from workflow_entity" 2>/dev/null | tr -d ' ')
+cred=$(sudo docker exec helm-postgres-1 psql -U helm -d n8n -tAc \
+       "select count(*) from credentials_entity" 2>/dev/null | tr -d ' ')
+verdict "workflow заведено (из БД n8n)" "${wf:-не прочиталось}"
+verdict "учётных данных заведено (счётчик, не значения)" "${cred:-не прочиталось}"
+verdict "хотя бы один реальный коннектор работает" "ТРЕБУЕТ ВЛАДЕЛЬЦА (запуск коннектора)"
 verdict "n8n не хранит канонического состояния" "свойство архитектуры, скриптом не мерится"
 
 echo "############ FORGEJO / GITHUB ############"
