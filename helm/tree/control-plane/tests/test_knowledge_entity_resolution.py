@@ -323,3 +323,74 @@ class TestOneTokenPerson:
                                 _Node("москва", "place", created_at=2)])
         report = _run(session)
         assert (report.identities_created, report.members_created) == (1, 2)
+
+
+# --- машинная проверка идемпотентности (владелец, 05.09.2026) --------------
+
+def test_нули_по_созданному_значат_идемпотентность():
+    assert er.created_anything({
+        "public": {"identities_created": 0, "members_created": 0,
+                   "candidates_created": 0},
+        "health": None}) == {}
+
+
+def test_любой_ненулевой_счётчик_создания_ловится():
+    # Проход, которому на неизменившихся данных есть что создать, не
+    # идемпотентен — независимо от того, в какой схеме и в какой из трёх
+    # таблиц это случилось.
+    assert er.created_anything({
+        "public": {"identities_created": 0, "members_created": 0,
+                   "candidates_created": 0},
+        "health": {"identities_created": 0, "members_created": 2,
+                   "candidates_created": 0}}) == {"health.members_created": 2}
+
+
+class _FakeCliSession:
+    def __init__(self):
+        self.commits = 0
+        self.rollbacks = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
+
+
+def _patch_cli(monkeypatch, report):
+    session = _FakeCliSession()
+    monkeypatch.setattr(er, "create_engine", lambda *a, **k: object())
+    monkeypatch.setattr(er, "sessionmaker", lambda *a, **k: (lambda: session))
+    monkeypatch.setattr(er, "get_settings",
+                        lambda: type("S", (), {"database_url": "postgresql://x"})())
+    monkeypatch.setattr(er, "resolve_all", lambda *a, **k: report)
+    return session
+
+
+def test_проверка_идемпотентности_падает_кодом_возврата(monkeypatch):
+    # Главное свойство: несоблюдение видно машине, а не читателю лога.
+    session = _patch_cli(monkeypatch, {
+        "public": {"identities_created": 1, "members_created": 0,
+                   "candidates_created": 0},
+        "health": None})
+    assert er._cli(["--verify-idempotent"]) == 1
+    # И при этом ничего не записано: проверка сухая, иначе она сама
+    # создала бы то, на что жалуется.
+    assert session.commits == 0
+    assert session.rollbacks == 1
+
+
+def test_проверка_идемпотентности_проходит_на_нулях(monkeypatch):
+    session = _patch_cli(monkeypatch, {
+        "public": {"identities_created": 0, "members_created": 0,
+                   "candidates_created": 0},
+        "health": {"identities_created": 0, "members_created": 0,
+                   "candidates_created": 0}})
+    assert er._cli(["--verify-idempotent"]) == 0
+    assert session.commits == 0

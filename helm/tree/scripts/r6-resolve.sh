@@ -37,13 +37,13 @@ echo "############ ЗАПИСЬ ############"
 sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.entity_resolution
 RC=$?
 
-# Повтор — не перестраховка, а проверка идемпотентности на живых данных
-# (владелец, 05.09.2026: «повтор => идемпотентно»). Второй проход обязан
-# показать identities_created / members_created / candidates_created = 0
-# и already_resolved = числу состава: значит, строки первого прохода
-# лежат в базе и прочитаны обратно, а не заведены заново.
-echo "############ ПОВТОР ############"
-sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.entity_resolution
+# Проверка идемпотентности — машинная. Второй обычный проход её только
+# ПОКАЗЫВАЛ бы: код возврата у него нулевой даже когда он создал новые
+# строки. `--verify-idempotent` считает то же самое сухим проходом и
+# возвращает ненулевой код, если создал бы хоть одну.
+echo "############ ИДЕМПОТЕНТНОСТЬ ############"
+sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.entity_resolution \
+    --verify-idempotent
 AGAIN=$?
 
 # Та же проверка, что шла до записи: однословных личностей-людей с
@@ -52,5 +52,6 @@ echo "############ ПРОВЕРКА ПОСЛЕ ############"
 sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.entity_resolution --probe
 PROBE=$?
 
-echo "############ ГОТОВО (dry=$DRY rc=$RC again=$AGAIN probe=$PROBE) ############"
-exit "$RC"
+echo "############ ГОТОВО (dry=$DRY rc=$RC idem=$AGAIN probe=$PROBE) ############"
+if [ "$RC" -ne 0 ]; then exit "$RC"; fi
+exit "$AGAIN"

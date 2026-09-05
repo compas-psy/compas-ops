@@ -421,6 +421,24 @@ def rebuild_all(session: Session, *, knowledge_user_id: uuid.UUID | None = None
     return report
 
 
+#: Счётчики, любой из которых больше нуля означает, что проход НЕ
+#: идемпотентен: на неизменившихся данных ему нечего создавать.
+_CREATION_COUNTERS = ("identities_created", "members_created", "candidates_created")
+
+
+def created_anything(report: dict[str, dict | None]) -> dict[str, int]:
+    """Что проход создал бы прямо сейчас, по схемам. Пусто — идемпотентен."""
+    created: dict[str, int] = {}
+    for scope, scope_report in report.items():
+        if not scope_report:
+            continue
+        for counter in _CREATION_COUNTERS:
+            value = scope_report.get(counter, 0)
+            if value:
+                created[f"{scope}.{counter}"] = value
+    return created
+
+
 def _cli(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="R6: разрешение сущностей")
     parser.add_argument("--dry-run", action="store_true",
@@ -429,6 +447,9 @@ def _cli(argv: list[str] | None = None) -> int:
                         help="только проверка: личности-люди с однословной подписью")
     parser.add_argument("--rebuild", action="store_true",
                         help="снести производные строки R6 и собрать заново")
+    parser.add_argument("--verify-idempotent", action="store_true",
+                        help="сухой проход; ненулевой код возврата, если он "
+                             "создал бы хоть одну строку")
     args = parser.parse_args(argv)
 
     engine = create_engine(get_settings().database_url, pool_pre_ping=True)
@@ -439,12 +460,23 @@ def _cli(argv: list[str] | None = None) -> int:
         elif args.rebuild:
             report = rebuild_all(session)
             session.commit()
-        elif args.dry_run:
+        elif args.dry_run or args.verify_idempotent:
             report = resolve_all(session, dry_run=True)
             session.rollback()
         else:
             report = resolve_all(session)
             session.commit()
+
+    if args.verify_idempotent:
+        # Проверка сухая намеренно. Обычный повторный проход на
+        # НЕидемпотентных данных сначала записал бы новые строки и лишь
+        # потом сообщил о беде — то есть сам создал бы то, на что
+        # жалуется. Сухой считает ровно те же числа и не пишет ничего.
+        created = created_anything(report)
+        report = {"idempotent": not created, "would_create": created, "scopes": report}
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 1 if created else 0
+
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
 

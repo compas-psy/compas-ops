@@ -27,16 +27,22 @@ echo "############ ПЕРЕСБОРКА ############"
 sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.entity_resolution --rebuild
 RC=$?
 
-# Повтор обычного прохода — доказательство идемпотентности после
-# пересборки (владелец, 05.09.2026: «один повтор должен доказать
-# идемпотентность»). Обязан дать нули по created и already_resolved,
-# равный составу: строки пересборки лежат в базе и прочитаны обратно.
-echo "############ ПОВТОР ПРОХОДА ############"
-sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.entity_resolution
-AGAIN=$?
+# Машинная проверка идемпотентности, а не «повтор и посмотрим глазами».
+# Прошлая редакция запускала обычный второй проход и возвращала код
+# ПЕРВОГО — то есть несоблюдение осталось бы в логе и не остановило бы
+# цепочку. Теперь проверка живёт в Python (`--verify-idempotent`): сухой
+# проход, ненулевой код возврата, если он создал бы хоть одну строку.
+echo "############ ИДЕМПОТЕНТНОСТЬ ############"
+sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.entity_resolution \
+    --verify-idempotent
+IDEM=$?
 
 echo "############ ПРОВЕРКА ПОСЛЕ ############"
 sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.entity_resolution --probe
 
-echo "############ ГОТОВО (rc=$RC again=$AGAIN) ############"
-exit "$RC"
+echo "############ ГОТОВО (rc=$RC idem=$IDEM) ############"
+# Провал любой из двух половин валит шаг. Возвращать код одной только
+# пересборки значило бы объявлять успехом прогон с недоказанной
+# идемпотентностью.
+if [ "$RC" -ne 0 ]; then exit "$RC"; fi
+exit "$IDEM"

@@ -126,10 +126,11 @@ class DoctorItem:
     #: две разные доказанные специальности это факт документов, а не
     #: повод выбрать одну.
     specialties: list[str] = field(default_factory=list)
-    #: Дата приёма. На пути доказательств всегда None: у узла-сущности
-    #: даты нет, а дата документа — не дата приёма, и подставить её
-    #: значило бы догадаться.
-    occurred_at: str | None = None
+    #: Даты приёмов. Список, а не одно значение: два визита к одному
+    #: врачу — две даты, и выбрать из них одну значило бы соврать. На
+    #: пути доказательств список всегда пуст: у узла-сущности даты нет,
+    #: а дата документа — не дата приёма.
+    dates: list[str] = field(default_factory=list)
     proofs: list[Proof] = field(default_factory=list)
     path: str = AnswerPath.EVIDENCE
 
@@ -142,7 +143,7 @@ class DoctorItem:
         """Без имени и без цитат: то, что можно печатать в лог."""
         return {"identity_id": self.identity_id,
                 "specialty_proven": bool(self.specialties),
-                "date_proven": self.occurred_at is not None,
+                "date_proven": bool(self.dates),
                 "proofs": len(self.proofs),
                 "path": self.path}
 
@@ -198,7 +199,7 @@ class DoctorsAnswer:
                 "items_from_evidence": self.by_path(AnswerPath.EVIDENCE),
                 "uncovered_identities": self.uncovered_identities,
                 "items_with_specialty": sum(1 for i in self.items if i.specialties),
-                "items_with_date": sum(1 for i in self.items if i.occurred_at),
+                "items_with_date": sum(1 for i in self.items if i.dates),
                 "proofs_total": sum(len(i.proofs) for i in self.items),
                 "considered": self.considered, "skipped": self.skipped,
                 "by_item": [item.as_public_dict() for item in self.items]}
@@ -270,14 +271,69 @@ def marker_follows_label(span_text: str, label: str) -> bool:
     return any(_DOCTOR_MARKER_RE.fullmatch(t) for t in after)
 
 
+def _marker_specialty(spans: list[tuple[object, str]], label: str) -> list[str]:
+    """Специальности, подтверждённые дефисным маркером в СОБСТВЕННЫХ цитатах.
+
+    Одно правило на оба пути. Путь графа не получает своего, более
+    мягкого: иначе один и тот же человек назывался бы урологом по ребру
+    и «специальность не подтверждена» по доказательству, в зависимости
+    от того, каким путём до него дошли.
+    """
+    found: list[str] = []
+    for _mention, span in spans:
+        is_doctor, specialty = doctor_proof(span, label)
+        if is_doctor and specialty and specialty not in found:
+            found.append(specialty)
+    return found
+
+
+def _spans_for(graph, models, *, tenant_id: uuid.UUID, node_id: uuid.UUID,
+               text_by_source: dict[uuid.UUID, str],
+               answer: DoctorsAnswer) -> list[tuple[object, str]]:
+    """Упоминания узла с точным диапазоном и текстом этого диапазона."""
+    spans: list[tuple[object, str]] = []
+    mentions = graph.scalars(
+        select(models.mention)
+        .where(models.mention.knowledge_user_id == tenant_id,
+               models.mention.node_id == node_id,
+               models.mention.char_start.is_not(None))
+        .order_by(models.mention.char_start)).all()
+    if not mentions:
+        answer.skip("узел без точного спана")
+        return spans
+    answer.count("упоминания с точным спаном", len(mentions))
+    for mention in mentions:
+        text = text_by_source.get(mention.source_id)
+        if text is None:
+            answer.skip("упоминание в источнике без текста")
+            continue
+        spans.append((mention, text[mention.char_start:mention.char_end]))
+    return spans
+
+
 def _graph_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUID],
                    identity_by_node: dict[uuid.UUID, uuid.UUID],
+                   text_by_source: dict[uuid.UUID, str],
                    answer: DoctorsAnswer) -> list[DoctorItem]:
     """Путь по графу: только уже доказанные рёбра, ничего не выводя.
 
     `EVENT --INVOLVES(role=doctor)--> PERSON` даёт человека и дату
-    события; `PERSON --HAS_ROLE--> CONCEPT` даёт специальность. Обоих
-    рёбер может не быть — тогда путь пуст, и это не ошибка.
+    события. Рёбер может не быть — тогда путь пуст, и это не ошибка.
+
+    **Ответ считается по личностям, а не по рёбрам.** Два визита к
+    одному врачу это два ребра и один врач; складывать их в два пункта
+    значило бы отвечать числом посещений на вопрос о врачах.
+
+    **Узел без канонической личности в ответ не попадает.** Личности у
+    него нет не случайно: R6 отказался её назначить (однословная
+    подпись, конфликт типа). Пропустить такой узел в ответ значило бы
+    обойти решение R6 с другой стороны.
+
+    **`HAS_ROLE` специальностью сам по себе не является.** Реестр связей
+    §14.9 доменно-агностичен, и та же связь описывает «руководителя
+    проекта». На смешанном корпусе R10 врач легко окажется ещё и
+    руководителем, и это не должно стать его специальностью. Компилятор
+    при этом не трогается — фильтр стоит здесь, в слое запроса.
     """
     rows = graph.execute(
         select(models.edge, models.node)
@@ -291,31 +347,54 @@ def _graph_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUI
     if not rows:
         return []
 
-    specialties: dict[uuid.UUID, list[str]] = {}
+    roles: dict[uuid.UUID, list[str]] = {}
     for person_id, concept_label in graph.execute(
             select(models.edge.from_node_id, models.node.canonical_label)
             .join(models.node, models.node.id == models.edge.to_node_id)
             .where(models.edge.knowledge_user_id == tenant_id,
                    models.edge.relation_type == SemanticRelationType.HAS_ROLE.value,
                    models.edge.semantic_run_id.in_(run_ids))).all():
-        specialties.setdefault(person_id, []).append(concept_label)
+        roles.setdefault(person_id, []).append(concept_label)
 
-    items: list[DoctorItem] = []
+    by_identity: dict[str, DoctorItem] = {}
+    seen_roles: set[tuple[uuid.UUID, str]] = set()
     for edge, person in rows:
+        identity_id = identity_by_node.get(person.id)
+        if identity_id is None:
+            answer.skip("узел графа без канонической личности")
+            continue
+        key = str(identity_id)
+        item = by_identity.get(key)
+        if item is None:
+            item = DoctorItem(identity_id=key, person=person.canonical_label,
+                              path=AnswerPath.GRAPH)
+            by_identity[key] = item
+            for specialty in _marker_specialty(
+                    _spans_for(graph, models, tenant_id=tenant_id, node_id=person.id,
+                               text_by_source=text_by_source, answer=answer),
+                    person.canonical_label):
+                if specialty not in item.specialties:
+                    item.specialties.append(specialty)
+            for concept in roles.get(person.id, ()):
+                if concept.lower() in item.specialties:
+                    continue
+                if (person.id, concept) in seen_roles:
+                    continue
+                seen_roles.add((person.id, concept))
+                answer.skip("роль из графа не подтверждена как медицинская специальность")
+
         event = graph.get(models.node, edge.from_node_id)
         occurred = event.occurred_at_start if event is not None else None
-        # Личность нужна не для красоты: по ней путь графа и путь
-        # доказательств узнают, что говорят об одном человеке, и второй
-        # не повторяет первого.
-        identity_id = identity_by_node.get(person.id)
-        items.append(DoctorItem(
-            identity_id=str(identity_id) if identity_id else "",
-            person=person.canonical_label,
-            specialties=sorted(set(specialties.get(person.id, []))),
-            occurred_at=occurred.isoformat() if occurred else None,
-            proofs=[Proof(source_id=str(edge.source_id), edge_id=str(edge.id))],
-            path=AnswerPath.GRAPH))
-    return items
+        if occurred is not None:
+            date = occurred.date().isoformat()
+            if date not in item.dates:
+                item.dates.append(date)
+        item.proofs.append(Proof(source_id=str(edge.source_id), edge_id=str(edge.id)))
+
+    for item in by_identity.values():
+        item.specialties.sort()
+        item.dates.sort()
+    return list(by_identity.values())
 
 
 def _evidence_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUID],
@@ -355,22 +434,9 @@ def _evidence_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.
         if str(identity.id) in skip_identities:
             answer.skip("личность уже отвечена путём графа")
             continue
-        mentions = graph.scalars(
-            select(models.mention)
-            .where(models.mention.knowledge_user_id == tenant_id,
-                   models.mention.node_id == node.id,
-                   models.mention.char_start.is_not(None))
-            .order_by(models.mention.char_start)).all()
-        if not mentions:
-            answer.skip("узел без точного спана")
-            continue
-        answer.count("упоминания с точным спаном", len(mentions))
-        for mention in mentions:
-            text = text_by_source.get(mention.source_id)
-            if text is None:
-                answer.skip("упоминание в источнике без текста")
-                continue
-            span = text[mention.char_start:mention.char_end]
+        for mention, span in _spans_for(graph, models, tenant_id=tenant_id,
+                                        node_id=node.id,
+                                        text_by_source=text_by_source, answer=answer):
             is_doctor, specialty = doctor_proof(span, node.canonical_label)
             if not is_doctor:
                 answer.skip("в цитате нет врачебного маркера")
@@ -378,7 +444,8 @@ def _evidence_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.
                 # получает. Нужен, чтобы «ноль врачей» имело причину, а
                 # не осталось числом. R5 стоил лишнего цикла ровно
                 # потому, что прогон сказал «0» и не сказал почему.
-                if marker_precedes_span(text, mention.char_start):
+                source_text_ = text_by_source.get(mention.source_id, "")
+                if marker_precedes_span(source_text_, mention.char_start):
                     answer.skip("маркер не в цитате, но стоит перед спаном "
                                 "в тексте источника")
                 if marker_follows_label(span, node.canonical_label):
@@ -421,7 +488,8 @@ def _answer_in(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUID],
             .where(models.member.knowledge_user_id == tenant_id)).all()}
 
     graph_items = _graph_doctors(graph, models, tenant_id=tenant_id, run_ids=run_ids,
-                                 identity_by_node=identity_by_node, answer=answer)
+                                 identity_by_node=identity_by_node,
+                                 text_by_source=text_by_source, answer=answer)
     covered = {item.identity_id for item in graph_items if item.identity_id}
     evidence_items, known = _evidence_doctors(
         graph, models, tenant_id=tenant_id, run_ids=run_ids,
