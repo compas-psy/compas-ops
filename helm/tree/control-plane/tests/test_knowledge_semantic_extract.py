@@ -532,7 +532,34 @@ class TestEvidenceGrounding:
             edges=[]), window_text=WINDOW_TEXT)
 
         assert result.atoms == []
-        assert any("не подтверждён абсолютной датой" in note for note in result.rejected)
+        assert any("не подтверждён" in note for note in result.rejected)
+
+    def test_foreign_date_in_evidence_does_not_confirm_occurred_at(self) -> None:
+        """Владелец 05.09.2026: подтверждать обязана ИМЕННО эта дата, а не
+        любая цифра рядом. До правки гейт искал в цитате хоть
+        какую-нибудь дату-подобную последовательность и принимал за
+        подтверждение и лабораторное «5.4», и номер приказа."""
+        result = validate(payload(atoms=[
+            {"local_id": "a1", "kind": "EVENT", "title": "т", "text": "Приём у Кириченко.",
+             "occurred_at": "2026-08-19", "date_precision": "DAY",
+             "evidence_quote": "Приём у Кириченко 14.04.2025, глюкоза 5.4."}],
+            edges=[]), window_text="Приём у Кириченко 14.04.2025, глюкоза 5.4.")
+
+        assert result.atoms == []
+        assert any("не подтверждён" in note for note in result.rejected)
+
+    def test_matching_date_in_evidence_confirms_occurred_at(self) -> None:
+        """Обратная сторона: правильная дата обязана проходить, иначе
+        ужесточение просто выключило бы даты совсем."""
+        quote = "Назначена повторная явка на 19.08.2026."
+        result = validate(payload(atoms=[
+            {"local_id": "a1", "kind": "EVENT", "title": "т", "text": "Повторная явка.",
+             "occurred_at": "2026-08-19", "date_precision": "DAY",
+             "evidence_quote": quote}],
+            edges=[]), window_text=quote)
+
+        assert len(result.atoms) == 1
+        assert result.atoms[0].occurred_at == "2026-08-19"
 
     def test_relative_date_marker_in_evidence_forbids_precise_occurred_at(self) -> None:
         """relative unanchored date → только date_precision=unknown.

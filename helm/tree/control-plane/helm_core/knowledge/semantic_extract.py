@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field, replace
@@ -238,10 +239,23 @@ NODE_RESPONSE_SCHEMA = {
                     "title": {"type": "string"},
                     "text": {"type": "string"},
                     "occurred_at": {"type": "string"},
-                    "date_precision": {"type": "string"},
+                    "date_precision": {
+                        "type": "string",
+                        "enum": ["day", "month", "year", "unknown"],
+                    },
                     "evidence_quote": {"type": "string"},
                 },
-                "required": ["local_id", "kind", "title", "text", "evidence_quote"],
+                #: Владелец 05.09.2026, находка по коду: `occurred_at` и
+                #: `date_precision` НЕ входили в `required`, то есть
+                #: constrained decoding официально разрешал модели вовсе
+                #: их не выдавать — она этим и пользовалась. Замер того
+                #: же дня: ни одного узла с датой на всём корпусе при
+                #: том, что в текстах даты есть у всех 90 источников.
+                #: Поля обязательны; даты нет — пустая строка и unknown,
+                #: то есть модель обязана СКАЗАТЬ, что даты нет, а не
+                #: промолчать.
+                "required": ["local_id", "kind", "title", "text",
+                             "occurred_at", "date_precision", "evidence_quote"],
             },
         },
     },
@@ -266,6 +280,9 @@ NODE_SYSTEM_PROMPT = (
     "Правила, нарушать которые нельзя:\n"
     "- пиши только то, что сказано в тексте буквально; не додумывай, не "
     "оценивай, не советуй;\n"
+    "- occurred_at и date_precision заполняй ВСЕГДА: даты нет — пиши "
+    "occurred_at пустой строкой и date_precision unknown, пропускать поля "
+    "нельзя;\n"
     "- даты пиши в occurred_at как ГГГГ-ММ-ДД, ГГГГ-ММ или ГГГГ и ставь "
     "date_precision day/month/year; относительную дату («в прошлый вторник»), "
     "которую не к чему привязать, оставь пустой с date_precision unknown — "
@@ -314,15 +331,70 @@ _RELATIVE_DATE_MARKERS_RE = re.compile(
     re.IGNORECASE,
 )
 
-#: Абсолютная дата в evidence: цифровая (ISO/ДД.ММ.ГГГГ/год) либо
-#: русское название месяца. Подтверждает, что precise occurred_at не
-#: выдуман, а взят из буквального текста фрагмента.
-_ABSOLUTE_DATE_RE = re.compile(
-    r"\d{4}|\d{1,2}[./]\d{1,2}(?:[./]\d{2,4})?|"
-    r"январ\w*|феврал\w*|март\w*|апрел\w*|ма[ей]\w*|июн\w*|июл\w*|"
-    r"август\w*|сентябр\w*|октябр\w*|ноябр\w*|декабр\w*",
-    re.IGNORECASE,
+#: Месяцы для сверки даты с цитатой: именительный и родительный, потому
+#: что в тексте встречается и «август 2026», и «26 августа 2026».
+_MONTHS_RU = (
+    ("январ", 1), ("феврал", 2), ("март", 3), ("апрел", 4), ("ма[йя]", 5),
+    ("июн", 6), ("июл", 7), ("август", 8), ("сентябр", 9), ("октябр", 10),
+    ("ноябр", 11), ("декабр", 12),
 )
+
+#: Заявленная точность → сколько компонент даты обязана подтвердить цитата.
+_ISO_FORMATS = {
+    SemanticDatePrecision.DAY.value: "%Y-%m-%d",
+    SemanticDatePrecision.MONTH.value: "%Y-%m",
+    SemanticDatePrecision.YEAR.value: "%Y",
+}
+
+
+def _date_confirmed_by_quote(occurred_at: str, precision: str, quote: str) -> bool:
+    """Подтверждает ли цитата ИМЕННО эту дату с ЗАЯВЛЕННОЙ точностью.
+
+    Владелец 05.09.2026: «нужно проверять, что конкретный occurred_at
+    совпадает с датой в evidence_quote с заявленной точностью, то есть
+    2026-08-26 должен подтверждаться именно 26.08.2026, а не любой
+    цифрой рядом».
+
+    Прежняя проверка искала в цитате хоть какую-нибудь дату-подобную
+    последовательность и потому принимала за подтверждение лабораторное
+    «5.4» или номер приказа «№207н» — замер 05.09.2026 показал, что в
+    медицинском тексте такое встречается почти в каждой цитате, то есть
+    гейт пропускал что угодно. Здесь собираются поверхностные формы
+    конкретной даты и ищутся буквально.
+
+    Год подтверждается годом, месяц — «08.2026», «2026-08» или
+    «август(а) 2026», день — ещё и «26.08.2026», «26.8.26», «26 августа
+    2026». Ничего из этого нет — дата не подтверждена.
+    """
+    fmt = _ISO_FORMATS.get(precision)
+    if fmt is None:
+        return False
+    try:
+        parsed = datetime.strptime(occurred_at.strip(), fmt)
+    except ValueError:
+        # Значение не в том виде, который обещает промпт: подтверждать
+        # нечего. Разбором занимается parse_occurred_at() при записи.
+        return False
+
+    haystack = _WS.sub(" ", quote)
+    year, month, day = parsed.year, parsed.month, parsed.day
+    month_word = next((stem for stem, num in _MONTHS_RU if num == month), None)
+    patterns: list[str] = []
+
+    if precision == SemanticDatePrecision.YEAR.value:
+        patterns.append(rf"\b{year}\b")
+    elif precision == SemanticDatePrecision.MONTH.value:
+        patterns.append(rf"\b0?{month}[./-]{year}\b")
+        patterns.append(rf"\b{year}-0?{month}\b")
+        if month_word:
+            patterns.append(rf"{month_word}\w*\s+{year}")
+    else:
+        patterns.append(rf"\b0?{day}[./-]0?{month}[./-]({year}|{year % 100:02d})\b")
+        patterns.append(rf"\b{year}-0?{month}-0?{day}\b")
+        if month_word:
+            patterns.append(rf"\b0?{day}\s+{month_word}\w*\s+{year}")
+
+    return any(re.search(pattern, haystack, re.IGNORECASE) for pattern in patterns)
 
 
 def _evidence_grounded(evidence_quote: str, window_text: str) -> bool:
@@ -345,6 +417,9 @@ SYSTEM_PROMPT = (
     "Правила, нарушать которые нельзя:\n"
     "- пиши только то, что сказано в тексте буквально; не додумывай, не "
     "оценивай, не советуй;\n"
+    "- occurred_at и date_precision заполняй ВСЕГДА: даты нет — пиши "
+    "occurred_at пустой строкой и date_precision unknown, пропускать поля "
+    "нельзя;\n"
     "- даты пиши в occurred_at как ГГГГ-ММ-ДД, ГГГГ-ММ или ГГГГ и ставь "
     "date_precision day/month/year; относительную дату («в прошлый вторник»), "
     "которую не к чему привязать, оставь пустой с date_precision unknown — "
@@ -541,9 +616,10 @@ def validate(raw: str, *, window_text: str) -> WindowExtraction:
             result.rejected.append(
                 f"evidence описывает относительную дату, но occurred_at выставлен: {occurred_at!r}")
             continue
-        if occurred_at and precision in _PRECISE_DATE_PRECISIONS and not _ABSOLUTE_DATE_RE.search(evidence_quote):
+        if (occurred_at and precision in _PRECISE_DATE_PRECISIONS
+                and not _date_confirmed_by_quote(occurred_at, precision, evidence_quote)):
             result.rejected.append(
-                f"occurred_at {occurred_at!r} не подтверждён абсолютной датой в evidence: "
+                f"occurred_at {occurred_at!r} не подтверждён ЭТОЙ ЖЕ датой в evidence: "
                 f"{evidence_quote!r:.80}")
             continue
 
@@ -719,9 +795,10 @@ def _validate_nodes(raw: str, *, window_text: str) -> WindowExtraction:
             result.rejected.append(
                 f"evidence описывает относительную дату, но occurred_at выставлен: {occurred_at!r}")
             continue
-        if occurred_at and precision in _PRECISE_DATE_PRECISIONS and not _ABSOLUTE_DATE_RE.search(evidence_quote):
+        if (occurred_at and precision in _PRECISE_DATE_PRECISIONS
+                and not _date_confirmed_by_quote(occurred_at, precision, evidence_quote)):
             result.rejected.append(
-                f"occurred_at {occurred_at!r} не подтверждён абсолютной датой в evidence: "
+                f"occurred_at {occurred_at!r} не подтверждён ЭТОЙ ЖЕ датой в evidence: "
                 f"{evidence_quote!r:.80}")
             continue
 
