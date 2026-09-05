@@ -49,7 +49,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .health_schema import health_schema_configured, health_session, is_health_domain
 from .relation_compiler import (
-    _DOCTOR_MARKER_RE, _ROLE_PROXIMITY_TOKENS, _first_mention_index, _tokens,
+    _DOCTOR_MARKER_RE, _ROLE_PROXIMITY_TOKENS, _first_mention_index, _token_span,
+    _tokens,
 )
 from .semantic_pilot import source_text
 from .semantic_publish import HEALTH_MODELS, PUBLIC_MODELS
@@ -153,15 +154,21 @@ class DoctorsAnswer:
     #: ответа: «нашлось трое» без «двое отброшены за отсутствием
     #: доказательства» — неполная правда (§5.1).
     skipped: dict[str, int] = field(default_factory=dict)
+    #: Что вообще рассматривалось. Без этих чисел «один врач» не
+    #: отличить от «один врач из одного» и от «один из шестидесяти».
+    considered: dict[str, int] = field(default_factory=dict)
 
     def skip(self, reason: str) -> None:
         self.skipped[reason] = self.skipped.get(reason, 0) + 1
+
+    def count(self, what: str, howmany: int = 1) -> None:
+        self.considered[what] = self.considered.get(what, 0) + howmany
 
     def as_dict(self) -> dict:
         """Полный ответ — с именами и цитатами. Только в файл."""
         return {"question": self.question, "intent": self.intent,
                 "path_used": self.path_used, "graph_edges": self.graph_edges,
-                "skipped": self.skipped,
+                "considered": self.considered, "skipped": self.skipped,
                 "answer": [item.line() for item in self.items],
                 "items": [asdict(item) for item in self.items]}
 
@@ -172,7 +179,7 @@ class DoctorsAnswer:
                 "items_with_specialty": sum(1 for i in self.items if i.specialties),
                 "items_with_date": sum(1 for i in self.items if i.occurred_at),
                 "proofs_total": sum(len(i.proofs) for i in self.items),
-                "skipped": self.skipped,
+                "considered": self.considered, "skipped": self.skipped,
                 "by_item": [item.as_public_dict() for item in self.items]}
 
 
@@ -222,6 +229,24 @@ def marker_precedes_span(text: str, char_start: int) -> bool:
     before = text[max(0, char_start - _MARKER_LOOKBEHIND_CHARS):char_start]
     tail = _tokens(before)[-_ROLE_PROXIMITY_TOKENS:]
     return any(_DOCTOR_MARKER_RE.fullmatch(t) for t in tail)
+
+
+def marker_follows_label(span_text: str, label: str) -> bool:
+    """Стоит ли врачебный маркер ПОСЛЕ подписи, в пределах того же окна.
+
+    Тоже только диагностика. «Иванов И.И., врач-уролог» — обычная
+    подпись под выпиской, и она столь же явна, как «врач-уролог Иванов
+    И.И.», но аттестованное в R4 правило смотрит только назад. Число
+    отвечает на вопрос, теряет ли строгое правило настоящих врачей;
+    расширять правило без решения владельца нельзя, и ответ этот случай
+    не получает.
+    """
+    span = _token_span(span_text, label)
+    if span is None:
+        return False
+    tokens = _tokens(span_text)
+    after = tokens[span[1] + 1:span[1] + 1 + _ROLE_PROXIMITY_TOKENS]
+    return any(_DOCTOR_MARKER_RE.fullmatch(t) for t in after)
 
 
 def _graph_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUID],
@@ -287,6 +312,8 @@ def _evidence_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.
                models.node.semantic_run_id.in_(run_ids))
         .order_by(models.identity.normalized_key, models.node.created_at)).all()
 
+    answer.count("личности-люди с составом", len({r[0].id for r in rows}))
+    answer.count("узлы в их составе", len(rows))
     by_identity: dict[str, DoctorItem] = {}
     for identity, node in rows:
         mentions = graph.scalars(
@@ -298,6 +325,7 @@ def _evidence_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.
         if not mentions:
             answer.skip("узел без точного спана")
             continue
+        answer.count("упоминания с точным спаном", len(mentions))
         for mention in mentions:
             text = text_by_source.get(mention.source_id)
             if text is None:
@@ -314,6 +342,8 @@ def _evidence_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.
                 if marker_precedes_span(text, mention.char_start):
                     answer.skip("маркер не в цитате, но стоит перед спаном "
                                 "в тексте источника")
+                if marker_follows_label(span, node.canonical_label):
+                    answer.skip("маркер стоит после подписи, а не перед ней")
                 continue
             item = by_identity.get(str(identity.id))
             if item is None:

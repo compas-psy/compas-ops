@@ -314,3 +314,27 @@ def test_без_маркера_нигде_диагностика_молчит():
     assert items == []
     assert "маркер не в цитате, но стоит перед спаном в тексте источника" \
         not in answer.skipped
+
+
+def test_маркер_после_подписи_считается_но_в_ответ_не_попадает():
+    # «Иванов И.И., врач-уролог» — обычная подпись под выпиской.
+    # Аттестованное правило смотрит только назад, поэтому ответа нет,
+    # но потеря названа числом.
+    text = "Заключение подписал Иванов Пётр Сергеевич, врач-уролог."
+    node = _Node("Иванов Пётр Сергеевич")
+    session = _FakeSession(pairs=[(_Identity("Иванов Пётр Сергеевич"), node)],
+                           mentions=[_Mention(node.id, 20, len(text))])
+    items, answer = _evidence(session, text)
+    assert items == []
+    assert answer.skipped["маркер стоит после подписи, а не перед ней"] == 1
+
+
+def test_рассмотренное_считается():
+    text = "врач-уролог Иванов Пётр Сергеевич"
+    node = _Node("Иванов Пётр Сергеевич")
+    session = _FakeSession(pairs=[(_Identity("Иванов Пётр Сергеевич"), node)],
+                           mentions=[_Mention(node.id, 0, len(text))])
+    _, answer = _evidence(session, text)
+    assert answer.considered == {"личности-люди с составом": 1,
+                                 "узлы в их составе": 1,
+                                 "упоминания с точным спаном": 1}
