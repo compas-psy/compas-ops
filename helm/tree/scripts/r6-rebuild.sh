@@ -27,8 +27,16 @@ echo "############ ПЕРЕСБОРКА ############"
 sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.entity_resolution --rebuild
 RC=$?
 
+# Повтор обычного прохода — доказательство идемпотентности после
+# пересборки (владелец, 05.09.2026: «один повтор должен доказать
+# идемпотентность»). Обязан дать нули по created и already_resolved,
+# равный составу: строки пересборки лежат в базе и прочитаны обратно.
+echo "############ ПОВТОР ПРОХОДА ############"
+sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.entity_resolution
+AGAIN=$?
+
 echo "############ ПРОВЕРКА ПОСЛЕ ############"
 sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.entity_resolution --probe
 
-echo "############ ГОТОВО (rc=$RC) ############"
+echo "############ ГОТОВО (rc=$RC again=$AGAIN) ############"
 exit "$RC"
