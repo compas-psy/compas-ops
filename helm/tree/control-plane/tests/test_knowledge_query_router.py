@@ -97,7 +97,16 @@ class _FakeSession:
     def scalars(self, query):
         entity = query.column_descriptions[0]["entity"]
         if entity is PUBLIC_MODELS.mention:
-            return _Result(self.mentions)
+            # Упоминания фильтруются по узлу так же, как в проде: иначе
+            # тест «специальность доказана вторым узлом» проходил бы по
+            # чужим цитатам и ничего не проверял. Узел берётся из
+            # bind-параметров скомпилированного запроса — устойчивее,
+            # чем разбирать дерево условий руками.
+            params = query.compile().params
+            wanted = next((v for k, v in params.items() if k.startswith("node_id")),
+                          None)
+            return _Result([m for m in self.mentions
+                            if wanted is None or m.node_id == wanted])
         raise AssertionError(f"неожиданный scalars() по {entity}")
 
     def get(self, _model, node_id):
@@ -555,3 +564,32 @@ def test_только_немедицинская_роль_оставляет_с�
                              answer=answer)
     assert items[0].specialties == []
     assert items[0].line().endswith("специальность не подтверждена")
+
+
+def test_специальность_собирается_со_всех_узлов_личности():
+    # Один и тот же врач приходит двумя узлами из разных документов, и
+    # специальность доказана только во втором. Группировка по личности
+    # не должна означать «смотрим только первый узел».
+    text_a = "Пациента принял Иванов Пётр Сергеевич."
+    text_b = "Заключение: врач-уролог Иванов Пётр Сергеевич."
+    source_b = uuid.UUID("00000000-0000-0000-0000-0000000000cc")
+    node_a, node_b = _Node("Иванов Пётр Сергеевич"), _Node("Иванов Пётр Сергеевич")
+    event_a, event_b = _Node("приём A"), _Node("приём B")
+    identity = _Identity("Иванов Пётр Сергеевич")
+    mention_b = _Mention(node_b.id, 11, len(text_b) - 1)
+    mention_b.source_id = source_b
+    session = _FakeSession(
+        doctor_edges=[(_Edge(event_a.id, node_a.id, role="doctor"), node_a),
+                      (_Edge(event_b.id, node_b.id, role="doctor"), node_b)],
+        nodes=[event_a, event_b],
+        members=[(identity.id, node_a.id), (identity.id, node_b.id)],
+        mentions=[_Mention(node_a.id, 16, len(text_a) - 1), mention_b])
+    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+                              intent=qr.QuestionIntent.DOCTORS_VISITED)
+    items, _ = qr._answer_in(session, PUBLIC_MODELS, tenant_id=TENANT,
+                             run_ids={RUN},
+                             text_by_source={SOURCE: text_a, source_b: text_b},
+                             answer=answer)
+    assert len(items) == 1
+    assert len(items[0].proofs) == 2
+    assert items[0].specialties == ["уролог"]

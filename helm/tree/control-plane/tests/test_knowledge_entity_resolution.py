@@ -394,3 +394,64 @@ def test_проверка_идемпотентности_проходит_на_�
                    "candidates_created": 0}})
     assert er._cli(["--verify-idempotent"]) == 0
     assert session.commits == 0
+
+
+# --- гейт остатка однословных личностей ------------------------------------
+
+def test_остаток_без_слияния_всё_равно_ловится():
+    # Владелец назвал гейтом `one_token_with_members_gt1`. Он один тот
+    # остаток НЕ ловит: живое состояние 05.09.2026 — один член при
+    # gt1 = 0, то есть ровно та legacy-строка, ради удаления которой
+    # refresh и делается, прошла бы незамеченной.
+    assert er.weak_person_members({
+        "health": {"one_token_with_members": 1,
+                   "one_token_with_members_gt1": 0}}) == {
+        "health.one_token_with_members": 1}
+
+
+def test_слияние_по_однословной_подписи_ловится_тоже():
+    assert er.weak_person_members({
+        "public": {"one_token_with_members": 3,
+                   "one_token_with_members_gt1": 3}}) == {
+        "public.one_token_with_members": 3, "public.one_token_with_members_gt1": 3}
+
+
+def test_чистое_состояние_проходит_гейт():
+    assert er.weak_person_members({
+        "public": {"one_token_with_members": 0, "one_token_with_members_gt1": 0},
+        "health": {"one_token_with_members": 0, "one_token_with_members_gt1": 0}}) == {}
+
+
+def _patch_probe(monkeypatch, report):
+    session = _FakeCliSession()
+    monkeypatch.setattr(er, "create_engine", lambda *a, **k: object())
+    monkeypatch.setattr(er, "sessionmaker", lambda *a, **k: (lambda: session))
+    monkeypatch.setattr(er, "get_settings",
+                        lambda: type("S", (), {"database_url": "postgresql://x"})())
+    monkeypatch.setattr(er, "probe_all", lambda *a, **k: report)
+    return session
+
+
+def test_остаток_валит_код_возврата(monkeypatch):
+    # Идеально идемпотентное, но неправильное состояние не должно
+    # объявляться успехом.
+    _patch_probe(monkeypatch, {
+        "public": {"one_token_with_members": 0, "one_token_with_members_gt1": 0},
+        "health": {"one_token_with_members": 1, "one_token_with_members_gt1": 0}})
+    assert er._cli(["--verify-no-weak-person-members"]) == 1
+
+
+def test_чистый_остаток_даёт_ноль(monkeypatch):
+    _patch_probe(monkeypatch, {
+        "public": {"one_token_with_members": 0, "one_token_with_members_gt1": 0},
+        "health": {"one_token_with_members": 0, "one_token_with_members_gt1": 0}})
+    assert er._cli(["--verify-no-weak-person-members"]) == 0
+
+
+def test_обычный_probe_кода_возврата_не_меняет(monkeypatch):
+    # `--probe` остаётся диагностикой: он печатает и возвращает ноль.
+    # Гейтом служит отдельный флаг, а не молчаливое изменение поведения
+    # уже используемой команды.
+    _patch_probe(monkeypatch, {
+        "health": {"one_token_with_members": 5, "one_token_with_members_gt1": 5}})
+    assert er._cli(["--probe"]) == 0

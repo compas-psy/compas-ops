@@ -37,12 +37,20 @@ sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.entity_reso
     --verify-idempotent
 IDEM=$?
 
-echo "############ ПРОВЕРКА ПОСЛЕ ############"
-sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.entity_resolution --probe
+# Второй гейт: остаток однословных личностей-людей с составом. Без него
+# возможно идеально идемпотентное, но неправильное состояние — проход
+# ничего не создаёт, а legacy-строки, которых он сегодня не создал бы,
+# в таблицах остались. `--probe` для этого не годится: он печатает и
+# возвращает ноль, оставаясь диагностикой.
+echo "############ ОСТАТОК ОДНОСЛОВНЫХ ############"
+sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.entity_resolution \
+    --verify-no-weak-person-members
+RESIDUE=$?
 
-echo "############ ГОТОВО (rc=$RC idem=$IDEM) ############"
-# Провал любой из двух половин валит шаг. Возвращать код одной только
+echo "############ ГОТОВО (rc=$RC idem=$IDEM residue=$RESIDUE) ############"
+# Провал любой из трёх половин валит шаг. Возвращать код одной только
 # пересборки значило бы объявлять успехом прогон с недоказанной
-# идемпотентностью.
+# идемпотентностью или с оставшимся мусором.
 if [ "$RC" -ne 0 ]; then exit "$RC"; fi
-exit "$IDEM"
+if [ "$IDEM" -ne 0 ]; then exit "$IDEM"; fi
+exit "$RESIDUE"

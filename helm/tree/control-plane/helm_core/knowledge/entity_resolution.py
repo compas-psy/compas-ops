@@ -425,6 +425,18 @@ def rebuild_all(session: Session, *, knowledge_user_id: uuid.UUID | None = None
 #: идемпотентен: на неизменившихся данных ему нечего создавать.
 _CREATION_COUNTERS = ("identities_created", "members_created", "candidates_created")
 
+#: Счётчики остатка однословных личностей-людей с составом.
+#:
+#: Владелец назвал гейтом `one_token_with_members_gt1`. Он один остаток
+#: НЕ ловит: живое состояние на 05.09.2026 — `one_token_with_members = 1`
+#: при `gt1 = 0`, то есть ровно та legacy-строка, ради удаления которой
+#: refresh и делается, прошла бы гейт незамеченной. Поэтому проверяются
+#: оба: `gt1` — «однословную подпись слили из нескольких узлов»,
+#: `one_token_with_members` — «однословная подпись вообще имеет состав».
+#: После пересборки по нынешним правилам оба обязаны быть нулём: такой
+#: узел становится кандидатом, а не членом.
+_WEAK_PERSON_COUNTERS = ("one_token_with_members", "one_token_with_members_gt1")
+
 
 def created_anything(report: dict[str, dict | None]) -> dict[str, int]:
     """Что проход создал бы прямо сейчас, по схемам. Пусто — идемпотентен."""
@@ -439,6 +451,26 @@ def created_anything(report: dict[str, dict | None]) -> dict[str, int]:
     return created
 
 
+def weak_person_members(report: dict[str, dict | None]) -> dict[str, int]:
+    """Остаток однословных личностей-людей с составом, по схемам.
+
+    Пусто — состав собран по нынешним правилам. Непусто — в производных
+    таблицах остались строки, которых проход сегодня не создал бы, и
+    объявлять refresh успешным нельзя, каким бы идемпотентным он ни был:
+    идеально воспроизводимое неправильное состояние остаётся
+    неправильным.
+    """
+    residue: dict[str, int] = {}
+    for scope, scope_report in report.items():
+        if not scope_report:
+            continue
+        for counter in _WEAK_PERSON_COUNTERS:
+            value = scope_report.get(counter, 0)
+            if value:
+                residue[f"{scope}.{counter}"] = value
+    return residue
+
+
 def _cli(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="R6: разрешение сущностей")
     parser.add_argument("--dry-run", action="store_true",
@@ -450,11 +482,14 @@ def _cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--verify-idempotent", action="store_true",
                         help="сухой проход; ненулевой код возврата, если он "
                              "создал бы хоть одну строку")
+    parser.add_argument("--verify-no-weak-person-members", action="store_true",
+                        help="проверка; ненулевой код возврата, если у "
+                             "однословной личности-человека остался состав")
     args = parser.parse_args(argv)
 
     engine = create_engine(get_settings().database_url, pool_pre_ping=True)
     with sessionmaker(engine, expire_on_commit=False)() as session:
-        if args.probe:
+        if args.probe or args.verify_no_weak_person_members:
             report = probe_all(session)
             session.rollback()
         elif args.rebuild:
@@ -466,6 +501,13 @@ def _cli(argv: list[str] | None = None) -> int:
         else:
             report = resolve_all(session)
             session.commit()
+
+    if args.verify_no_weak_person_members:
+        residue = weak_person_members(report)
+        print(json.dumps({"no_weak_person_members": not residue,
+                          "residue": residue, "scopes": report},
+                         ensure_ascii=False, indent=2))
+        return 1 if residue else 0
 
     if args.verify_idempotent:
         # Проверка сухая намеренно. Обычный повторный проход на

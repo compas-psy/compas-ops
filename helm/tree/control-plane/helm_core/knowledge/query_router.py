@@ -358,6 +358,12 @@ def _graph_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUI
 
     by_identity: dict[str, DoctorItem] = {}
     seen_roles: set[tuple[uuid.UUID, str]] = set()
+    #: Узлы, чьи цитаты уже прочитаны. Ключ группировки — личность, но
+    #: доказательства собираются с КАЖДОГО её узла: один и тот же врач
+    #: приходит двумя узлами из разных документов, и специальность
+    #: вполне может быть доказана только во втором. Читать цитаты одного
+    #: узла повторно (у него бывает несколько рёбер) при этом незачем.
+    scanned: set[uuid.UUID] = set()
     for edge, person in rows:
         identity_id = identity_by_node.get(person.id)
         if identity_id is None:
@@ -369,6 +375,9 @@ def _graph_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUI
             item = DoctorItem(identity_id=key, person=person.canonical_label,
                               path=AnswerPath.GRAPH)
             by_identity[key] = item
+
+        if person.id not in scanned:
+            scanned.add(person.id)
             for specialty in _marker_specialty(
                     _spans_for(graph, models, tenant_id=tenant_id, node_id=person.id,
                                text_by_source=text_by_source, answer=answer),
