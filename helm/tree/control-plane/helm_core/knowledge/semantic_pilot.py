@@ -31,6 +31,7 @@ from .semantic_publish import HEALTH_MODELS, PUBLIC_MODELS, publish_semantic_run
 from .tenancy import bind_knowledge_user
 from ..config import get_settings
 from ..models import KnowledgeSemanticRun, KnowledgeSource, KnowledgeStatus
+from ..models.base import SemanticNodeKind
 
 #: Граница пилота из спеки. Не «сколько успеем»: больше — это уже R8
 #: (полный backfill), который требует отдельного решения и ревью.
@@ -55,6 +56,8 @@ class SourceOutcome:
     windows_failed: int = 0
     coverage_ratio: float = 0.0
     nodes: int = 0
+    entities: int = 0
+    atoms: int = 0
     edges: int = 0
     mentions_total: int = 0
     mentions_exact_span: int = 0
@@ -78,6 +81,8 @@ class PilotReport:
             "windows": sum(s.windows_total for s in self.sources),
             "windows_failed": sum(s.windows_failed for s in self.sources),
             "nodes": sum(s.nodes for s in self.sources),
+            "entities": sum(s.entities for s in self.sources),
+            "atoms": sum(s.atoms for s in self.sources),
             "edges": sum(s.edges for s in self.sources),
             "mentions": sum(s.mentions_total for s in self.sources),
             "mentions_exact_span": sum(s.mentions_exact_span for s in self.sources),
@@ -148,7 +153,14 @@ def _count(session: Session, model, run_id: uuid.UUID, *extra) -> int:
 def _counts(session: Session, models, run_id: uuid.UUID) -> dict[str, int]:
     total = _count(session, models.mention, run_id)
     exact = _count(session, models.mention, run_id, models.mention.char_start.is_not(None))
-    return {"nodes": _count(session, models.node, run_id),
+    nodes = _count(session, models.node, run_id)
+    # Сущности отдельно от атомов: рёбра компилятор строит ТОЛЬКО из пар
+    # атом×сущность (`relation_compiler.compile_relations`), поэтому «ноль
+    # рёбер» читается по-разному при нуле атомов и при их изобилии. Одно
+    # число `nodes` этот вопрос не различает.
+    entities = _count(session, models.node, run_id,
+                      models.node.kind == SemanticNodeKind.ENTITY)
+    return {"nodes": nodes, "entities": entities, "atoms": nodes - entities,
             "edges": _count(session, models.edge, run_id),
             "mentions_total": total,
             "mentions_exact_span": exact,

@@ -60,8 +60,8 @@ class TestReportCarriesNoContent:
     ALLOWED = {
         "source_id", "domain", "chars", "run_status", "switched",
         "windows_total", "windows_processed", "windows_failed", "coverage_ratio",
-        "nodes", "edges", "mentions_total", "mentions_exact_span",
-        "mentions_without_span", "error",
+        "nodes", "entities", "atoms", "edges", "mentions_total",
+        "mentions_exact_span", "mentions_without_span", "error",
     }
 
     def test_outcome_has_no_field_outside_the_allowed_set(self):
@@ -143,8 +143,8 @@ class TestCountsUseTheSchemaThatWasWrittenTo:
     похожим на него.
     """
 
-    ZEROS = {"nodes": 0, "edges": 0, "mentions_total": 0,
-             "mentions_exact_span": 0, "mentions_without_span": 0}
+    ZEROS = {"nodes": 0, "entities": 0, "atoms": 0, "edges": 0,
+             "mentions_total": 0, "mentions_exact_span": 0, "mentions_without_span": 0}
 
     def _spy(self, monkeypatch):
         seen = {}
