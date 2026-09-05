@@ -133,12 +133,16 @@ class TestStrongIdentity:
                                 _Node("Сеченов", "organization", created_at=2)])
         report = _run(session)
         assert report.identities_created == 2
-        assert report.candidates_by_reason == {EntityResolutionReason.TYPE_CONFLICT: 1}
+        assert report.candidates_by_reason[EntityResolutionReason.TYPE_CONFLICT] == 1
+        # Организация с однословным именем — полноценное тождество;
+        # человек с однословной подписью — нет (см. TestOneTokenPerson).
+        assert report.members_created == 1
 
-    def test_confirmed_alias_joins_the_same_identity(self):
-        """Подтверждённый алиас — доказательство; догадка о написании —
-        нет. Поэтому путь один: алиас, уже записанный за узлом
-        личности."""
+    def test_alias_match_is_a_question_not_a_merge(self):
+        """Алиасы сегодня извлекает МОДЕЛЬ, а не подтверждает владелец
+        (`knowledge_entity_aliases` заполняется разбором), и признака
+        подтверждения у строки нет. Пока его нет, совпадение алиаса —
+        кандидат (владелец, 05.09.2026), а не тождество."""
         first = _Node("Безручко Дарья Юрьевна", created_at=1,
                       aliases=("безручко д.ю.",))
         second = _Node("Безручко Д.Ю.", created_at=2)
@@ -150,10 +154,16 @@ class TestStrongIdentity:
             node_id=first.id, matched_on=EntityIdentityMatch.NORMALIZED_LABEL)
         session = _FakeSession([first, second], members=[member], identities=[identity])
         report = _run(session)
+
         assert report.already_resolved == 1
-        assert report.identities_created == 0
-        assert report.matched_by == {EntityIdentityMatch.ALIAS: 1}
-        assert _of(session, PUBLIC_MODELS.member)[0].identity_id == identity.id
+        assert report.candidates_by_reason[EntityResolutionReason.ALIAS_UNCONFIRMED] == 1
+        # Кандидат указывает на ту личность, чей алиас совпал.
+        alias_candidates = [c for c in _of(session, PUBLIC_MODELS.candidate)
+                            if c.reason == EntityResolutionReason.ALIAS_UNCONFIRMED]
+        assert [c.identity_id for c in alias_candidates] == [identity.id]
+        # И узел в неё НЕ вошёл.
+        assert all(m.identity_id != identity.id
+                   for m in _of(session, PUBLIC_MODELS.member))
 
 
 class TestForbiddenMerges:
@@ -164,8 +174,9 @@ class TestForbiddenMerges:
                                 _Node("Иванов", created_at=2)])
         report = _run(session)
         assert report.identities_created == 2, "фамилия без имени слита — это запрещено"
-        assert report.candidates_by_reason == {EntityResolutionReason.SURNAME_ONLY: 1}
-        assert len(_of(session, PUBLIC_MODELS.candidate)) == 1
+        # Голая фамилия в состав не входит вовсе: член только у ФИО.
+        assert report.members_created == 1
+        assert report.candidates_by_reason == {EntityResolutionReason.SURNAME_ONLY: 2}
 
     def test_different_people_produce_neither_merge_nor_candidate(self):
         """Кандидат — не «на всякий случай». Вопрос, заданный без
@@ -191,6 +202,7 @@ class TestForbiddenMerges:
         report = _run(session)
         assert report.matched_by == {EntityIdentityMatch.NORMALIZED_LABEL: 1}
         assert report.identities_created == 1
+        assert EntityResolutionReason.ALIAS_UNCONFIRMED not in report.candidates_by_reason
 
 
 class TestSourcesAreNotTouched:
@@ -265,3 +277,49 @@ class TestNodeCountInvariant:
         session.scalar = lambda _q: next(counts)
         with pytest.raises(RuntimeError, match="5 -> 4"):
             _run(session)
+
+
+class TestOneTokenPerson:
+    """Владелец, 05.09.2026: «Для PERSON однословная подпись никогда не
+    является strong identity сама по себе». Однофамильцы существуют, а
+    цена ошибки — чужая медицинская запись в карточке человека."""
+
+    def test_two_bare_surnames_do_not_merge(self):
+        session = _FakeSession([_Node("Иванов", created_at=1),
+                                _Node("Иванов", created_at=2)])
+        report = _run(session)
+        assert report.members_created == 0, "две голые фамилии слиты — запрещено"
+        assert report.candidates_by_reason == {EntityResolutionReason.SURNAME_ONLY: 2}
+
+    def test_bare_surname_is_not_lost(self):
+        """Не слить — не значит потерять: у вопроса есть личность, к
+        которой он привязан, и разобрать его можно."""
+        session = _FakeSession([_Node("Иванов", created_at=1)])
+        _run(session)
+        candidates = _of(session, PUBLIC_MODELS.candidate)
+        identities = _of(session, PUBLIC_MODELS.identity)
+        assert len(candidates) == 1 and len(identities) == 1
+        assert candidates[0].identity_id == identities[0].id
+
+    def test_two_meaningful_tokens_are_enough(self):
+        """Инициалы — тоже токен: «Безручко Д.Ю.» это уже не просто
+        фамилия."""
+        session = _FakeSession([_Node("Безручко Д.Ю.", created_at=1),
+                                _Node("безручко  д.ю.", created_at=2)])
+        report = _run(session)
+        assert (report.identities_created, report.members_created) == (1, 2)
+
+    def test_single_token_organization_still_resolves(self):
+        """Правило про один токен — только для PERSON. «Инвитро» —
+        полное имя организации, а не её фамилия."""
+        session = _FakeSession([_Node("Инвитро", "organization", created_at=1),
+                                _Node("инвитро", "organization", created_at=2)])
+        report = _run(session)
+        assert (report.identities_created, report.members_created) == (1, 2)
+        assert report.candidates_created == 0
+
+    def test_single_token_place_still_resolves(self):
+        session = _FakeSession([_Node("Москва", "place", created_at=1),
+                                _Node("москва", "place", created_at=2)])
+        report = _run(session)
+        assert (report.identities_created, report.members_created) == (1, 2)

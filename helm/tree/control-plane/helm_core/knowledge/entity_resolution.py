@@ -80,6 +80,22 @@ def _tokens(normalized_key: str) -> list[str]:
     return normalized_key.split()
 
 
+#: Типы, для которых однословной подписи НЕДОСТАТОЧНО для тождества.
+#: Владелец, 05.09.2026: «Для PERSON однословная подпись никогда не
+#: является strong identity сама по себе». Одна фамилия — не человек:
+#: однофамильцы существуют, а цена ошибки — чужая медицинская запись в
+#: карточке. Для ORGANIZATION/PLACE/CONCEPT правило не меняется: «Инвитро»
+#: и «Москва» однословны по своей природе, и это их полное имя.
+_MULTI_TOKEN_REQUIRED = frozenset({"PERSON", "person"})
+
+
+def is_strong_label(entity_type: str, normalized_key: str) -> bool:
+    """Достаточно ли одной подписи, чтобы считать тождество доказанным."""
+    if entity_type in _MULTI_TOKEN_REQUIRED:
+        return len(_tokens(normalized_key)) >= 2
+    return bool(normalized_key)
+
+
 def is_surname_only(one: str, other: str) -> bool:
     """Одна подпись — единственное слово, и это первое слово второй.
 
@@ -89,10 +105,16 @@ def is_surname_only(one: str, other: str) -> bool:
     чтобы слить, а чтобы не потерять вопрос.
     """
     a, b = _tokens(one), _tokens(other)
-    if len(a) == len(b):
+    if not a or not b:
         return False
+    # Две одинаковые голые фамилии — тоже вопрос, а не совпадение
+    # («Иванов» и «Иванов» из разных выписок: владелец, 05.09.2026,
+    # называет и этот случай кандидатом). Раньше равные длины отсекались
+    # сразу, и такая пара молча оставалась без вопроса.
+    if len(a) == 1 and len(b) == 1:
+        return a[0] == b[0]
     short, long_ = (a, b) if len(a) < len(b) else (b, a)
-    return len(short) == 1 and bool(long_) and short[0] == long_[0]
+    return len(short) == 1 and short[0] == long_[0]
 
 
 def _alias_owner(graph: Session, models, tenant_id: uuid.UUID) -> dict[str, uuid.UUID]:
@@ -171,34 +193,61 @@ def resolve_in(graph: Session, models, *, tenant_id: uuid.UUID,
             # закрепить дефект; пропуск виден по nodes_seen.
             continue
 
-        identity = identities.get((entity_type, key))
-        matched_on = EntityIdentityMatch.NORMALIZED_LABEL
-        if identity is None and key in alias_owner:
-            identity = next((i for i in identities.values()
-                             if i.id == alias_owner[key]), None)
-            if identity is not None and identity.entity_type == entity_type:
-                matched_on = EntityIdentityMatch.ALIAS
-            else:
-                # Алиас чужого типа — не доказательство (§14.7).
-                identity = None
+        def add_candidate(identity_id: uuid.UUID, reason: str) -> None:
+            if (node.id, identity_id, str(reason)) in known_candidates:
+                return
+            known_candidates.add((node.id, identity_id, str(reason)))
+            report.candidates_created += 1
+            report.candidates_by_reason[str(reason)] = (
+                report.candidates_by_reason.get(str(reason), 0) + 1)
+            if not dry_run:
+                graph.add(models.candidate(
+                    id=uuid.uuid4(), knowledge_user_id=tenant_id, node_id=node.id,
+                    identity_id=identity_id, reason=reason))
 
-        if identity is None:
-            identity = models.identity(
+        def identity_for(key_: str) -> object:
+            existing = identities.get((entity_type, key_))
+            if existing is not None:
+                return existing
+            created = models.identity(
                 id=uuid.uuid4(), knowledge_user_id=tenant_id, entity_type=entity_type,
-                canonical_label=node.canonical_label, normalized_key=key)
-            identities[(entity_type, key)] = identity
+                canonical_label=node.canonical_label, normalized_key=key_)
+            identities[(entity_type, key_)] = created
             report.identities_created += 1
             if not dry_run:
-                graph.add(identity)
+                graph.add(created)
+            return created
 
-        member = models.member(
-            id=uuid.uuid4(), knowledge_user_id=tenant_id, identity_id=identity.id,
-            node_id=node.id, matched_on=matched_on)
-        resolved.add(node.id)
-        report.members_created += 1
-        report.matched_by[str(matched_on)] = report.matched_by.get(str(matched_on), 0) + 1
-        if not dry_run:
-            graph.add(member)
+        # Совпадение алиаса больше НЕ сливает (владелец, 05.09.2026):
+        # `knowledge_entity_aliases` заполняет разбор, а не владелец, и
+        # признака подтверждения у строки нет. Пока его нет, совпадение
+        # алиаса — вопрос, а не доказательство.
+        alias_identity_id = alias_owner.get(key)
+        if alias_identity_id is not None:
+            owner_identity = next((i for i in identities.values()
+                                   if i.id == alias_identity_id), None)
+            if owner_identity is not None and owner_identity.entity_type == entity_type:
+                add_candidate(owner_identity.id,
+                              EntityResolutionReason.ALIAS_UNCONFIRMED)
+
+        identity = identity_for(key)
+
+        # Однословная подпись PERSON не доказывает тождества. Личность
+        # заводится (иначе вопрос не к чему прицепить и он потеряется),
+        # но узел в неё НЕ входит: состав такой личности назначает
+        # человек, разбирая кандидата.
+        if is_strong_label(entity_type, key):
+            member = models.member(
+                id=uuid.uuid4(), knowledge_user_id=tenant_id, identity_id=identity.id,
+                node_id=node.id, matched_on=EntityIdentityMatch.NORMALIZED_LABEL)
+            resolved.add(node.id)
+            report.members_created += 1
+            report.matched_by[str(EntityIdentityMatch.NORMALIZED_LABEL)] = (
+                report.matched_by.get(str(EntityIdentityMatch.NORMALIZED_LABEL), 0) + 1)
+            if not dry_run:
+                graph.add(member)
+        else:
+            add_candidate(identity.id, EntityResolutionReason.SURNAME_ONLY)
 
         for (other_type, other_key), other in identities.items():
             if other.id == identity.id:
@@ -209,16 +258,7 @@ def resolve_in(graph: Session, models, *, tenant_id: uuid.UUID,
                 reason = EntityResolutionReason.TYPE_CONFLICT
             else:
                 continue
-            if (node.id, other.id, str(reason)) in known_candidates:
-                continue
-            known_candidates.add((node.id, other.id, str(reason)))
-            report.candidates_created += 1
-            report.candidates_by_reason[str(reason)] = (
-                report.candidates_by_reason.get(str(reason), 0) + 1)
-            if not dry_run:
-                graph.add(models.candidate(
-                    id=uuid.uuid4(), knowledge_user_id=tenant_id, node_id=node.id,
-                    identity_id=other.id, reason=reason))
+            add_candidate(other.id, reason)
 
     if not dry_run:
         graph.flush()
@@ -233,6 +273,50 @@ def resolve_in(graph: Session, models, *, tenant_id: uuid.UUID,
         raise RuntimeError(
             f"разрешение сущностей изменило число узлов: "
             f"{report.nodes_total} -> {after}")
+    return report
+
+
+def probe_weak_person_identities(graph: Session, models, *,
+                                 tenant_id: uuid.UUID) -> dict[str, int]:
+    """Сколько личностей-людей собрано по ОДНОСЛОВНОЙ подписи (R6 patch).
+
+    Проверка перед изменением живого производного состояния (владелец,
+    05.09.2026): «PERSON identities with member_count > 1 and canonical
+    normalized label = 1 token. Если 0 — текущие данные этим дефектом не
+    затронуты.»
+
+    Наружу уходят только числа. Подписи не печатаются и не возвращаются:
+    имя врача из выписки — медицинская информация, а вопрос здесь
+    количественный.
+    """
+    rows = graph.execute(
+        select(models.identity.normalized_key, func.count(models.member.id))
+        .outerjoin(models.member, models.member.identity_id == models.identity.id)
+        .where(models.identity.knowledge_user_id == tenant_id,
+               models.identity.entity_type.in_(tuple(_MULTI_TOKEN_REQUIRED)))
+        .group_by(models.identity.id, models.identity.normalized_key)).all()
+
+    one_token = [count for key, count in rows if len(_tokens(key or "")) < 2]
+    return {"person_identities": len(rows),
+            "one_token": len(one_token),
+            "one_token_with_members": sum(1 for c in one_token if c > 0),
+            # То самое число из распоряжения: однословная подпись, под
+            # которую уже сведено больше одного узла.
+            "one_token_with_members_gt1": sum(1 for c in one_token if c > 1)}
+
+
+def probe_all(session: Session, *, knowledge_user_id: uuid.UUID | None = None
+              ) -> dict[str, dict[str, int] | None]:
+    """Та же проверка по обеим схемам. Ничего не пишет."""
+    tenant_id = bind_knowledge_user(session, knowledge_user_id)
+    report: dict[str, dict[str, int] | None] = {
+        "public": probe_weak_person_identities(session, PUBLIC_MODELS, tenant_id=tenant_id)}
+    if health_schema_configured():
+        with health_session(tenant_id) as graph:
+            report["health"] = probe_weak_person_identities(
+                graph, HEALTH_MODELS, tenant_id=tenant_id)
+    else:
+        report["health"] = None
     return report
 
 
@@ -270,18 +354,81 @@ def resolve_all(session: Session, *, knowledge_user_id: uuid.UUID | None = None,
     return report
 
 
+def rebuild_all(session: Session, *, knowledge_user_id: uuid.UUID | None = None
+                ) -> dict[str, dict]:
+    """Снести производные строки R6 и собрать их заново (владелец, 05.09.2026).
+
+    Разрешено ровно для трёх таблиц — личности, состав, кандидаты. Они
+    ПРОИЗВОДНЫЕ: пересчитываются из узлов, и удалить их не значит
+    потерять что-либо, чего нельзя восстановить проходом. Исходные узлы,
+    упоминания, провенанс, прогоны и источники не трогаются — это
+    свойство проверяет инвариант внутри `resolve_in()`, а не обещание в
+    комментарии.
+
+    Нужен потому, что правила тождества изменились: состав, собранный по
+    старым правилам, старым и остаётся — проход идемпотентен и уже
+    отнесённый узел не пересматривает.
+    """
+    tenant_id = bind_knowledge_user(session, knowledge_user_id)
+    rows = session.execute(
+        select(KnowledgeSource.domain, KnowledgeSource.current_semantic_run_id)
+        .where(KnowledgeSource.current_semantic_run_id.is_not(None))).all()
+    public_runs = {r for d, r in rows if not is_health_domain(d)}
+    health_runs = {r for d, r in rows if is_health_domain(d)}
+
+    def wipe(graph: Session, models) -> dict[str, int]:
+        # Порядок обязателен: кандидат и состав ссылаются на личность.
+        removed = {}
+        for name, model in (("candidates", models.candidate),
+                            ("members", models.member),
+                            ("identities", models.identity)):
+            rows_ = graph.scalars(
+                select(model).where(model.knowledge_user_id == tenant_id)).all()
+            for row in rows_:
+                graph.delete(row)
+            removed[name] = len(rows_)
+        graph.flush()
+        return removed
+
+    report: dict[str, dict] = {}
+    removed_public = wipe(session, PUBLIC_MODELS)
+    report["public"] = {"removed": removed_public,
+                        **resolve_in(session, PUBLIC_MODELS, tenant_id=tenant_id,
+                                     current_run_ids=public_runs).as_dict()}
+    if health_schema_configured():
+        with health_session(tenant_id) as graph:
+            removed_health = wipe(graph, HEALTH_MODELS)
+            report["health"] = {"removed": removed_health,
+                                **resolve_in(graph, HEALTH_MODELS, tenant_id=tenant_id,
+                                             current_run_ids=health_runs).as_dict()}
+    else:
+        report["health"] = None
+    return report
+
+
 def _cli(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="R6: разрешение сущностей")
     parser.add_argument("--dry-run", action="store_true",
                         help="посчитать и напечатать, ничего не записывая")
+    parser.add_argument("--probe", action="store_true",
+                        help="только проверка: личности-люди с однословной подписью")
+    parser.add_argument("--rebuild", action="store_true",
+                        help="снести производные строки R6 и собрать заново")
     args = parser.parse_args(argv)
 
     engine = create_engine(get_settings().database_url, pool_pre_ping=True)
     with sessionmaker(engine, expire_on_commit=False)() as session:
-        report = resolve_all(session, dry_run=args.dry_run)
-        if args.dry_run:
+        if args.probe:
+            report = probe_all(session)
+            session.rollback()
+        elif args.rebuild:
+            report = rebuild_all(session)
+            session.commit()
+        elif args.dry_run:
+            report = resolve_all(session, dry_run=True)
             session.rollback()
         else:
+            report = resolve_all(session)
             session.commit()
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0

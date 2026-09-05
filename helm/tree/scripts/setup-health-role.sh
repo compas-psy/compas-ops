@@ -366,12 +366,22 @@ CREATE TABLE IF NOT EXISTS health.knowledge_entity_resolution_candidates (
   CONSTRAINT uq_health_knowledge_entity_resolution_candidates_pair
     UNIQUE (knowledge_user_id, node_id, identity_id, reason),
   CONSTRAINT ck_knowledge_entity_resolution_candidates_reason
-    CHECK (reason IN ('surname_only', 'type_conflict')),
+    CHECK (reason IN ('surname_only', 'type_conflict', 'alias_unconfirmed')),
   CONSTRAINT ck_knowledge_entity_resolution_candidates_status
     CHECK (status IN ('open', 'accepted', 'rejected'))
 );
 CREATE INDEX IF NOT EXISTS ix_health_knowledge_entity_resolution_candidates_open
   ON health.knowledge_entity_resolution_candidates (knowledge_user_id, status);
+
+-- Реестр причин расширен позже создания таблицы (R6 safety patch,
+-- 05.09.2026: alias match стал кандидатом). `CREATE TABLE IF NOT EXISTS`
+-- существующей таблице ничего не добавляет, поэтому ограничение
+-- пересоздаётся явно — как и остальные реестры ниже.
+ALTER TABLE health.knowledge_entity_resolution_candidates
+  DROP CONSTRAINT IF EXISTS ck_knowledge_entity_resolution_candidates_reason;
+ALTER TABLE health.knowledge_entity_resolution_candidates
+  ADD CONSTRAINT ck_knowledge_entity_resolution_candidates_reason
+  CHECK (reason IN ('surname_only', 'type_conflict', 'alias_unconfirmed'));
 
 -- Закрытые реестры и цикл ревизии — те же, что в public (R2-hardening,
 -- §14.5/§14.9). Отдельным блоком, а не в CREATE TABLE выше: таблицы уже

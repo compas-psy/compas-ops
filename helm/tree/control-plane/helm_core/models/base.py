@@ -483,6 +483,11 @@ class EntityResolutionReason(enum.StrEnum):
     #: Та же подпись при РАЗНЫХ `entity_type` (человек и организация
     #: «Сеченов»). Совпадение написания здесь — довод против слияния.
     TYPE_CONFLICT = "type_conflict"
+    #: Совпал алиас, но алиасы сегодня извлекает МОДЕЛЬ, а не
+    #: подтверждает владелец (`knowledge_entity_aliases` заполняется
+    #: разбором). До появления признака подтверждения такое совпадение —
+    #: вопрос, а не доказательство (владелец, 05.09.2026).
+    ALIAS_UNCONFIRMED = "alias_unconfirmed"
 
 
 class EntityResolutionStatus(enum.StrEnum):

@@ -34,8 +34,9 @@ name: Выкат на сервер
 #
 # Соответственно два класса действий:
 #
-#   SAFE/аддитивное (`deploy`, `migrate`) — добавляет и меняет код,
-#     ничего не удаляет безвозвратно. Гейт: локальная точка возврата.
+#   SAFE/аддитивное (`deploy`, `migrate`, `maintenance`) — добавляет и
+#     меняет код или ПРОИЗВОДНОЕ состояние, ничего не удаляя безвозвратно.
+#     Гейт: локальная точка возврата.
 #
 #   НЕОБРАТИМОЕ (`destructive`, `rollback`) — удаление данных, purge
 #     файлов, downgrade схемы. Гейт закрыт по умолчанию: нужен свежий
@@ -44,8 +45,16 @@ name: Выкат на сервер
 #     Локальной точки возврата здесь НЕДОСТАТОЧНО: она лежит на том же
 #     диске, что и данные, которые удаляются.
 #
-# `recon` — read-only по контракту. Скрипты с именем `destructive-*.sh`
-# он выполнять отказывается, для них есть `destructive` с гейтом.
+# `recon` — ДИАГНОСТИКА, ничего не пишет. `maintenance` — обратимая
+# запись производного состояния (пересборка выводимых таблиц, разрешение
+# сущностей): те же скрипты из `scripts/`, но со снятой точкой возврата
+# перед запуском.
+#
+# Разделение заведено 05.09.2026 по решению владельца. До него `recon`
+# был объявлен read-only, но проверял только имя `destructive-*`, и любой
+# другой скрипт мог писать на сервер — так и шли пилот R5 и проход R6.
+# Объявленный контракт и проверяемый разошлись; теперь запись идёт своим
+# действием, а `recon` остаётся тем, чем назван.
 
 on:
   workflow_dispatch:
@@ -63,7 +72,8 @@ on:
           - checkpoint    # локальная точка возврата на самом VPS
           - deploy        # SAFE: код + панель + пересборка (только аддитивное)
           - migrate       # alembic upgrade head (после deploy)
-          - recon         # разовая read-only разведка (см. script)
+          - recon         # разовая read-only ДИАГНОСТИКА (см. script)
+          - maintenance   # обратимая запись производного состояния (см. script)
           - destructive   # необратимое действие через гейт (см. script)
           - restore-test  # backup.sh + restore_test.sh
           - rollback      # alembic downgrade до указанной ревизии
@@ -191,7 +201,7 @@ jobs:
           '
 
       - name: Локальная точка возврата
-        if: inputs.action == 'deploy' || inputs.action == 'migrate' || inputs.action == 'checkpoint'
+        if: inputs.action == 'deploy' || inputs.action == 'migrate' || inputs.action == 'checkpoint' || inputs.action == 'maintenance'
         # Гейт SAFE-выката, fail-closed: шаг упал — дальше не едет ничего.
         # Снимается на самом VPS (pg_dumpall с ролями, /opt/helm-knowledge,
         # /opt/helm-knowledge-private, конфигурация, манифест + SHA256),
@@ -409,6 +419,37 @@ jobs:
           '
 
       # ── необратимое: гейт закрыт по умолчанию ───────────────────────
+      - name: Обслуживание
+        # Обратимая запись ПРОИЗВОДНОГО состояния: то, что пересчитывается
+        # из исходных данных (личности R6, их состав, кандидаты). Исходные
+        # узлы, упоминания, провенанс, прогоны и источники такие скрипты
+        # не трогают — это условие проверяет сам скрипт, а не комментарий.
+        #
+        # Отличие от `recon` — не в силе прав, а в честности названия:
+        # точка возврата снята выше (тот же гейт, что у deploy), и в
+        # журнале видно, что прогон был записывающим.
+        if: inputs.action == 'maintenance'
+        run: |
+          if [ -z "${{ inputs.script }}" ]; then
+            echo "::error::Для maintenance нужно указать script (имя файла в scripts/)"
+            exit 1
+          fi
+          case "${{ inputs.script }}" in
+            destructive-*)
+              echo "::error::${{ inputs.script }} — необратимый скрипт. maintenance только для обратимого; запускайте через action=destructive, он проходит гейт."
+              exit 1
+              ;;
+          esac
+          scp -i ~/.ssh/id_deploy "helm/tree/scripts/${{ inputs.script }}" \
+              "$VPS_USER@$VPS_HOST:/tmp/maintenance.sh"
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=12 \
+              -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
+            bash /tmp/maintenance.sh
+            rc=$?
+            rm -f /tmp/maintenance.sh
+            exit $rc
+          '
+
       - name: Гейт необратимого действия
         if: inputs.action == 'destructive' || inputs.action == 'rollback'
         # Fail closed. Локальной точки возврата здесь НЕДОСТАТОЧНО: она
