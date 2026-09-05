@@ -36,7 +36,7 @@ import json
 import uuid
 from dataclasses import dataclass, field
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from .health_schema import health_schema_configured, health_session, is_health_domain
@@ -53,6 +53,10 @@ from ..models.base import (
 class ResolutionReport:
     """Сводка прохода. Только числа: подписи сущностей — содержимое."""
 
+    #: Все узлы тенанта в этой схеме — до и после прохода. Служит
+    #: доказательством того, что исходные данные не тронуты; сравнение
+    #: делает сам проход, а не читатель лога.
+    nodes_total: int = 0
     nodes_seen: int = 0
     already_resolved: int = 0
     identities_created: int = 0
@@ -62,7 +66,8 @@ class ResolutionReport:
     candidates_by_reason: dict[str, int] = field(default_factory=dict)
 
     def as_dict(self) -> dict:
-        return {"nodes_seen": self.nodes_seen,
+        return {"nodes_total": self.nodes_total,
+                "nodes_seen": self.nodes_seen,
                 "already_resolved": self.already_resolved,
                 "identities_created": self.identities_created,
                 "members_created": self.members_created,
@@ -116,7 +121,12 @@ def resolve_in(graph: Session, models, *, tenant_id: uuid.UUID,
     — иначе состав личности удваивался бы с каждым прогоном, а «сколько
     документов про этого врача» стало бы неверным числом.
     """
-    report = ResolutionReport()
+    def count_nodes() -> int:
+        return graph.scalar(
+            select(func.count()).select_from(models.node)
+            .where(models.node.knowledge_user_id == tenant_id)) or 0
+
+    report = ResolutionReport(nodes_total=count_nodes())
     if not current_run_ids:
         return report
 
@@ -212,6 +222,17 @@ def resolve_in(graph: Session, models, *, tenant_id: uuid.UUID,
 
     if not dry_run:
         graph.flush()
+
+    # Инвариант, а не пожелание: «исходные nodes/mentions/provenance не
+    # мутировать и не удалять» (владелец, 05.09.2026). Проверяется здесь,
+    # в той же схеме и под тем же RLS, потому что снаружи — нельзя:
+    # health-узлы лежат в зеркале, и счётчик в public показал бы ноль,
+    # ничего при этом не проверив (найдено прогоном 271).
+    after = count_nodes()
+    if after != report.nodes_total:
+        raise RuntimeError(
+            f"разрешение сущностей изменило число узлов: "
+            f"{report.nodes_total} -> {after}")
     return report
 
 

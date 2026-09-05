@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
+
 from helm_core.knowledge import entity_resolution as er
 from helm_core.knowledge.semantic_publish import PUBLIC_MODELS, normalize_key
 from helm_core.models.base import (
@@ -56,9 +58,15 @@ class _FakeSession:
         self.candidates = list(candidates)
         self.added = []
         self.flushed = False
+        #: Подменяется тестом, который проверяет саму защиту.
+        self.node_count = None
 
     def _entity(self, query):
         return query.column_descriptions[0]["entity"]
+
+    def scalar(self, _query):
+        """Единственный `scalar()` в проходе — счёт узлов тенанта."""
+        return self.node_count if self.node_count is not None else len(self.nodes)
 
     def scalars(self, query):
         entity = self._entity(query)
@@ -239,3 +247,21 @@ class TestRepeatAndScope:
         session = _FakeSession([_Node("Кто-то", entity_type=None, created_at=1)])
         report = _run(session)
         assert (report.nodes_seen, report.members_created) == (1, 0)
+
+
+class TestNodeCountInvariant:
+    """«Исходные nodes не мутировать и не удалять» проверяется самим
+    проходом, а не глазами читателя лога: снаружи это и не проверить —
+    health-узлы лежат в зеркале, и счётчик в public показал бы ноль,
+    ничего не проверив (так и вышло в прогоне 271)."""
+
+    def test_report_carries_the_node_count(self):
+        session = _FakeSession([_Node("Гаврилова Марина Сергеевна", created_at=1)])
+        assert _run(session).nodes_total == 1
+
+    def test_changed_node_count_raises_instead_of_reporting_success(self):
+        session = _FakeSession([_Node("Гаврилова Марина Сергеевна", created_at=1)])
+        counts = iter([5, 4])
+        session.scalar = lambda _q: next(counts)
+        with pytest.raises(RuntimeError, match="5 -> 4"):
+            _run(session)
