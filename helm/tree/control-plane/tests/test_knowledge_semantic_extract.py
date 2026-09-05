@@ -561,6 +561,24 @@ class TestEvidenceGrounding:
         assert len(result.atoms) == 1
         assert result.atoms[0].occurred_at == "2026-08-19"
 
+    def test_month_precision_is_confirmed_by_a_day_date_of_that_month(self) -> None:
+        """Намеренное правило, закреплено по требованию владельца
+        05.09.2026: «2026-08» подтверждается цитатой «26.08.2026», потому
+        что внутри неё есть тот же «08.2026». Модель заявила точность
+        грубее, чем позволяет цитата, — это недо-утверждение, а не
+        выдумка, и запрещать его нельзя. Тест стоит здесь, чтобы правило
+        не исчезло молча при следующей правке регулярных выражений."""
+        quote = "Осмотр от 26.08.2026."
+        result = validate(payload(atoms=[
+            {"local_id": "a1", "kind": "EVENT", "title": "т", "text": "Осмотр.",
+             "occurred_at": "2026-08", "date_precision": "MONTH",
+             "evidence_quote": quote}],
+            entities=[], edges=[]), window_text=quote)
+
+        assert len(result.atoms) == 1
+        assert result.atoms[0].occurred_at == "2026-08"
+        assert result.atoms[0].date_precision == "month"
+
     def test_relative_date_marker_in_evidence_forbids_precise_occurred_at(self) -> None:
         """relative unanchored date → только date_precision=unknown.
         Evidence с «в прошлый вторник» и одновременно occurred_at —
