@@ -68,11 +68,25 @@ echo "выкачено: $(sudo cat /opt/helm/DEPLOYED_SHA 2>/dev/null || echo un
 echo "############ 1. ТОЧНОСТЬ ДАТЫ × НАЛИЧИЕ ДАТЫ ############"
 echo "верхняя граница «П1 или П4»: unknown при пустой дате — это кандидаты,"
 echo "а не измеренный П4; два случая после записи неразличимы."
-echo "формат: точность | узлов | из них с occurred_at_start"
+echo
+echo "СРЕЗ ПО ВИДУ УЗЛА ОБЯЗАТЕЛЕН (поправка владельца 05.09.2026)."
+echo "parse_occurred_at() зовётся ТОЛЬКО в атомном пути"
+echo "(semantic_publish.py:261); у ENTITY даты нет по конструкции, а не"
+echo "потому что модель её не дала. Первый замер считал все узлы разом и"
+echo "поэтому завышал «модель не дала дату» на все сущности."
+echo "формат: вид | точность | узлов | из них с occurred_at_start"
 for schema in health public; do
-  echo "-- $schema:"
-  psql "select coalesce(date_precision,'(null)')||' | '||count(*)::text||' | '||count(occurred_at_start)::text
-        from ${schema}.knowledge_nodes group by date_precision order by count(*) desc"
+  echo "-- $schema, ТОЛЬКО датируемые виды (event/fact/concept):"
+  psql "select kind||' | '||coalesce(date_precision,'(null)')||' | '||count(*)::text||' | '||
+               count(occurred_at_start)::text
+        from ${schema}.knowledge_nodes
+        where kind <> 'entity'
+        group by kind, date_precision order by kind, count(*) desc"
+  echo "-- $schema, сущности (у них даты нет по конструкции, для контроля):"
+  psql "select coalesce(date_precision,'(null)')||' | '||count(*)::text||' | '||
+               count(occurred_at_start)::text
+        from ${schema}.knowledge_nodes where kind = 'entity'
+        group by date_precision order by count(*) desc"
 done
 
 echo "############ 2. ОТКАЗЫ ВАЛИДАТОРА — ВЕРХНЯЯ ГРАНИЦА (П2+П3) ############"
