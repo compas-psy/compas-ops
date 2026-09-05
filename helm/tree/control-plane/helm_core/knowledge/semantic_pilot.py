@@ -70,6 +70,16 @@ class PilotReport:
     limit: int
     selected: int
     sources: list[SourceOutcome] = field(default_factory=list)
+    #: Раскладка по всему пилоту, не по источнику: она отвечает на вопрос
+    #: «почему компилятор молчит», а он про корпус целиком.
+    by_kind: dict[str, dict[str, int]] = field(
+        default_factory=lambda: {"entity_types": {}, "atom_kinds": {}})
+
+    def add_kinds(self, breakdown: dict[str, dict[str, int]]) -> None:
+        for group, counts in breakdown.items():
+            target = self.by_kind[group]
+            for key, count in counts.items():
+                target[key] = target.get(key, 0) + count
 
     @property
     def totals(self) -> dict:
@@ -91,7 +101,8 @@ class PilotReport:
 
     def as_dict(self) -> dict:
         return {"limit": self.limit, "selected": self.selected,
-                "totals": self.totals, "sources": [asdict(s) for s in self.sources]}
+                "totals": self.totals, "by_kind": self.by_kind,
+                "sources": [asdict(s) for s in self.sources]}
 
 
 def source_text(source: KnowledgeSource) -> str | None:
@@ -167,8 +178,31 @@ def _counts(session: Session, models, run_id: uuid.UUID) -> dict[str, int]:
             "mentions_without_span": total - exact}
 
 
+def _by_kind(session: Session, models, run_id: uuid.UUID) -> dict[str, dict[str, int]]:
+    """Раскладка узлов прогона по виду атома и по типу сущности.
+
+    Оба — закрытые словари схемы (`SemanticNodeKind`, `entity_type`), не
+    содержимое: по ним видно, ПОЧЕМУ компилятор не построил ребро
+    (`involves` требует PERSON или ORGANIZATION, `located_at` — PLACE), и
+    не видно, о ком и о чём документ.
+    """
+    rows = session.execute(
+        select(models.node.kind, models.node.entity_type, func.count())
+        .where(models.node.semantic_run_id == run_id)
+        .group_by(models.node.kind, models.node.entity_type)).all()
+    atoms: dict[str, int] = {}
+    entities: dict[str, int] = {}
+    for kind, entity_type, count in rows:
+        if kind == SemanticNodeKind.ENTITY:
+            entities[entity_type or "?"] = entities.get(entity_type or "?", 0) + count
+        else:
+            atoms[str(kind)] = atoms.get(str(kind), 0) + count
+    return {"entity_types": entities, "atom_kinds": atoms}
+
+
 def run_counts(session: Session, run_id: uuid.UUID, *, domain: str,
-               knowledge_user_id: uuid.UUID) -> dict[str, int]:
+               knowledge_user_id: uuid.UUID
+               ) -> tuple[dict[str, int], dict[str, dict[str, int]]]:
     """Что прогон реально положил в граф: узлы, рёбра и упоминания.
 
     Отдельно считаются упоминания с ТОЧНЫМ диапазоном (R5.2, §30.8.5 F).
@@ -185,8 +219,8 @@ def run_counts(session: Session, run_id: uuid.UUID, *, domain: str,
     """
     if is_health_domain(domain) and health_schema_configured():
         with health_session(knowledge_user_id) as graph:
-            return _counts(graph, HEALTH_MODELS, run_id)
-    return _counts(session, PUBLIC_MODELS, run_id)
+            return _counts(graph, HEALTH_MODELS, run_id), _by_kind(graph, HEALTH_MODELS, run_id)
+    return _counts(session, PUBLIC_MODELS, run_id), _by_kind(session, PUBLIC_MODELS, run_id)
 
 
 def inspect_published(session: Session, *, limit: int = DEFAULT_LIMIT,
@@ -213,8 +247,9 @@ def inspect_published(session: Session, *, limit: int = DEFAULT_LIMIT,
                 source_id=str(source.id), domain=source.domain,
                 run_status="нет текущей ревизии"))
             continue
-        counts = run_counts(session, run.id, domain=source.domain,
-                            knowledge_user_id=tenant_id)
+        counts, breakdown = run_counts(session, run.id, domain=source.domain,
+                                       knowledge_user_id=tenant_id)
+        report.add_kinds(breakdown)
         report.sources.append(SourceOutcome(
             source_id=str(source.id), domain=source.domain, run_status=str(run.status),
             windows_total=run.windows_total, windows_processed=run.windows_processed,
@@ -240,8 +275,9 @@ def run_pilot(session: Session, *, limit: int = DEFAULT_LIMIT,
 
         result = publish_semantic_run(session, source=source, text=text)
         session.flush()
-        counts = run_counts(session, result.run_id, domain=source.domain,
-                            knowledge_user_id=tenant_id)
+        counts, breakdown = run_counts(session, result.run_id, domain=source.domain,
+                                       knowledge_user_id=tenant_id)
+        report.add_kinds(breakdown)
         report.sources.append(SourceOutcome(
             source_id=str(source.id), domain=source.domain, chars=len(text),
             run_status=str(result.status), switched=bool(result.switched),

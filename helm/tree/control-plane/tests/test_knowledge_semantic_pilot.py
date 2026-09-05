@@ -154,6 +154,8 @@ class TestCountsUseTheSchemaThatWasWrittenTo:
             return dict(self.ZEROS)
 
         monkeypatch.setattr(semantic_pilot, "_counts", fake_counts)
+        monkeypatch.setattr(semantic_pilot, "_by_kind",
+                            lambda *_a: {"entity_types": {}, "atom_kinds": {}})
         return seen
 
     def _mirror(self, monkeypatch, *, configured, graph=None):
@@ -189,3 +191,24 @@ class TestCountsUseTheSchemaThatWasWrittenTo:
                                   knowledge_user_id=_USER_ID)
         assert seen["models"] is semantic_pilot.PUBLIC_MODELS
         assert seen["session"] is public
+
+
+class TestBreakdownAccumulates:
+    """Раскладка по видам — про весь пилот, а не про источник: вопрос
+    «почему компилятор молчит» задаётся к корпусу целиком."""
+
+    def test_counts_from_several_sources_are_summed(self):
+        report = semantic_pilot.PilotReport(limit=2, selected=2)
+        report.add_kinds({"entity_types": {"PERSON": 2}, "atom_kinds": {"fact": 3}})
+        report.add_kinds({"entity_types": {"PERSON": 1, "CONCEPT": 4},
+                          "atom_kinds": {"fact": 1, "event": 2}})
+        assert report.by_kind == {"entity_types": {"PERSON": 3, "CONCEPT": 4},
+                                  "atom_kinds": {"fact": 4, "event": 2}}
+
+    def test_two_reports_do_not_share_one_dict(self):
+        """`field(default_factory=...)` здесь не формальность: общий
+        словарь по умолчанию складывал бы разные пилоты в одну кучу."""
+        first = semantic_pilot.PilotReport(limit=1, selected=1)
+        first.add_kinds({"entity_types": {"PERSON": 1}, "atom_kinds": {}})
+        second = semantic_pilot.PilotReport(limit=1, selected=1)
+        assert second.by_kind == {"entity_types": {}, "atom_kinds": {}}
