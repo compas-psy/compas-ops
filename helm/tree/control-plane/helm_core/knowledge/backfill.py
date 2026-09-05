@@ -45,7 +45,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .semantic_pilot import source_text
 from .semantic_publish import publish_semantic_run
-from .tenancy import bind_knowledge_user
+from .tenancy import bind_knowledge_user, set_current_knowledge_user
 from ..config import get_settings
 from ..models import KnowledgeSemanticRun, KnowledgeSource
 from ..models.base import KnowledgeStatus, SemanticRunStatus
@@ -155,16 +155,29 @@ def run_backfill(session: Session, *, limit: int | None = None,
                  budget_seconds: float | None = None,
                  domains: tuple[str, ...] | None = None,
                  knowledge_user_id: uuid.UUID | None = None) -> BackfillReport:
-    bind_knowledge_user(session, knowledge_user_id)
+    tenant_id = bind_knowledge_user(session, knowledge_user_id)
     started = time.monotonic()
     sources = _live_sources(session, domains)
     report = BackfillReport(sources_total=len(sources))
 
     for source in sources:
+        # Привязка тенанта держится до конца ТЕКУЩЕЙ транзакции
+        # (`set_config(..., is_local=true)`), а перенос коммитит на
+        # каждом источнике — значит со второго источника её нет, и RLS
+        # честно отказывает: «new row violates row-level security
+        # policy». Найдено живым прогоном 284; тот же класс дефекта уже
+        # стоил одного шага в R1 («1 из 90» в переносе сайдкаров).
+        # Привязка возобновляется здесь, до первого обращения к строке.
+        set_current_knowledge_user(session, tenant_id)
         if _is_current(session, source):
             report.already_current += 1
             continue
         report.todo += 1
+        # Снимок опознавательных полей ДО записи. После коммита или
+        # отката объект истекает, и повторное чтение атрибута ушло бы в
+        # базу — в прогоне 284 именно это превратило понятную ошибку
+        # RLS в невнятное «Instance has been deleted».
+        source_id, domain = str(source.id), source.domain
         if limit is not None and report.processed >= limit:
             report.stopped_by = report.stopped_by or "limit"
             continue
@@ -178,8 +191,7 @@ def run_backfill(session: Session, *, limit: int | None = None,
         if text is None:
             report.no_text += 1
             report.outcomes.append(SourceOutcome(
-                source_id=str(source.id), domain=source.domain, chars=0,
-                status="нет текста"))
+                source_id=source_id, domain=domain, chars=0, status="нет текста"))
             continue
 
         at = time.monotonic()
@@ -191,13 +203,13 @@ def run_backfill(session: Session, *, limit: int | None = None,
             session.rollback()
             report.failed += 1
             report.outcomes.append(SourceOutcome(
-                source_id=str(source.id), domain=source.domain, chars=len(text),
+                source_id=source_id, domain=domain, chars=len(text),
                 status="исключение", seconds=round(time.monotonic() - at, 1),
                 error=type(exc).__name__))
             continue
 
         report.processed += 1
-        report.by_domain[source.domain] = report.by_domain.get(source.domain, 0) + 1
+        report.by_domain[domain] = report.by_domain.get(domain, 0) + 1
         if result.status == SemanticRunStatus.READY:
             report.ready += 1
         elif result.status == SemanticRunStatus.DEGRADED:
@@ -205,7 +217,7 @@ def run_backfill(session: Session, *, limit: int | None = None,
         else:
             report.failed += 1
         report.outcomes.append(SourceOutcome(
-            source_id=str(source.id), domain=source.domain, chars=len(text),
+            source_id=source_id, domain=domain, chars=len(text),
             status=str(result.status), windows_total=result.windows_total,
             windows_failed=result.windows_failed, nodes=result.nodes_created,
             edges=result.edges_created, coverage=result.coverage_ratio,

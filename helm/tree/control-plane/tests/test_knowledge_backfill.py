@@ -31,10 +31,20 @@ class _Source:
     def __init__(self, domain="health", *, run=None, created_at=0):
         self.id = uuid.uuid4()
         self.knowledge_user_id = TENANT
-        self.domain = domain
+        self._domain = domain
         self.status = KnowledgeStatus.ACTIVE
         self.created_at = created_at
         self.current_semantic_run_id = run.id if run else None
+        #: Истёкший объект отдаёт атрибут только под привязанным
+        #: тенантом — так ведёт себя RLS после коммита/отката.
+        self.expired = False
+        self.bound = lambda: True
+
+    @property
+    def domain(self):
+        if self.expired and not self.bound():
+            raise AssertionError("чтение истёкшего объекта без привязки тенанта")
+        return self._domain
 
 
 class _Result:
@@ -51,6 +61,14 @@ class _FakeSession:
         self.runs = {r.id: r for r in runs}
         self.commits = 0
         self.rollbacks = 0
+        self.binds = 0
+        self._bound = False
+        for source in self.sources:
+            source.bound = lambda: self._bound
+
+    def bind_tenant(self):
+        self.binds += 1
+        self._bound = True
 
     def scalars(self, _query):
         return _Result(self.sources)
@@ -60,9 +78,16 @@ class _FakeSession:
 
     def commit(self):
         self.commits += 1
+        # Привязка тенанта живёт до конца транзакции: коммит её снимает.
+        self._bound = False
 
     def rollback(self):
         self.rollbacks += 1
+        self._bound = False
+        # Как настоящая сессия: откат истекает объекты, и следующее
+        # чтение атрибута уходит в базу.
+        for source in self.sources:
+            source.expired = True
 
 
 class _Published:
@@ -85,6 +110,8 @@ class _Published:
 @pytest.fixture(autouse=True)
 def _no_db(monkeypatch):
     monkeypatch.setattr(bf, "bind_knowledge_user", lambda session, tid=None: TENANT)
+    monkeypatch.setattr(bf, "set_current_knowledge_user",
+                        lambda session, tid: session.bind_tenant())
     monkeypatch.setattr(bf, "source_text", lambda source: "текст источника")
 
 
@@ -209,3 +236,27 @@ def test_план_считает_тем_же_условием_что_и_пере
     assert payload["already_current"] == 1
     assert payload["todo"] == 2
     assert payload["todo_by_domain"] == {"finance": 1, "health": 1}
+
+
+def test_тенант_привязывается_заново_на_каждом_источнике(monkeypatch):
+    # Привязка держится до конца транзакции, а перенос коммитит на
+    # каждом источнике. Без повторной привязки RLS отказывает во вставке
+    # ревизии — прогон 284, «new row violates row-level security policy».
+    sources = [_Source(created_at=i) for i in range(3)]
+    session = _FakeSession(sources)
+    monkeypatch.setattr(bf, "publish_semantic_run", _Published())
+    bf.run_backfill(session)
+    assert session.binds == 3
+    assert session.commits == 3
+
+
+def test_после_отката_отчёт_не_читает_истёкший_объект(monkeypatch):
+    # Прогон 284: понятная ошибка RLS превратилась в «Instance has been
+    # deleted», потому что отчёт брал domain у объекта уже после отката.
+    sources = [_Source(created_at=i) for i in range(2)]
+    session = _FakeSession(sources)
+    monkeypatch.setattr(bf, "publish_semantic_run",
+                        _Published(raises_on=[s.id for s in sources]))
+    report = bf.run_backfill(session)
+    assert report.failed == 2
+    assert [o.domain for o in report.outcomes] == ["health", "health"]
