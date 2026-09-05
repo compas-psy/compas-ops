@@ -271,6 +271,35 @@ def marker_follows_label(span_text: str, label: str) -> bool:
     return any(_DOCTOR_MARKER_RE.fullmatch(t) for t in after)
 
 
+class _SourceTexts:
+    """Тексты источников, читаемые по мере надобности.
+
+    Раньше `answer_doctors_visited()` читала с диска ВСЕ источники сразу,
+    ещё до первого запроса к графу. На пилотных восьми это ничего не
+    стоило; в пути живого вопроса, после backfill всего корпуса, это
+    означало бы чтение всех файлов владельца на каждый заданный вопрос.
+    Нужны единицы — читаем единицы.
+    """
+
+    def __init__(self, answer: DoctorsAnswer) -> None:
+        self._sources: dict[uuid.UUID, object] = {}
+        self._cache: dict[uuid.UUID, str | None] = {}
+        self._answer = answer
+
+    def add(self, source) -> None:
+        self._sources[source.id] = source
+
+    def get(self, source_id, default=None):
+        if source_id not in self._cache:
+            source = self._sources.get(source_id)
+            text = source_text(source) if source is not None else None
+            if text is None:
+                self._answer.skip("текст источника недоступен")
+            self._cache[source_id] = text
+        text = self._cache[source_id]
+        return default if text is None else text
+
+
 def _marker_specialty(spans: list[tuple[object, str]], label: str) -> list[str]:
     """Специальности, подтверждённые дефисным маркером в СОБСТВЕННЫХ цитатах.
 
@@ -536,16 +565,12 @@ def answer_doctors_visited(session: Session, *, question: str,
 
     public_runs: set[uuid.UUID] = set()
     health_runs: set[uuid.UUID] = set()
-    public_text: dict[uuid.UUID, str] = {}
-    health_text: dict[uuid.UUID, str] = {}
+    public_text = _SourceTexts(answer)
+    health_text = _SourceTexts(answer)
     for source in sources:
         health = is_health_domain(source.domain)
         (health_runs if health else public_runs).add(source.current_semantic_run_id)
-        text = source_text(source)
-        if text is not None:
-            (health_text if health else public_text)[source.id] = text
-        else:
-            answer.skip("текст источника недоступен")
+        (health_text if health else public_text).add(source)
 
     items, path = _answer_in(session, PUBLIC_MODELS, tenant_id=tenant_id,
                              run_ids=public_runs, text_by_source=public_text,

@@ -87,7 +87,10 @@ def test_empty_corpus_escalates(session):
     assert result.outcome == "NEEDS_REASONING"
 
 
-def test_multiple_matches_produce_z1_structured_list(session):
+def test_multiple_matches_return_one_nearest_not_a_list(session):
+    """Перечисление найденного заменено одним ближайшим фрагментом
+    (контракт владельца 05.09.2026). Режим прежний: уровень ответа тот
+    же, изменился способ его сказать."""
     ingest_text(session, domain="engineering", text="Решение №1: используем Postgres.")
     ingest_text(session, domain="engineering", text="Решение №2: используем Docker.")
     ingest_text(session, domain="engineering", text="Решение №3: используем Caddy.")
@@ -97,7 +100,11 @@ def test_multiple_matches_produce_z1_structured_list(session):
 
     assert result.outcome == "LOCAL_ANSWER"
     assert result.mode == "Z1"
-    assert "Найдено" in result.answer_text
+    assert "Найдено" not in result.answer_text
+    assert result.answer_text.startswith("Не нашёл прямого ответа.")
+    # Ровно один фрагмент, а не три: у трёх решений общий корень «решен»,
+    # и раньше все три уходили владельцу пронумерованным списком.
+    assert sum(result.answer_text.count(f"Решение №{i}") for i in (1, 2, 3)) == 1
 
 
 # ── health: решение владельца 01.09.2026 — не исключение из общего поиска ──
@@ -342,7 +349,7 @@ def test_z1_answer_is_never_rephrased(session, monkeypatch):
 
     assert result.mode == "Z1"
     assert "НЕ ДОЛЖНО ПОЯВИТЬСЯ" not in result.answer_text
-    assert "Найдено 3 совпадений" in result.answer_text
+    assert result.answer_text.startswith("Не нашёл прямого ответа.")
 
 
 def test_z0_rephrase_receives_question_and_evidence_text(session, monkeypatch):

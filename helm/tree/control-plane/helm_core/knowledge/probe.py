@@ -39,8 +39,10 @@ from typing import Literal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .answer_format import format_doctors, format_nearest_quote
 from .embeddings import embed_texts_or_none
 from .health_schema import health_schema_configured, health_session
+from .query_router import QuestionIntent, answer_doctors_visited, detect_intent
 from .recall import (
     MemoryHit, build_or_tsquery, compose_memory_answer, is_future_reminder,
     is_historical_query, search_memories,
@@ -48,8 +50,8 @@ from .recall import (
 from .rephrase import rephrase_or_none
 from .tenancy import bind_knowledge_user
 from ..models import (
-    HealthKnowledgeChunk, HealthKnowledgeSourcePrivate, KnowledgeAnswerRun, KnowledgeChunk,
-    KnowledgeDomain, KnowledgeSource, KnowledgeStatus,
+    HealthKnowledgeChunk, HealthKnowledgeSourcePrivate, KnowledgeAnswerMode, KnowledgeAnswerRun,
+    KnowledgeChunk, KnowledgeDomain, KnowledgeSource, KnowledgeStatus,
 )
 from ..models.base import utcnow
 
@@ -264,15 +266,21 @@ def _health_vector_search(*, query_embedding: list[float], knowledge_user_id: uu
 
 
 def _compose_answer(evidence: list[Evidence]) -> tuple[str, str]:
-    """Детерминированный composer (§14.12) — без LLM."""
+    """Детерминированный composer (§14.12) — без LLM.
+
+    Ветка «несколько совпадений» больше не перечисляет их. Замер
+    production 05.09.2026: все десять бесплатных ответов за всё время
+    были именно этим списком ровно из пяти сырых фрагментов, и именно он
+    читается как «отвечает много и не по делу»
+    (docs/PRODUCTION_ANSWERS_RCA_2026-09-05.md §1.1). Контракт владельца
+    от 05.09.2026 запрещает такой вывод прямо; отдаётся один ближайший
+    фрагмент, честно названный ближайшим, а не ответом. Режим остаётся
+    Z1 — уровень ответа тот же, изменился способ его сказать.
+    """
+    cite = evidence[0].original_filename or evidence[0].source_id
     if len(evidence) == 1:
-        cite = evidence[0].original_filename or evidence[0].source_id
-        return f"{evidence[0].chunk_text}\n\nИсточник: {cite}", "Z0"
-    lines = [f"Найдено {len(evidence)} совпадений:"]
-    for i, e in enumerate(evidence, 1):
-        cite = e.original_filename or e.source_id
-        lines.append(f"{i}. {e.chunk_text} (источник: {cite})")
-    return "\n".join(lines), "Z1"
+        return f"{evidence[0].chunk_text}\n\nИсточник: {cite}", KnowledgeAnswerMode.Z0
+    return format_nearest_quote(evidence[0].chunk_text, cite), KnowledgeAnswerMode.Z1
 
 
 def probe(session: Session, *, query: str, domain: str | None = None,
@@ -330,6 +338,27 @@ def probe(session: Session, *, query: str, domain: str | None = None,
         ))
         return ProbeResult(outcome="LOCAL_ANSWER", mode=mode, answer_text=answer_text,
                            memory=memory_hits)
+
+    # Структурный вопрос отвечается по доказанному (R5-R7), а не поиском
+    # похожего текста. Это место — то самое, где найденная 05.09.2026
+    # первая точка поломки закрывается: до этой правки распознавания
+    # намерения в production не было вовсе, и «каких врачей я посещал»
+    # шло тем же кодом, что «что было в анализе 12 марта».
+    #
+    # Отказ здесь окончателен и НЕ эскалируется: если намерение
+    # распознано, а доказанного ответа нет, платная модель истории
+    # владельца всё равно не знает и заполнит пустоту общими
+    # рассуждениями — ровно то, что запрещает контракт ответа.
+    if detect_intent(query) == QuestionIntent.DOCTORS_VISITED:
+        structured = answer_doctors_visited(session, question=query,
+                                            knowledge_user_id=knowledge_user_id)
+        session.add(KnowledgeAnswerRun(
+            knowledge_user_id=knowledge_user_id,
+            query_hash=query_hash(query), domain=domain, mode=KnowledgeAnswerMode.S1,
+            paid_ai_used=False, evidence_count=len(structured.items),
+        ))
+        return ProbeResult(outcome="LOCAL_ANSWER", mode=KnowledgeAnswerMode.S1,
+                           answer_text=format_doctors(structured))
 
     # ADR-005/P12 + решение владельца 01.09.2026: health участвует в
     # общем бесплатном поиске наравне со всеми доменами — единственное,
@@ -394,7 +423,7 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     # сознательно нетронутая, а не забытая часть. paid_ai_used не
     # трогается ни в одной ветке — локальный Ollama-рефраз не платный
     # вызов (§14.14).
-    if mode == "Z0":
+    if mode == KnowledgeAnswerMode.Z0:
         rephrased = rephrase_or_none(
             session, question=query, evidence_text=evidence[0].chunk_text,
             knowledge_user_id=knowledge_user_id,

@@ -593,3 +593,59 @@ def test_специальность_собирается_со_всех_узло�
     assert len(items) == 1
     assert len(items[0].proofs) == 2
     assert items[0].specialties == ["уролог"]
+
+
+# --- врач без специальности не считается непокрытым -----------------------
+
+def test_доказанный_врач_без_специальности_не_попадает_в_непокрытые():
+    """Дефект из распоряжения владельца 05.09.2026: «doctor с доказанной
+    врачебной ролью, но неизвестной специальностью, не должен
+    превращаться в uncovered». Он доказанный врач — просто без
+    специальности; счётчик непокрытых обязан остаться нулём, иначе
+    «нашёл одного врача, один не покрыт» читается как два разных
+    человека."""
+    text = "Осмотр провёл врач Иванов И. И."
+    node = _Node("Иванов И. И.")
+    identity = _Identity("Иванов И. И.")
+    # Спан накрывает маркер вместе с подписью: именно так выглядит
+    # доказанная врачебная роль без специальности — «врач», но без
+    # дефисного «врач-уролог».
+    start = text.index("врач")
+    session = _FakeSession(
+        pairs=[(identity, node)],
+        mentions=[_Mention(node.id, start, len(text) - 1)],
+        members=[(identity.id, node.id)])
+    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+                              intent=qr.QuestionIntent.DOCTORS_VISITED)
+
+    items, path = qr._answer_in(session, PUBLIC_MODELS, tenant_id=TENANT,
+                                run_ids={RUN}, text_by_source={SOURCE: text},
+                                answer=answer)
+
+    assert len(items) == 1
+    assert items[0].specialties == []
+    assert items[0].line() == "Иванов И. И. — специальность не подтверждена"
+    assert answer.uncovered_identities == 0
+    assert path == qr.AnswerPath.EVIDENCE
+
+
+def test_личность_без_врачебного_доказательства_остаётся_непокрытой():
+    """Обратная сторона того же счётчика: человек, про которого врачебной
+    роли не доказано, обязан считаться непокрытым, а не исчезать."""
+    text = "Встреча с Петровым П. П. по проекту."
+    node = _Node("Петров П. П.")
+    identity = _Identity("Петров П. П.")
+    start = text.index("Петровым")
+    session = _FakeSession(
+        pairs=[(identity, node)],
+        mentions=[_Mention(node.id, start, start + len("Петровым П. П."))],
+        members=[(identity.id, node.id)])
+    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+                              intent=qr.QuestionIntent.DOCTORS_VISITED)
+
+    items, _path = qr._answer_in(session, PUBLIC_MODELS, tenant_id=TENANT,
+                                 run_ids={RUN}, text_by_source={SOURCE: text},
+                                 answer=answer)
+
+    assert items == []
+    assert answer.uncovered_identities == 1
