@@ -67,7 +67,7 @@ def format_doctors(answer: DoctorsAnswer) -> str:
     «двое» там, где доказано трое (дефект из распоряжения 05.09.2026).
     """
     if not answer.items:
-        return NOT_FOUND
+        return _nothing_found(answer)
 
     specialties: list[str] = []
     for item in answer.items:
@@ -91,7 +91,28 @@ def format_doctors(answer: DoctorsAnswer) -> str:
         lines.append("; ".join(_named(item) for item in answer.items) + ".")
     else:
         lines.append(f"Всего {len(answer.items)} {_plural_doctors(len(answer.items))}.")
+    if answer.year is not None and answer.undated_doctors:
+        lines.append(f"Ещё {answer.undated_doctors} "
+                     f"{_plural_doctors(answer.undated_doctors)} без подтверждённой "
+                     "даты приёма — отнести к году нечем.")
     return "\n".join(lines)
+
+
+def _nothing_found(answer: DoctorsAnswer) -> str:
+    """Пусто — говорим это прямо и с указанием года, если он был.
+
+    Если при этом врачи в данных есть, но без дат, об этом сказано
+    второй строкой. Умолчать было бы неправдой: «не нашёл за 2014»
+    прочиталось бы как «врачей в данных нет», а они есть — просто
+    привязать их к году нечем.
+    """
+    if answer.year is None:
+        return NOT_FOUND
+    text = ("Не нашёл в ваших данных подтверждённых посещений врачей "
+            f"за {answer.year} год.")
+    if answer.undated_doctors:
+        text += ("\nВрачи в ваших данных есть, но даты приёмов не подтверждены.")
+    return text
 
 
 def format_nearest_quote(quote: str, cite: str) -> str:

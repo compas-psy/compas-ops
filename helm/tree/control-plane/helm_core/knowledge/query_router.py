@@ -42,6 +42,7 @@ import json
 import re
 import uuid
 from dataclasses import asdict, dataclass, field
+from datetime import date
 from pathlib import Path
 
 from sqlalchemy import create_engine, select
@@ -88,6 +89,14 @@ class AnswerPath:
 #: не поняла. Третье условие спрашивает то, на что этот исполнитель
 #: действительно умеет отвечать: «каких/какие/каким».
 _ENUMERATION_RE = re.compile(r"как(?:их|ие|им)\b", re.IGNORECASE)
+
+#: Год из вопроса. Явные четыре цифры либо «в этом году».
+#: «За прошлый год», «за последние три года» намеренно НЕ разбираются:
+#: каждая такая форма — отдельное правило, и молча угадать её значит
+#: ответить не на тот вопрос. Не разобрали — отвечаем по всему корпусу,
+#: как и раньше.
+_EXPLICIT_YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
+_THIS_YEAR_RE = re.compile(r"в\s+этом\s+году", re.IGNORECASE)
 _DOCTOR_WORD_RE = re.compile(r"врач", re.IGNORECASE)
 _VISIT_WORD_RE = re.compile(r"посеща|посетил|посещал|был у|ходил|приём|прием|наблюда",
                             re.IGNORECASE)
@@ -178,6 +187,17 @@ class DoctorsAnswer:
     #: рядом с ответом, иначе «трое врачей» читается как «в документах
     #: трое людей».
     uncovered_identities: int = 0
+    #: Год из вопроса, если он там был. `None` — вопрос без года, ответ
+    #: по всему корпусу.
+    year: int | None = None
+    #: Доказанные врачи, у которых даты приёма нет вовсе. При вопросе с
+    #: годом они НЕ попадают в ответ: отнести их к году нечем. Но и
+    #: промолчать о них нельзя — «не нашёл за 2014» звучало бы как «в
+    #: данных нет врачей», а они есть.
+    undated_doctors: int = 0
+    #: Доказанные врачи с датой приёма из ДРУГОГО года — отброшены по
+    #: делу, а не потеряны.
+    other_year_doctors: int = 0
 
     def skip(self, reason: str) -> None:
         self.skipped[reason] = self.skipped.get(reason, 0) + 1
@@ -191,7 +211,10 @@ class DoctorsAnswer:
     def as_dict(self) -> dict:
         """Полный ответ — с именами и цитатами. Только в файл."""
         return {"question": self.question, "intent": self.intent,
-                "path_used": self.path_used, "graph_edges": self.graph_edges,
+                "path_used": self.path_used, "year": self.year,
+                "undated_doctors": self.undated_doctors,
+                "other_year_doctors": self.other_year_doctors,
+                "graph_edges": self.graph_edges,
                 "items_from_graph": self.by_path(AnswerPath.GRAPH),
                 "items_from_evidence": self.by_path(AnswerPath.EVIDENCE),
                 "uncovered_identities": self.uncovered_identities,
@@ -202,6 +225,8 @@ class DoctorsAnswer:
     def as_public_dict(self) -> dict:
         """То же без содержимого: числа и флаги."""
         return {"intent": self.intent, "path_used": self.path_used,
+                "year": self.year, "undated_doctors": self.undated_doctors,
+                "other_year_doctors": self.other_year_doctors,
                 "graph_edges": self.graph_edges, "items": len(self.items),
                 "items_from_graph": self.by_path(AnswerPath.GRAPH),
                 "items_from_evidence": self.by_path(AnswerPath.EVIDENCE),
@@ -211,6 +236,43 @@ class DoctorsAnswer:
                 "proofs_total": sum(len(i.proofs) for i in self.items),
                 "considered": self.considered, "skipped": self.skipped,
                 "by_item": [item.as_public_dict() for item in self.items]}
+
+
+def requested_year(question: str, *, today: date | None = None) -> int | None:
+    """Год, о котором спросили, или `None`.
+
+    «В этом году» разрешается по календарю сервера, а не по корпусу:
+    год — свойство вопроса, а не данных.
+    """
+    match = _EXPLICIT_YEAR_RE.search(question)
+    if match:
+        return int(match.group(1))
+    if _THIS_YEAR_RE.search(question):
+        return (today or date.today()).year
+    return None
+
+
+def _split_by_year(items: list[DoctorItem], year: int) -> tuple[list[DoctorItem], int, int]:
+    """Разложить доказанных врачей на «в этом году», «без даты» и «в
+    другом году».
+
+    Врач без даты в ответ на вопрос с годом НЕ попадает: отнести его к
+    году нечем, а сделать это молча значило бы выдать догадку за факт —
+    ровно то, что R7 запрещает про специальность. Но и потерять его
+    нельзя, поэтому он считается отдельно.
+    """
+    prefix = f"{year}-"
+    matched: list[DoctorItem] = []
+    undated = 0
+    other = 0
+    for item in items:
+        if not item.dates:
+            undated += 1
+        elif any(d.startswith(prefix) for d in item.dates):
+            matched.append(item)
+        else:
+            other += 1
+    return matched, undated, other
 
 
 def detect_intent(question: str) -> str:
@@ -595,6 +657,11 @@ def answer_doctors_visited(session: Session, *, question: str,
             path = health_path
         elif health_path not in (AnswerPath.NONE, path):
             path = AnswerPath.MIXED
+
+    answer.year = requested_year(question)
+    if answer.year is not None:
+        items, answer.undated_doctors, answer.other_year_doctors = _split_by_year(
+            items, answer.year)
 
     answer.items = items
     answer.path_used = path

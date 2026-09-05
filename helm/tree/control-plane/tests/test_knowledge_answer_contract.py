@@ -257,3 +257,60 @@ def test_enumeration_questions_are_recognised(question):
 def test_non_enumeration_questions_are_not_hijacked(question):
     from helm_core.knowledge.query_router import detect_intent
     assert detect_intent(question) == QuestionIntent.UNSUPPORTED
+
+
+# ── год из вопроса ────────────────────────────────────────────────────
+
+def test_year_is_read_from_question():
+    from datetime import date
+
+    from helm_core.knowledge.query_router import requested_year
+    assert requested_year("Каких врачей я посещал в 2014 году?") == 2014
+    assert requested_year("Каких врачей я посещал в этом году?",
+                          today=date(2026, 9, 5)) == 2026
+    assert requested_year("Каких врачей я посещал?") is None
+    # «за прошлый год» намеренно не разбирается: угадать значит ответить
+    # не на тот вопрос.
+    assert requested_year("Каких врачей я посещал за прошлый год?") is None
+
+
+def test_undated_doctor_is_not_attributed_to_a_year():
+    from helm_core.knowledge.query_router import _split_by_year
+    dated = _doctor("Иванов И. И.", ["гастроэнтеролог"], ["2026-03-12"])
+    other = _doctor("Петров П. П.", ["уролог"], ["2019-05-01"])
+    undated = _doctor("Сидоров П. П.", ["эндокринолог"])
+
+    matched, no_date, other_year = _split_by_year([dated, other, undated], 2026)
+
+    assert [i.person for i in matched] == ["Иванов И. И."]
+    assert no_date == 1
+    assert other_year == 1
+
+
+def test_year_without_proof_says_the_year_out_loud():
+    answer = _answer()
+    answer.year = 2014
+    assert format_doctors(answer) == (
+        "Не нашёл в ваших данных подтверждённых посещений врачей за 2014 год.")
+
+
+def test_year_without_proof_does_not_hide_that_doctors_exist():
+    """Промолчать нельзя: «не нашёл за 2014» прочиталось бы как «врачей в
+    данных нет», а они есть — просто привязать их к году нечем."""
+    answer = _answer()
+    answer.year = 2014
+    answer.undated_doctors = 3
+    text = format_doctors(answer)
+    assert text.splitlines()[0].endswith("за 2014 год.")
+    assert "даты приёмов не подтверждены" in text
+    # Ни одного имени: врачей не называем, раз к году их отнести нечем.
+    assert "Иванов" not in text
+
+
+def test_year_answer_mentions_undated_doctors_alongside_the_list():
+    answer = _answer(_doctor("Иванов И. И.", ["гастроэнтеролог"], ["2026-03-12"]))
+    answer.year = 2026
+    answer.undated_doctors = 2
+    text = format_doctors(answer)
+    assert text.splitlines()[0] == "Гастроэнтеролог."
+    assert "Ещё 2 врача без подтверждённой даты приёма" in text
