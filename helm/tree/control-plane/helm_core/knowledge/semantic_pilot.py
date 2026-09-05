@@ -247,6 +247,13 @@ def _grounding(session: Session, models, run_id: uuid.UUID, text: str) -> dict[s
     Псевдонимы не учитываются (их отдельная таблица), поэтому число
     прошедших — нижняя оценка, и завышенным быть не может.
 
+    `span_inside` — та же пара, проверенная не строкой, а диапазонами:
+    цитата сущности лежит внутри цитаты атома. Служит двум вещам сразу.
+    Во-первых, это самопроверка замера: если строковое правило даёт ноль,
+    а диапазоны — нет, значит цитаты восстановлены верно и дело в самом
+    правиле, а не в подсчёте. Во-вторых, это оценка очевидной
+    альтернативы: сопоставлять происхождение, а не написание имени.
+
     Наружу уходят только два числа. Текст источника читается здесь же, на
     сервере, и остаётся здесь.
     """
@@ -255,21 +262,24 @@ def _grounding(session: Session, models, run_id: uuid.UUID, text: str) -> dict[s
                models.mention.char_start, models.mention.char_end)
         .join(models.node, models.node.id == models.mention.node_id)
         .where(models.mention.semantic_run_id == run_id)).all()
-    entities: dict[int | None, list[str]] = {}
-    atoms: dict[int | None, list[str]] = {}
+    entities: dict[int | None, list[tuple[str, int | None, int | None]]] = {}
+    atoms: dict[int | None, list[tuple[int, int]]] = {}
     for window_id, kind, label, start, end in rows:
         if kind == SemanticNodeKind.ENTITY:
-            entities.setdefault(window_id, []).append(label)
+            entities.setdefault(window_id, []).append((label, start, end))
         elif start is not None and end is not None:
-            atoms.setdefault(window_id, []).append(text[start:end])
+            atoms.setdefault(window_id, []).append((start, end))
 
-    pairs = grounded = 0
-    for window_id, quotes in atoms.items():
-        for quote in quotes:
-            for label in entities.get(window_id, ()):
+    pairs = grounded = span_inside = 0
+    for window_id, spans in atoms.items():
+        for start, end in spans:
+            quote = text[start:end]
+            for label, e_start, e_end in entities.get(window_id, ()):
                 pairs += 1
                 grounded += is_mentioned(quote, label)
-    return {"pairs": pairs, "grounded": grounded}
+                if e_start is not None and start <= e_start and e_end <= end:
+                    span_inside += 1
+    return {"pairs": pairs, "grounded": grounded, "span_inside": span_inside}
 
 
 def _breakdown(session: Session, models, run_id: uuid.UUID,

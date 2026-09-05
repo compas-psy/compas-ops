@@ -258,10 +258,23 @@ class TestGroundingAudit:
         ]
         assert semantic_pilot._grounding(
             _RowsSession(rows), semantic_pilot.PUBLIC_MODELS,
-            _RUN_ID, self.TEXT) == {"pairs": 2, "grounded": 1}
+            _RUN_ID, self.TEXT) == {"pairs": 2, "grounded": 1, "span_inside": 1}
 
     def test_no_entities_means_no_pairs_not_a_division_by_zero(self):
         rows = [(0, "event", "приём", 0, 21)]
         assert semantic_pilot._grounding(
             _RowsSession(rows), semantic_pilot.PUBLIC_MODELS,
-            _RUN_ID, self.TEXT) == {"pairs": 0, "grounded": 0}
+            _RUN_ID, self.TEXT) == {"pairs": 0, "grounded": 0, "span_inside": 0}
+
+    def test_span_inside_is_independent_of_the_string_rule(self):
+        """Ровно та проверка, ради которой поле заведено: сущность стоит
+        внутри цитаты атома, но её нормализованная подпись написана иначе,
+        чем в тексте. Строковое правило такую пару не пропускает,
+        диапазоны — пропускают."""
+        rows = [
+            (0, "entity", "Иванов Пётр Сергеевич", 15, 21),  # в тексте только «Иванов»
+            (0, "event", "приём", 0, 21),
+        ]
+        assert semantic_pilot._grounding(
+            _RowsSession(rows), semantic_pilot.PUBLIC_MODELS,
+            _RUN_ID, self.TEXT) == {"pairs": 1, "grounded": 0, "span_inside": 1}
