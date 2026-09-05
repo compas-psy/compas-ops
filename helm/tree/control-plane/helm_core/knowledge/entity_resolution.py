@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import uuid
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 
 from sqlalchemy import create_engine, func, select
@@ -369,8 +370,8 @@ def resolve_all(session: Session, *, knowledge_user_id: uuid.UUID | None = None,
     return report
 
 
-def rebuild_all(session: Session, *, knowledge_user_id: uuid.UUID | None = None
-                ) -> dict[str, dict]:
+def rebuild_all(session: Session, *, knowledge_user_id: uuid.UUID | None = None,
+                graph_session: Session | None = None) -> dict[str, dict]:
     """Снести производные строки R6 и собрать их заново (владелец, 05.09.2026).
 
     Разрешено ровно для трёх таблиц — личности, состав, кандидаты. Они
@@ -410,15 +411,157 @@ def rebuild_all(session: Session, *, knowledge_user_id: uuid.UUID | None = None
     report["public"] = {"removed": removed_public,
                         **resolve_in(session, PUBLIC_MODELS, tenant_id=tenant_id,
                                      current_run_ids=public_runs).as_dict()}
-    if health_schema_configured():
-        with health_session(tenant_id) as graph:
-            removed_health = wipe(graph, HEALTH_MODELS)
-            report["health"] = {"removed": removed_health,
-                                **resolve_in(graph, HEALTH_MODELS, tenant_id=tenant_id,
-                                             current_run_ids=health_runs).as_dict()}
+    # `graph_session` передаётся ровно одним вызывающим — проверкой
+    # идемпотентности. Ей нужна пересборка, которую можно откатить, а
+    # `health_session` коммитит на выходе по своему контракту: вторая
+    # пересборка записала бы то, про что её и спрашивают. Обычный путь
+    # параметра не передаёт и работает как раньше.
+    if graph_session is not None:
+        graph_scope = nullcontext(graph_session)
+    elif health_schema_configured():
+        graph_scope = health_session(tenant_id)
     else:
         report["health"] = None
+        return report
+    with graph_scope as graph:
+        removed_health = wipe(graph, HEALTH_MODELS)
+        report["health"] = {"removed": removed_health,
+                            **resolve_in(graph, HEALTH_MODELS, tenant_id=tenant_id,
+                                         current_run_ids=health_runs).as_dict()}
     return report
+
+
+@contextmanager
+def _rolled_back_health(tenant_id: uuid.UUID):
+    """Health-сеанс, из которого гарантированно ничего не выйдет наружу.
+
+    `health_session` коммитит на успешном выходе — таков её контракт, и
+    менять его ради проверки нельзя: на нём стоит весь health-путь.
+    Поэтому запись держится внутри SAVEPOINT, который откатывается до
+    выхода; наружу уходит пустая транзакция.
+
+    Health-схема не настроена — отдаётся `None`, и проверка идёт только
+    по public. Молчаливого «ну и ладно» здесь нет: вызывающий видит
+    `None` и пишет об этом в отчёт.
+    """
+    if not health_schema_configured():
+        yield None
+        return
+    with health_session(tenant_id) as graph:
+        savepoint = graph.begin_nested()
+        try:
+            yield graph
+        finally:
+            savepoint.rollback()
+
+
+def semantic_state(graph: Session, models, tenant_id: uuid.UUID) -> dict[str, list]:
+    """Состояние R6 в терминах смысла, а не идентификаторов.
+
+    UUID у пересобранных строк новые по построению: сравнивать их —
+    гарантированно получить «не совпало» и ничего этим не узнать.
+    Сравниваются те три вещи, которые проход обязан воспроизводить:
+    какие личности существуют, какой узел к какой отнесён, какие пары
+    оставлены вопросом человеку и по какой причине.
+
+    Личность опознаётся парой `(тип, нормализованная подпись)` — это её
+    ключ по уникальному ограничению таблицы. `canonical_label` в
+    сравнение НЕ входит, как и `matched_on` у состава: сравниваются
+    ровно те три вещи, которые назвал владелец. Две пересборки, давшие
+    одной личности разные подписи или тот же состав по разным
+    основаниям, гейт не остановит. Это выбор, а не недосмотр;
+    расширение — отдельное решение, не моё.
+    """
+    identities = {
+        row.id: (row.entity_type, row.normalized_key)
+        for row in graph.scalars(select(models.identity).where(
+            models.identity.knowledge_user_id == tenant_id)).all()
+    }
+    members = [
+        (str(row.node_id), *identities[row.identity_id])
+        for row in graph.scalars(select(models.member).where(
+            models.member.knowledge_user_id == tenant_id)).all()
+    ]
+    candidates = [
+        (str(row.node_id), *identities[row.identity_id], row.reason)
+        for row in graph.scalars(select(models.candidate).where(
+            models.candidate.knowledge_user_id == tenant_id)).all()
+    ]
+    return {"identities": sorted(identities.values()),
+            "members": sorted(members), "candidates": sorted(candidates)}
+
+
+#: Где в кортеже стоит нормализованная подпись личности. В примерах она
+#: заменяется многоточием: у health это фамилия врача, а гейт живёт в CI
+#: и печатает в общий лог — устав §6 и CLAUDE.md §5.2 этого не
+#: позволяют. Гейту хватает счётчиков; подпись смотрится на сервере,
+#: когда она действительно нужна.
+_LABEL_AT = {"identities": 1, "members": 2, "candidates": 2}
+
+
+def _masked(part: str, row: tuple) -> list:
+    without_label = list(row)
+    without_label[_LABEL_AT[part]] = "···"
+    return without_label
+
+
+def _state_diff(before: dict[str, list], after: dict[str, list]) -> dict[str, dict]:
+    """Что изменилось между двумя снимками. Пусто — совпало."""
+    diff: dict[str, dict] = {}
+    for part in ("identities", "members", "candidates"):
+        was, now = set(before[part]), set(after[part])
+        gone = [x for x in before[part] if x not in now]
+        new = [x for x in after[part] if x not in was]
+        if gone or new:
+            diff[part] = {"пропало": len(gone), "появилось": len(new),
+                          "примеры_пропало": [_masked(part, x) for x in gone[:5]],
+                          "примеры_появилось": [_masked(part, x) for x in new[:5]]}
+    return diff
+
+
+def verify_rebuild_idempotent(session: Session, *,
+                              knowledge_user_id: uuid.UUID | None = None) -> dict:
+    """Повторяет ли пересборка сама себя (владелец, 05.09.2026).
+
+    Прежний гейт звал `resolve_all(dry_run=True)` — инкрементальный
+    проход поверх уже построенного. Это другой алгоритм, и он не мог
+    совпасть с пересборкой ни при каких данных
+    (`docs/R6_IDEMPOTENCE_GATE_2026-09-05.md`). Сухой режим не годится и
+    сам по себе: он не пишет личности, значит следующие узлы того же
+    прохода не могут с ними сматчиться и уходят в кандидаты —
+    симуляция расходится с явью by design.
+
+    Поэтому здесь настоящая вторая пересборка, целиком внутри отката:
+    public — в SAVEPOINT вызывающей транзакции, health — в SAVEPOINT
+    своего сеанса. Наружу не уходит ни строки; сравнение идёт по
+    снимкам, снятым ДО отката.
+    """
+    tenant_id = bind_knowledge_user(session, knowledge_user_id)
+    before = {"public": semantic_state(session, PUBLIC_MODELS, tenant_id)}
+    with _rolled_back_health(tenant_id) as graph:
+        before["health"] = (semantic_state(graph, HEALTH_MODELS, tenant_id)
+                            if graph is not None else None)
+        savepoint = session.begin_nested()
+        try:
+            rebuild_all(session, knowledge_user_id=tenant_id, graph_session=graph)
+            after = {"public": semantic_state(session, PUBLIC_MODELS, tenant_id),
+                     "health": (semantic_state(graph, HEALTH_MODELS, tenant_id)
+                                if graph is not None else None)}
+        finally:
+            savepoint.rollback()
+    session.expire_all()
+
+    changed = {}
+    for scope in ("public", "health"):
+        if before[scope] is None:
+            continue
+        diff = _state_diff(before[scope], after[scope])
+        if diff:
+            changed[scope] = diff
+    return {"idempotent": not changed, "changed": changed,
+            "health_checked": before["health"] is not None,
+            "sizes": {scope: {part: len(rows) for part, rows in state.items()}
+                      for scope, state in before.items() if state is not None}}
 
 
 #: Счётчики, любой из которых больше нуля означает, что проход НЕ
@@ -482,6 +625,9 @@ def _cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--verify-idempotent", action="store_true",
                         help="сухой проход; ненулевой код возврата, если он "
                              "создал бы хоть одну строку")
+    parser.add_argument("--verify-rebuild-idempotent", action="store_true",
+                        help="вторая пересборка в откате; ненулевой код "
+                             "возврата, если состояние разошлось")
     parser.add_argument("--verify-no-weak-person-members", action="store_true",
                         help="проверка; ненулевой код возврата, если у "
                              "однословной личности-человека остался состав")
@@ -489,6 +635,11 @@ def _cli(argv: list[str] | None = None) -> int:
 
     engine = create_engine(get_settings().database_url, pool_pre_ping=True)
     with sessionmaker(engine, expire_on_commit=False)() as session:
+        if args.verify_rebuild_idempotent:
+            report = verify_rebuild_idempotent(session)
+            session.rollback()
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return 0 if report["idempotent"] else 1
         if args.probe or args.verify_no_weak_person_members:
             report = probe_all(session)
             session.rollback()

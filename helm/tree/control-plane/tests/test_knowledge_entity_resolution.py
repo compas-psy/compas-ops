@@ -455,3 +455,175 @@ def test_обычный_probe_кода_возврата_не_меняет(monkey
     _patch_probe(monkeypatch, {
         "health": {"one_token_with_members": 5, "one_token_with_members_gt1": 5}})
     assert er._cli(["--probe"]) == 0
+
+
+# --- гейт «пересборка повторяет саму себя» ---------------------------------
+#
+# Владелец 05.09.2026: прежний гейт сравнивал результат `rebuild_all` с
+# намерением `resolve_all(dry_run=True)` — две разные функции, и совпасть
+# они не могли ни при каких данных. Здесь проверяется новый: настоящая
+# вторая пересборка внутри отката и сравнение состояния.
+
+
+class _Row:
+    def __init__(self, **fields):
+        self.__dict__.update(fields)
+
+
+class _StateSession:
+    """Отдаёт три набора строк по тому, какую модель у неё спросили."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def scalars(self, statement):
+        model = statement.column_descriptions[0]["entity"]
+        return _Scalars(self.rows.get(model, []))
+
+
+class _Scalars:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def all(self):
+        return list(self.rows)
+
+
+IDENTITY_A = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
+NODE_A = uuid.UUID("00000000-0000-0000-0000-0000000000n1".replace("n", "b"))
+
+
+def _state_rows(*, reason=EntityResolutionReason.SURNAME_ONLY):
+    return {
+        PUBLIC_MODELS.identity: [_Row(id=IDENTITY_A, entity_type="person",
+                                      normalized_key="гаврилова е в")],
+        PUBLIC_MODELS.member: [_Row(identity_id=IDENTITY_A, node_id=NODE_A,
+                                    matched_on=EntityIdentityMatch.NORMALIZED_LABEL)],
+        PUBLIC_MODELS.candidate: [_Row(identity_id=IDENTITY_A, node_id=NODE_A,
+                                       reason=reason)],
+    }
+
+
+def test_снимок_состояния_не_содержит_ни_одного_uuid_личности():
+    # Смысл всей замены: у пересобранных строк идентификаторы новые по
+    # построению. Сравнение по ним не могло бы сойтись никогда.
+    state = er.semantic_state(_StateSession(_state_rows()), PUBLIC_MODELS, TENANT)
+    assert state["identities"] == [("person", "гаврилова е в")]
+    assert state["members"] == [(str(NODE_A), "person", "гаврилова е в")]
+    assert str(IDENTITY_A) not in repr(state)
+
+
+def test_то_же_состояние_с_другими_идентификаторами_считается_совпавшим():
+    other = uuid.UUID("00000000-0000-0000-0000-0000000000ff")
+    rows = _state_rows()
+    for model_rows in rows.values():
+        for row in model_rows:
+            if hasattr(row, "id"):
+                row.id = other
+            else:
+                row.identity_id = other
+    second = er.semantic_state(_StateSession(rows), PUBLIC_MODELS, TENANT)
+    first = er.semantic_state(_StateSession(_state_rows()), PUBLIC_MODELS, TENANT)
+    assert er._state_diff(first, second) == {}
+
+
+def test_смена_причины_кандидата_ловится_как_расхождение():
+    first = er.semantic_state(_StateSession(_state_rows()), PUBLIC_MODELS, TENANT)
+    second = er.semantic_state(
+        _StateSession(_state_rows(reason=EntityResolutionReason.TYPE_CONFLICT)),
+        PUBLIC_MODELS, TENANT)
+    diff = er._state_diff(first, second)
+    assert diff["candidates"]["пропало"] == 1
+    assert diff["candidates"]["появилось"] == 1
+
+
+def test_в_примерах_расхождения_нет_подписи_личности():
+    # Гейт живёт в CI и печатает в общий лог; подпись health-личности —
+    # это фамилия врача (устав §6, CLAUDE.md §5.2).
+    first = er.semantic_state(_StateSession(_state_rows()), PUBLIC_MODELS, TENANT)
+    second = {"identities": [], "members": [], "candidates": []}
+    diff = er._state_diff(first, second)
+    assert "гаврилова" not in repr(diff)
+    assert diff["identities"]["примеры_пропало"] == [["person", "···"]]
+
+
+class _SavepointSession:
+    """Сессия, которая помнит, откатили ли её вложенную транзакцию."""
+
+    def __init__(self):
+        self.savepoints = []
+        self.expired = 0
+
+    def begin_nested(self):
+        savepoint = _Savepoint()
+        self.savepoints.append(savepoint)
+        return savepoint
+
+    def expire_all(self):
+        self.expired += 1
+
+
+class _Savepoint:
+    def __init__(self):
+        self.rolled_back = False
+
+    def rollback(self):
+        self.rolled_back = True
+
+
+def test_вторая_пересборка_идёт_внутри_отката(monkeypatch):
+    # Самое важное свойство проверки: она не оставляет после себя того,
+    # про что спрашивает. Иначе гейт, поймавший неидемпотентность, уже
+    # записал бы второй результат.
+    session = _SavepointSession()
+    states = iter([{"identities": [], "members": [], "candidates": []},
+                   {"identities": [], "members": [], "candidates": []}])
+    monkeypatch.setattr(er, "bind_knowledge_user", lambda *a, **k: TENANT)
+    monkeypatch.setattr(er, "health_schema_configured", lambda: False)
+    monkeypatch.setattr(er, "semantic_state", lambda *a, **k: next(states))
+    rebuilt = []
+    monkeypatch.setattr(er, "rebuild_all",
+                        lambda *a, **k: rebuilt.append(k.get("graph_session", ...)))
+
+    report = er.verify_rebuild_idempotent(session)
+
+    assert report["idempotent"] is True
+    assert report["health_checked"] is False
+    assert rebuilt == [None]
+    assert [s.rolled_back for s in session.savepoints] == [True]
+    assert session.expired == 1
+
+
+def test_расхождение_состояния_валит_проверку(monkeypatch):
+    session = _SavepointSession()
+    states = iter([{"identities": [("person", "гаврилова е в")],
+                    "members": [], "candidates": []},
+                   {"identities": [], "members": [], "candidates": []}])
+    monkeypatch.setattr(er, "bind_knowledge_user", lambda *a, **k: TENANT)
+    monkeypatch.setattr(er, "health_schema_configured", lambda: False)
+    monkeypatch.setattr(er, "semantic_state", lambda *a, **k: next(states))
+    monkeypatch.setattr(er, "rebuild_all", lambda *a, **k: None)
+
+    report = er.verify_rebuild_idempotent(session)
+
+    assert report["idempotent"] is False
+    assert report["changed"]["public"]["identities"]["пропало"] == 1
+    # И даже провалившись, ничего не оставила.
+    assert [s.rolled_back for s in session.savepoints] == [True]
+
+
+def test_упавшая_пересборка_всё_равно_откатывается(monkeypatch):
+    session = _SavepointSession()
+    monkeypatch.setattr(er, "bind_knowledge_user", lambda *a, **k: TENANT)
+    monkeypatch.setattr(er, "health_schema_configured", lambda: False)
+    monkeypatch.setattr(er, "semantic_state",
+                        lambda *a, **k: {"identities": [], "members": [],
+                                         "candidates": []})
+
+    def взрывается(*_a, **_k):
+        raise RuntimeError("пересборка не дошла до конца")
+
+    monkeypatch.setattr(er, "rebuild_all", взрывается)
+    with pytest.raises(RuntimeError):
+        er.verify_rebuild_idempotent(session)
+    assert [s.rolled_back for s in session.savepoints] == [True]
