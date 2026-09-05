@@ -73,7 +73,7 @@ class PilotReport:
     #: Раскладка по всему пилоту, не по источнику: она отвечает на вопрос
     #: «почему компилятор молчит», а он про корпус целиком.
     by_kind: dict[str, dict[str, int]] = field(
-        default_factory=lambda: {"entity_types": {}, "atom_kinds": {}})
+        default_factory=lambda: {"entity_types": {}, "atom_kinds": {}, "windows": {}})
 
     def add_kinds(self, breakdown: dict[str, dict[str, int]]) -> None:
         for group, counts in breakdown.items():
@@ -200,6 +200,41 @@ def _by_kind(session: Session, models, run_id: uuid.UUID) -> dict[str, dict[str,
     return {"entity_types": entities, "atom_kinds": atoms}
 
 
+def _window_mix(session: Session, models, run_id: uuid.UUID) -> dict[str, int]:
+    """Есть ли в каждом окне и сущности, и атомы одновременно.
+
+    Компилятор рёбер работает ВНУТРИ окна: он получает `entities` и
+    `atoms` одного разбора и не видит соседние (`semantic_publish._process`
+    зовёт `compile_relations` на каждое окно отдельно). Окно, где есть
+    только сущности или только атомы, не может дать ни одного ребра,
+    сколько бы правил в компилятор ни добавили.
+
+    У реального документа это не редкость: «кто и где» стоит в шапке, а
+    факты идут ниже — и попадают в разные окна.
+    """
+    rows = session.execute(
+        select(models.mention.window_id, models.node.kind)
+        .join(models.node, models.node.id == models.mention.node_id)
+        .where(models.mention.semantic_run_id == run_id)).all()
+    windows: dict[int | None, set[bool]] = {}
+    for window_id, kind in rows:
+        windows.setdefault(window_id, set()).add(kind == SemanticNodeKind.ENTITY)
+    mix = {"both": 0, "entities_only": 0, "atoms_only": 0}
+    for flags in windows.values():
+        if flags == {True, False}:
+            mix["both"] += 1
+        elif flags == {True}:
+            mix["entities_only"] += 1
+        else:
+            mix["atoms_only"] += 1
+    return mix
+
+
+def _breakdown(session: Session, models, run_id: uuid.UUID) -> dict[str, dict[str, int]]:
+    return {**_by_kind(session, models, run_id),
+            "windows": _window_mix(session, models, run_id)}
+
+
 def run_counts(session: Session, run_id: uuid.UUID, *, domain: str,
                knowledge_user_id: uuid.UUID
                ) -> tuple[dict[str, int], dict[str, dict[str, int]]]:
@@ -219,8 +254,8 @@ def run_counts(session: Session, run_id: uuid.UUID, *, domain: str,
     """
     if is_health_domain(domain) and health_schema_configured():
         with health_session(knowledge_user_id) as graph:
-            return _counts(graph, HEALTH_MODELS, run_id), _by_kind(graph, HEALTH_MODELS, run_id)
-    return _counts(session, PUBLIC_MODELS, run_id), _by_kind(session, PUBLIC_MODELS, run_id)
+            return _counts(graph, HEALTH_MODELS, run_id), _breakdown(graph, HEALTH_MODELS, run_id)
+    return _counts(session, PUBLIC_MODELS, run_id), _breakdown(session, PUBLIC_MODELS, run_id)
 
 
 def inspect_published(session: Session, *, limit: int = DEFAULT_LIMIT,

@@ -154,8 +154,8 @@ class TestCountsUseTheSchemaThatWasWrittenTo:
             return dict(self.ZEROS)
 
         monkeypatch.setattr(semantic_pilot, "_counts", fake_counts)
-        monkeypatch.setattr(semantic_pilot, "_by_kind",
-                            lambda *_a: {"entity_types": {}, "atom_kinds": {}})
+        monkeypatch.setattr(semantic_pilot, "_breakdown",
+                            lambda *_a: {"entity_types": {}, "atom_kinds": {}, "windows": {}})
         return seen
 
     def _mirror(self, monkeypatch, *, configured, graph=None):
@@ -199,16 +199,19 @@ class TestBreakdownAccumulates:
 
     def test_counts_from_several_sources_are_summed(self):
         report = semantic_pilot.PilotReport(limit=2, selected=2)
-        report.add_kinds({"entity_types": {"PERSON": 2}, "atom_kinds": {"fact": 3}})
+        report.add_kinds({"entity_types": {"PERSON": 2}, "atom_kinds": {"fact": 3},
+                          "windows": {"both": 1}})
         report.add_kinds({"entity_types": {"PERSON": 1, "CONCEPT": 4},
-                          "atom_kinds": {"fact": 1, "event": 2}})
+                          "atom_kinds": {"fact": 1, "event": 2},
+                          "windows": {"both": 1, "atoms_only": 2}})
         assert report.by_kind == {"entity_types": {"PERSON": 3, "CONCEPT": 4},
-                                  "atom_kinds": {"fact": 4, "event": 2}}
+                                  "atom_kinds": {"fact": 4, "event": 2},
+                                  "windows": {"both": 2, "atoms_only": 2}}
 
     def test_two_reports_do_not_share_one_dict(self):
         """`field(default_factory=...)` здесь не формальность: общий
         словарь по умолчанию складывал бы разные пилоты в одну кучу."""
         first = semantic_pilot.PilotReport(limit=1, selected=1)
-        first.add_kinds({"entity_types": {"PERSON": 1}, "atom_kinds": {}})
+        first.add_kinds({"entity_types": {"PERSON": 1}, "atom_kinds": {}, "windows": {}})
         second = semantic_pilot.PilotReport(limit=1, selected=1)
-        assert second.by_kind == {"entity_types": {}, "atom_kinds": {}}
+        assert second.by_kind == {"entity_types": {}, "atom_kinds": {}, "windows": {}}
