@@ -56,7 +56,8 @@ echo "-- ключ шифрования --"
 # задан в compose, в env-файле или в окружении. Печатается СЧЁТЧИК,
 # значение не покидает сервер ни при каком исходе.
 inenv=$(sudo docker compose exec -T n8n printenv 2>/dev/null \
-        | grep -c '^N8N_ENCRYPTION_KEY=..*' || echo 0)
+        | grep -c '^N8N_ENCRYPTION_KEY=..*')
+inenv=${inenv:-0}
 verdict "ключ в окружении контейнера (переменных с непустым значением)" "$inenv"
 found_files=$(sudo grep -rls 'N8N_ENCRYPTION_KEY' /opt/helm/compose /etc/helm/secrets 2>/dev/null | wc -l)
 verdict "файлов конфигурации, где встречается имя ключа" "$found_files"
