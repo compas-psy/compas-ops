@@ -1,0 +1,392 @@
+"""R7 — маршрутизатор вопроса: ответ только из доказанного.
+
+Распоряжение владельца 05.09.2026:
+
+> R7 обязан поддерживать два пути. GRAPH — только по уже доказанным
+> рёбрам. EVIDENCE_FALLBACK — каноническая личность с составом ≥1 →
+> состав → упоминания → точный провенанс → доказательство. Личности без
+> состава в ответах не участвуют никогда. Первая приёмка — «каких врачей
+> я посещал?»: ФИО, специальность, дата/контекст если доказаны,
+> источник. Если ФИО есть, а специальность не доказана — «ФИО —
+> специальность не подтверждена». Никаких inference-догадок по названию
+> клиники, отделению или контексту. Пустой GRAPH — не ошибка.
+
+**Почему два пути, а не один.** R5 показал измерением: на реальных
+выписках компилятор связей даёт ноль рёбер (`pairs 33, grounded 0`) —
+цитата атома и цитата сущности там не пересекаются вовсе. Ответ по обходу
+графа на этом материале невозможен, но провенанс есть у каждого узла, и
+он точный. Пустой граф поэтому не ошибка и не повод чинить компилятор
+(это отдельное решение владельца), а штатная ветка.
+
+**Что здесь считается доказательством.** Собственная цитата сущности —
+диапазон символов в тексте источника, записанный при публикации
+(`knowledge_node_mentions.char_start/char_end`). Не окно, не абзац рядом,
+не документ целиком. Врачебность признаётся ровно правилом компилятора
+(`_DOCTOR_MARKER_RE` в пределах `_ROLE_PROXIMITY_TOKENS` токенов перед
+подписью) — то же правило, что аттестовано в R4, применённое к
+собственной цитате сущности вместо цитаты атома. Специальность — только
+из дефисного маркера («врач-уролог») в той же цитате.
+
+Название клиники, отделение и соседний текст доказательством не
+являются. «Иванов упомянут в выписке урологического отделения» не делает
+Иванова урологом, и такого вывода здесь нет.
+
+Имена в стандартный вывод не печатаются: ответ пишется файлом, наружу
+идут числа и флаги доказанности (§5.2 CLAUDE.md).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import uuid
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session, sessionmaker
+
+from .health_schema import health_schema_configured, health_session, is_health_domain
+from .relation_compiler import (
+    _DOCTOR_MARKER_RE, _ROLE_PROXIMITY_TOKENS, _first_mention_index, _tokens,
+)
+from .semantic_pilot import source_text
+from .semantic_publish import HEALTH_MODELS, PUBLIC_MODELS
+from .tenancy import bind_knowledge_user
+from ..config import get_settings
+from ..models import KnowledgeSource
+from ..models.base import SemanticNodeKind, SemanticNodeStatus, SemanticRelationType
+
+
+class QuestionIntent:
+    DOCTORS_VISITED = "doctors_visited"
+    UNSUPPORTED = "unsupported"
+
+
+class AnswerPath:
+    GRAPH = "graph"
+    EVIDENCE = "evidence"
+    NONE = "none"
+
+
+#: Вопрос распознаётся двумя условиями сразу: врачебное слово И слово о
+#: посещении. Одного «врача» мало — «что сказал врач про давление» это
+#: другой вопрос, и отвечать на него этим исполнителем нельзя.
+_DOCTOR_WORD_RE = re.compile(r"врач", re.IGNORECASE)
+_VISIT_WORD_RE = re.compile(r"посеща|посетил|посещал|был у|ходил|приём|прием|наблюда",
+                            re.IGNORECASE)
+
+#: Дефисный маркер специальности. Токенизатор компилятора режет дефис
+#: («врач-уролог» → «врач», «уролог»), поэтому связь между маркером и
+#: специальностью видна только в сыром тексте; отсюда отдельное
+#: выражение, а не разбор токенов.
+_HYPHENATED_SPECIALTY_RE = re.compile(r"врач[а-яё]*-([а-яё]+)", re.IGNORECASE)
+
+_PERSON_TYPES = ("PERSON", "person")
+
+
+@dataclass
+class Proof:
+    """Одно доказательство: точное место в источнике и что там написано.
+
+    На пути по графу точных границ нет — доказательством там служит само
+    ребро, а его провенанс это источник и ребро целиком. Поэтому границы
+    и цитата допускают `None`, а не подставное число: диапазон «-1» или
+    границы окна выглядели бы как точное место, не будучи им (та же
+    ошибка, которую R5 закрыл в упоминаниях).
+    """
+
+    source_id: str
+    window_id: int | None = None
+    char_start: int | None = None
+    char_end: int | None = None
+    #: Текст спана. Уходит только в файл ответа, не в стандартный вывод.
+    quote: str | None = None
+    #: Ребро, если доказательство пришло путём графа.
+    edge_id: str | None = None
+
+
+@dataclass
+class DoctorItem:
+    identity_id: str
+    person: str
+    #: Пусто — «специальность не подтверждена». Список, а не строка:
+    #: две разные доказанные специальности это факт документов, а не
+    #: повод выбрать одну.
+    specialties: list[str] = field(default_factory=list)
+    #: Дата приёма. На пути доказательств всегда None: у узла-сущности
+    #: даты нет, а дата документа — не дата приёма, и подставить её
+    #: значило бы догадаться.
+    occurred_at: str | None = None
+    proofs: list[Proof] = field(default_factory=list)
+    path: str = AnswerPath.EVIDENCE
+
+    def line(self) -> str:
+        if self.specialties:
+            return f"{self.person} — {', '.join(self.specialties)}"
+        return f"{self.person} — специальность не подтверждена"
+
+    def as_public_dict(self) -> dict:
+        """Без имени и без цитат: то, что можно печатать в лог."""
+        return {"identity_id": self.identity_id,
+                "specialty_proven": bool(self.specialties),
+                "date_proven": self.occurred_at is not None,
+                "proofs": len(self.proofs),
+                "path": self.path}
+
+
+@dataclass
+class DoctorsAnswer:
+    question: str
+    intent: str
+    path_used: str = AnswerPath.NONE
+    #: Сколько доказанных врачебных рёбер нашлось. Ноль — не ошибка, а
+    #: измеренное состояние графа на этом корпусе (R5).
+    graph_edges: int = 0
+    items: list[DoctorItem] = field(default_factory=list)
+    #: Почему узел или личность не попали в ответ. Не «отладка», а часть
+    #: ответа: «нашлось трое» без «двое отброшены за отсутствием
+    #: доказательства» — неполная правда (§5.1).
+    skipped: dict[str, int] = field(default_factory=dict)
+
+    def skip(self, reason: str) -> None:
+        self.skipped[reason] = self.skipped.get(reason, 0) + 1
+
+    def as_dict(self) -> dict:
+        """Полный ответ — с именами и цитатами. Только в файл."""
+        return {"question": self.question, "intent": self.intent,
+                "path_used": self.path_used, "graph_edges": self.graph_edges,
+                "skipped": self.skipped,
+                "answer": [item.line() for item in self.items],
+                "items": [asdict(item) for item in self.items]}
+
+    def as_public_dict(self) -> dict:
+        """То же без содержимого: числа и флаги."""
+        return {"intent": self.intent, "path_used": self.path_used,
+                "graph_edges": self.graph_edges, "items": len(self.items),
+                "items_with_specialty": sum(1 for i in self.items if i.specialties),
+                "items_with_date": sum(1 for i in self.items if i.occurred_at),
+                "proofs_total": sum(len(i.proofs) for i in self.items),
+                "skipped": self.skipped,
+                "by_item": [item.as_public_dict() for item in self.items]}
+
+
+def detect_intent(question: str) -> str:
+    if _DOCTOR_WORD_RE.search(question) and _VISIT_WORD_RE.search(question):
+        return QuestionIntent.DOCTORS_VISITED
+    return QuestionIntent.UNSUPPORTED
+
+
+def doctor_proof(span_text: str, label: str) -> tuple[bool, str | None]:
+    """Доказывает ли собственная цитата сущности, что это врач.
+
+    Правило берётся у компилятора связей целиком, а не пересказывается:
+    маркер «врач*» среди `_ROLE_PROXIMITY_TOKENS` токенов НЕПОСРЕДСТВЕННО
+    перед подписью. Пересказ разошёлся бы с аттестованным в R4 правилом
+    при первой же правке одного из двух мест.
+
+    Возвращает (врач ли, специальность или None). Специальность
+    признаётся только дефисной («врач-уролог») и только если слово после
+    дефиса стоит в том же окне перед подписью: «уролог» из соседнего
+    предложения к этому человеку не относится.
+    """
+    pos = _first_mention_index(span_text, label)
+    if pos <= 0:
+        return False, None
+    tokens = _tokens(span_text)
+    window_before = tokens[max(0, pos - _ROLE_PROXIMITY_TOKENS):pos]
+    if not any(_DOCTOR_MARKER_RE.fullmatch(t) for t in window_before):
+        return False, None
+    for match in _HYPHENATED_SPECIALTY_RE.finditer(span_text):
+        specialty = match.group(1).lower()
+        if specialty in window_before:
+            return True, specialty
+    return True, None
+
+
+def _graph_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUID],
+                   answer: DoctorsAnswer) -> list[DoctorItem]:
+    """Путь по графу: только уже доказанные рёбра, ничего не выводя.
+
+    `EVENT --INVOLVES(role=doctor)--> PERSON` даёт человека и дату
+    события; `PERSON --HAS_ROLE--> CONCEPT` даёт специальность. Обоих
+    рёбер может не быть — тогда путь пуст, и это не ошибка.
+    """
+    rows = graph.execute(
+        select(models.edge, models.node)
+        .join(models.node, models.node.id == models.edge.to_node_id)
+        .where(models.edge.knowledge_user_id == tenant_id,
+               models.edge.relation_type == SemanticRelationType.INVOLVES.value,
+               models.edge.role == "doctor",
+               models.edge.semantic_run_id.in_(run_ids),
+               models.node.status == SemanticNodeStatus.ACTIVE)).all()
+    answer.graph_edges += len(rows)
+    if not rows:
+        return []
+
+    specialties: dict[uuid.UUID, list[str]] = {}
+    for person_id, concept_label in graph.execute(
+            select(models.edge.from_node_id, models.node.canonical_label)
+            .join(models.node, models.node.id == models.edge.to_node_id)
+            .where(models.edge.knowledge_user_id == tenant_id,
+                   models.edge.relation_type == SemanticRelationType.HAS_ROLE.value,
+                   models.edge.semantic_run_id.in_(run_ids))).all():
+        specialties.setdefault(person_id, []).append(concept_label)
+
+    items: list[DoctorItem] = []
+    for edge, person in rows:
+        event = graph.get(models.node, edge.from_node_id)
+        occurred = event.occurred_at_start if event is not None else None
+        items.append(DoctorItem(
+            identity_id="", person=person.canonical_label,
+            specialties=sorted(set(specialties.get(person.id, []))),
+            occurred_at=occurred.isoformat() if occurred else None,
+            proofs=[Proof(source_id=str(edge.source_id), edge_id=str(edge.id))],
+            path=AnswerPath.GRAPH))
+    return items
+
+
+def _evidence_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUID],
+                      text_by_source: dict[uuid.UUID, str],
+                      answer: DoctorsAnswer) -> list[DoctorItem]:
+    """Путь по доказательствам: личность → состав → упоминание → спан.
+
+    Личность без состава сюда не попадает по построению: выборка идёт от
+    строк состава, а не от личностей. Это и есть «zero-member identities
+    никогда не участвуют в ответах» — свойством запроса, а не проверкой,
+    которую можно забыть.
+    """
+    rows = graph.execute(
+        select(models.identity, models.node)
+        .join(models.member, models.member.identity_id == models.identity.id)
+        .join(models.node, models.node.id == models.member.node_id)
+        .where(models.identity.knowledge_user_id == tenant_id,
+               models.identity.entity_type.in_(_PERSON_TYPES),
+               models.node.kind == SemanticNodeKind.ENTITY,
+               models.node.status == SemanticNodeStatus.ACTIVE,
+               models.node.semantic_run_id.in_(run_ids))
+        .order_by(models.identity.normalized_key, models.node.created_at)).all()
+
+    by_identity: dict[str, DoctorItem] = {}
+    for identity, node in rows:
+        mentions = graph.scalars(
+            select(models.mention)
+            .where(models.mention.knowledge_user_id == tenant_id,
+                   models.mention.node_id == node.id,
+                   models.mention.char_start.is_not(None))
+            .order_by(models.mention.char_start)).all()
+        if not mentions:
+            answer.skip("узел без точного спана")
+            continue
+        for mention in mentions:
+            text = text_by_source.get(mention.source_id)
+            if text is None:
+                answer.skip("упоминание в источнике без текста")
+                continue
+            span = text[mention.char_start:mention.char_end]
+            is_doctor, specialty = doctor_proof(span, node.canonical_label)
+            if not is_doctor:
+                answer.skip("в цитате нет врачебного маркера")
+                continue
+            item = by_identity.get(str(identity.id))
+            if item is None:
+                item = DoctorItem(identity_id=str(identity.id),
+                                  person=identity.canonical_label)
+                by_identity[str(identity.id)] = item
+            if specialty and specialty not in item.specialties:
+                item.specialties.append(specialty)
+            item.proofs.append(Proof(
+                source_id=str(mention.source_id), window_id=mention.window_id,
+                char_start=mention.char_start, char_end=mention.char_end, quote=span))
+    for item in by_identity.values():
+        item.specialties.sort()
+    return list(by_identity.values())
+
+
+def _answer_in(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUID],
+               text_by_source: dict[uuid.UUID, str],
+               answer: DoctorsAnswer) -> tuple[list[DoctorItem], str]:
+    """Один ответ в одной схеме. Сначала граф, потом доказательства."""
+    if not run_ids:
+        return [], AnswerPath.NONE
+    items = _graph_doctors(graph, models, tenant_id=tenant_id, run_ids=run_ids,
+                           answer=answer)
+    if items:
+        return items, AnswerPath.GRAPH
+    return (_evidence_doctors(graph, models, tenant_id=tenant_id, run_ids=run_ids,
+                              text_by_source=text_by_source, answer=answer),
+            AnswerPath.EVIDENCE)
+
+
+def answer_doctors_visited(session: Session, *, question: str,
+                           knowledge_user_id: uuid.UUID | None = None) -> DoctorsAnswer:
+    """Ответ на «каких врачей я посещал» по обеим схемам.
+
+    Разделение то же, что у публикации и у разрешения сущностей:
+    health-источник писал узлы в зеркало отдельной ролью, значит и
+    ответ по ним собирается там же, своим соединением.
+    """
+    answer = DoctorsAnswer(question=question, intent=detect_intent(question))
+    if answer.intent != QuestionIntent.DOCTORS_VISITED:
+        return answer
+
+    tenant_id = bind_knowledge_user(session, knowledge_user_id)
+    sources = session.scalars(
+        select(KnowledgeSource)
+        .where(KnowledgeSource.current_semantic_run_id.is_not(None))).all()
+
+    public_runs: set[uuid.UUID] = set()
+    health_runs: set[uuid.UUID] = set()
+    public_text: dict[uuid.UUID, str] = {}
+    health_text: dict[uuid.UUID, str] = {}
+    for source in sources:
+        health = is_health_domain(source.domain)
+        (health_runs if health else public_runs).add(source.current_semantic_run_id)
+        text = source_text(source)
+        if text is not None:
+            (health_text if health else public_text)[source.id] = text
+        else:
+            answer.skip("текст источника недоступен")
+
+    items, path = _answer_in(session, PUBLIC_MODELS, tenant_id=tenant_id,
+                             run_ids=public_runs, text_by_source=public_text,
+                             answer=answer)
+    if health_runs and health_schema_configured():
+        with health_session(tenant_id) as graph:
+            health_items, health_path = _answer_in(
+                graph, HEALTH_MODELS, tenant_id=tenant_id, run_ids=health_runs,
+                text_by_source=health_text, answer=answer)
+        items = items + health_items
+        if health_path == AnswerPath.GRAPH:
+            path = AnswerPath.GRAPH
+        elif path == AnswerPath.NONE:
+            path = health_path
+
+    answer.items = items
+    answer.path_used = path
+    return answer
+
+
+def _cli(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="R7: ответ по доказанному")
+    parser.add_argument("--question", required=True)
+    parser.add_argument("--out", required=True,
+                        help="файл для полного ответа (имена и цитаты)")
+    args = parser.parse_args(argv)
+
+    engine = create_engine(get_settings().database_url, pool_pre_ping=True)
+    with sessionmaker(engine, expire_on_commit=False)() as session:
+        answer = answer_doctors_visited(session, question=args.question)
+        session.rollback()
+
+    out = Path(args.out)
+    out.write_text(json.dumps(answer.as_dict(), ensure_ascii=False, indent=2) + "\n",
+                   encoding="utf-8")
+    out.chmod(0o600)
+    print(json.dumps(answer.as_public_dict(), ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(_cli())
