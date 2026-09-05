@@ -21,10 +21,10 @@ echo "выкачено: $(sudo cat /opt/helm/DEPLOYED_SHA 2>/dev/null || echo un
 echo "############ 1. РЁБРА ВРАЧЕБНОЙ РОЛИ ############"
 echo "public: INVOLVES | из них role=doctor:"
 psql "select count(*)||' | '||count(*) filter (where role='doctor')
-      from public.knowledge_edges where relation_type='INVOLVES'"
+      from public.knowledge_edges where relation_type='involves'"
 echo "health: INVOLVES | из них role=doctor:"
 psql "select count(*)||' | '||count(*) filter (where role='doctor')
-      from health.knowledge_edges where relation_type='INVOLVES'"
+      from health.knowledge_edges where relation_type='involves'"
 echo "health: рёбра по типу связи (тип | штук):"
 psql "select relation_type||' | '||count(*)::text from health.knowledge_edges
       group by relation_type order by relation_type"
@@ -32,26 +32,35 @@ psql "select relation_type||' | '||count(*)::text from health.knowledge_edges
 echo "############ 2. ДАТЫ СОБЫТИЙ ############"
 echo "health: узлов EVENT всего | с occurred_at_start:"
 psql "select count(*)||' | '||count(occurred_at_start)
-      from health.knowledge_nodes where kind='EVENT'"
+      from health.knowledge_nodes where kind='event'"
 echo "health: год события | узлов (только у кого дата есть):"
 psql "select extract(year from occurred_at_start)::int::text||' | '||count(*)::text
       from health.knowledge_nodes
-      where kind='EVENT' and occurred_at_start is not null
+      where kind='event' and occurred_at_start is not null
       group by extract(year from occurred_at_start)
       order by extract(year from occurred_at_start)"
 echo "health: год события у СОБЫТИЙ, из которых есть ребро role=doctor (год | рёбер):"
 psql "select extract(year from n.occurred_at_start)::int::text||' | '||count(*)::text
       from health.knowledge_edges e
       join health.knowledge_nodes n on n.id = e.from_node_id
-      where e.relation_type='INVOLVES' and e.role='doctor'
+      where e.relation_type='involves' and e.role='doctor'
         and n.occurred_at_start is not null
       group by extract(year from n.occurred_at_start)
       order by extract(year from n.occurred_at_start)"
 echo "health: рёбер role=doctor БЕЗ даты события:"
 psql "select count(*) from health.knowledge_edges e
       join health.knowledge_nodes n on n.id = e.from_node_id
-      where e.relation_type='INVOLVES' and e.role='doctor'
+      where e.relation_type='involves' and e.role='doctor'
         and n.occurred_at_start is null"
+
+echo "health: вид узла | штук:"
+psql "select kind||' | '||count(*)::text from health.knowledge_nodes
+      group by kind order by kind"
+echo "health: роль на рёбрах involves (роль | штук):"
+psql "select coalesce(role,'(пусто)')||' | '||count(*)::text from health.knowledge_edges
+      where relation_type='involves' group by role order by count(*) desc"
+echo "health: узлов с occurred_at_start (любой вид):"
+psql "select count(occurred_at_start)||' из '||count(*)::text from health.knowledge_nodes"
 
 echo "############ 3. ЕСТЬ ЛИ ВООБЩЕ ЧТО-ТО ЗА 2014 ############"
 echo "источники с 2014 в имени файла:"
