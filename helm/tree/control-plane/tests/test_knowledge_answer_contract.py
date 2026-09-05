@@ -231,3 +231,29 @@ def test_unrecognised_question_still_goes_the_old_way(monkeypatch):
 
     assert seen == ["что было в анализе 12 марта"]
     assert result.outcome == "NEEDS_REASONING"
+
+
+# ── распознавание намерения: цена ошибки выросла ──────────────────────
+
+@pytest.mark.parametrize("question", [
+    "каких врачей я посещал?",
+    "Каких врачей я посещал в этом году?",
+    "к каким врачам я ходил",
+    "какие врачи меня наблюдали",
+])
+def test_enumeration_questions_are_recognised(question):
+    from helm_core.knowledge.query_router import detect_intent
+    assert detect_intent(question) == QuestionIntent.DOCTORS_VISITED
+
+
+@pytest.mark.parametrize("question", [
+    # Содержит и «врач», и «приём»: по двум условиям ушло бы в перечень
+    # специальностей — уверенный ответ не на тот вопрос.
+    "что сказал врач на приёме",
+    "когда я был у врача последний раз",
+    "что сказал врач про давление",
+    "где я был в марте",
+])
+def test_non_enumeration_questions_are_not_hijacked(question):
+    from helm_core.knowledge.query_router import detect_intent
+    assert detect_intent(question) == QuestionIntent.UNSUPPORTED

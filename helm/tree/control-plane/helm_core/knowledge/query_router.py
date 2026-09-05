@@ -77,9 +77,17 @@ class AnswerPath:
     NONE = "none"
 
 
-#: Вопрос распознаётся двумя условиями сразу: врачебное слово И слово о
-#: посещении. Одного «врача» мало — «что сказал врач про давление» это
-#: другой вопрос, и отвечать на него этим исполнителем нельзя.
+#: Вопрос распознаётся тремя условиями сразу: слово-перечисление И
+#: врачебное слово И слово о посещении.
+#:
+#: Пока исполнитель жил CLI, хватало двух: врач + посещение. С 05.09.2026
+#: он стоит в живом пути, и цена ошибки изменилась. «Что сказал врач на
+#: приёме» содержит и «врач», и «приём» — по двум условиям ушло бы в
+#: перечень специальностей, то есть УВЕРЕННЫЙ ответ не на тот вопрос.
+#: Это хуже прежнего вывода кусков текста: там было видно, что система
+#: не поняла. Третье условие спрашивает то, на что этот исполнитель
+#: действительно умеет отвечать: «каких/какие/каким».
+_ENUMERATION_RE = re.compile(r"как(?:их|ие|им)\b", re.IGNORECASE)
 _DOCTOR_WORD_RE = re.compile(r"врач", re.IGNORECASE)
 _VISIT_WORD_RE = re.compile(r"посеща|посетил|посещал|был у|ходил|приём|прием|наблюда",
                             re.IGNORECASE)
@@ -206,7 +214,9 @@ class DoctorsAnswer:
 
 
 def detect_intent(question: str) -> str:
-    if _DOCTOR_WORD_RE.search(question) and _VISIT_WORD_RE.search(question):
+    if (_ENUMERATION_RE.search(question)
+            and _DOCTOR_WORD_RE.search(question)
+            and _VISIT_WORD_RE.search(question)):
         return QuestionIntent.DOCTORS_VISITED
     return QuestionIntent.UNSUPPORTED
 
