@@ -37,5 +37,20 @@ echo "############ ЗАПИСЬ ############"
 sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.entity_resolution
 RC=$?
 
-echo "############ ГОТОВО (dry=$DRY rc=$RC) ############"
+# Повтор — не перестраховка, а проверка идемпотентности на живых данных
+# (владелец, 05.09.2026: «повтор => идемпотентно»). Второй проход обязан
+# показать identities_created / members_created / candidates_created = 0
+# и already_resolved = числу состава: значит, строки первого прохода
+# лежат в базе и прочитаны обратно, а не заведены заново.
+echo "############ ПОВТОР ############"
+sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.entity_resolution
+AGAIN=$?
+
+# Та же проверка, что шла до записи: однословных личностей-людей с
+# составом больше одного узла не должно появиться.
+echo "############ ПРОВЕРКА ПОСЛЕ ############"
+sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.entity_resolution --probe
+PROBE=$?
+
+echo "############ ГОТОВО (dry=$DRY rc=$RC again=$AGAIN probe=$PROBE) ############"
 exit "$RC"
