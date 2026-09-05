@@ -10,12 +10,19 @@
 1. заголовки Markdown, если они есть (L1 SOURCE их сохраняет);
 2. группы абзацев внутри раздела;
 3. предложения — если один абзац сам длиннее окна;
-4. жёсткая резка по границе символа — если и предложение длиннее.
+4. строки — если предложение длиннее (владелец, 05.09.2026);
+5. жёсткая резка по границе символа — если длиннее и строка.
 
-Четвёртый уровень существует не для красоты: без него абзац без единой
-точки (таблица, расшифровка звука одним куском) не поместился бы ни в
-одно окно, и его пришлось бы либо отбросить, либо отдать модели целиком.
-Оба варианта — то самое молчаливое усечение.
+Четвёртый уровень добавлен по замеру: медицинский бланк и таблица не
+имеют ни пустых строк, ни конечной пунктуации, поэтому уровни 2 и 3 на
+них не срабатывают вовсе, и такой абзац сразу проваливался в жёсткую
+резку — она рвёт строку таблицы посередине значения. Строка же —
+естественная единица бланка, и делится он по ней без потерь.
+
+Пятый уровень существует не для красоты: без него абзац без единой
+точки и без переводов строки (расшифровка звука одним куском) не
+поместился бы ни в одно окно, и его пришлось бы либо отбросить, либо
+отдать модели целиком. Оба варианта — то самое молчаливое усечение.
 
 Окно НЕ пересекается с соседними. §14.4.1 разрешает ограниченное
 перекрытие «where context is needed», но не требует его, а перекрытие
@@ -105,12 +112,14 @@ def _sections(text: str) -> list[tuple[tuple[str, ...], int, int]]:
     return sections
 
 
-def _split_long(text: str, start: int, limit: int) -> list[tuple[int, int]]:
+def _split_long(text: str, start: int, limit: int,
+                *, hard_cut: bool = True) -> list[tuple[int, int]]:
     """Границы кусков не длиннее `limit` внутри одного абзаца.
 
-    Сначала по предложениям, потом — если предложение само длиннее —
-    жёстко по символам. Возвращаются смещения в исходном тексте, чтобы
-    привязка к источнику не терялась ни на одном уровне дробления.
+    Сначала по предложениям, потом по строкам, и только если строка сама
+    длиннее — жёстко по символам. Возвращаются смещения в исходном
+    тексте, чтобы привязка к источнику не терялась ни на одном уровне
+    дробления.
     """
     pieces: list[tuple[int, int]] = []
     cursor = 0
@@ -122,10 +131,66 @@ def _split_long(text: str, start: int, limit: int) -> list[tuple[int, int]]:
         if len(part) <= limit:
             pieces.append((start + offset, start + offset + len(part)))
             continue
-        for begin in range(0, len(part), limit):
-            piece = part[begin:begin + limit]
+        pieces.extend(_split_lines(part, start + offset, limit, hard_cut=hard_cut))
+    return pieces
+
+
+def _split_lines(text: str, start: int, limit: int,
+                 *, hard_cut: bool = True) -> list[tuple[int, int]]:
+    """Границы по строкам; жёсткая резка — только для строки длиннее `limit`.
+
+    `hard_cut=False` — резать по символам нельзя, слишком длинная строка
+    возвращается целиком. Нужно пути таймаута: окно там не нарезается на
+    спаны, а уходит в модель отдельными кусками, и кусок, оборванный
+    посередине слова, даст не «меньше знаний», а мусор. Контракт
+    покрытия требует в таком случае явного провала, не тихой порчи.
+
+    Смещения ведутся бегущим курсором, а не поиском подстроки: у таблицы
+    строки повторяются дословно («Норма | —»), и `index()` нашёл бы
+    первую вместо текущей, сдвинув привязку к источнику.
+    """
+    pieces: list[tuple[int, int]] = []
+    cursor = 0
+    for line in text.splitlines(keepends=True):
+        offset, cursor = cursor, cursor + len(line)
+        if not line.strip():
+            continue
+        if len(line) <= limit or not hard_cut:
+            pieces.append((start + offset, start + offset + len(line)))
+            continue
+        for begin in range(0, len(line), limit):
+            piece = line[begin:begin + limit]
             pieces.append((start + offset + begin, start + offset + begin + len(piece)))
     return pieces
+
+
+def split_text(text: str, *, limit: int, hard_cut: bool = True) -> list[str]:
+    """Тот же порядок деления, что и у окон, но результат — куски текста.
+
+    Нужен пути таймаута в `semantic_extract`: до 05.09.2026 он делил
+    своим, более слабым способом (абзацы, затем предложения) и на
+    плотной таблице не мог поделить вовсе — три источника корпуса
+    владельца так и не прошли R8. Разных механизма деления быть не
+    должно; здесь переиспользуется тот же.
+
+    Куски собираются обратно `_pack()` — без этого таблица на сорок
+    строк дала бы сорок отдельных вызовов модели по одной строке, где ни
+    одна не несёт контекста соседней. Деление сверху вниз, сборка снизу
+    вверх — ровно как у окон.
+    """
+    spans: list[tuple[int, int]] = []
+    cursor = 0
+    for paragraph in _PARAGRAPH_BREAK.split(text):
+        if not paragraph.strip():
+            cursor += len(paragraph)
+            continue
+        offset = text.index(paragraph, cursor)
+        cursor = offset + len(paragraph)
+        if len(paragraph) <= limit:
+            spans.append((offset, offset + len(paragraph)))
+        else:
+            spans.extend(_split_long(paragraph, offset, limit, hard_cut=hard_cut))
+    return [piece for piece in (text[a:b].strip() for a, b in _pack(spans, limit)) if piece]
 
 
 def _pack(spans: list[tuple[int, int]], limit: int) -> list[tuple[int, int]]:

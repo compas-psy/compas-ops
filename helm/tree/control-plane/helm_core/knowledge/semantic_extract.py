@@ -36,6 +36,7 @@ from ..config import get_settings
 from ..models.base import (
     SemanticDatePrecision, SemanticNodeKind, SemanticRelationType,
 )
+from .semantic_windows import split_text
 
 logger = logging.getLogger(__name__)
 
@@ -595,42 +596,6 @@ def extract_window(window_text: str, *, domain: str, heading_path: tuple[str, ..
 #: патологическом единственном неразделимом предложении).
 MAX_SPLIT_DEPTH = 3
 
-#: Сколько символов хвоста предыдущего куска переносить в начало следующего
-#: при разбиении по предложениям — минимальный контекст для анафоры/
-#: продолжения мысли (P2: «минимальный overlap, если он нужен для
-#: сохранения соседнего контекста»). Только для sentence-split: абзацы
-#: обычно уже самодостаточные единицы контекста.
-SENTENCE_SPLIT_OVERLAP_CHARS = 80
-
-_PARAGRAPH_SPLIT_RE = re.compile(r"\n\s*\n")
-_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+(?=[A-ZА-ЯЁ«\"“])")
-
-
-def _split_paragraphs(text: str) -> list[str] | None:
-    """Границы абзацев — первый, самый дешёвый уровень деления (P2: «paragraph
-    boundary first»). `None`, если делить некуда (один абзац)."""
-    parts = [p.strip() for p in _PARAGRAPH_SPLIT_RE.split(text) if p.strip()]
-    return parts if len(parts) > 1 else None
-
-
-def _split_sentences(text: str) -> list[str] | None:
-    """Второй уровень (P2: «sentence boundary second»), с overlap-хвостом
-    предыдущего предложения — без него ссылка вида «Из-за этого...» в
-    начале куска теряет контекст, на который ссылается."""
-    parts = [p.strip() for p in _SENTENCE_BOUNDARY_RE.split(text) if p.strip()]
-    if len(parts) <= 1:
-        return None
-    pieces = [parts[0]]
-    for prev, cur in zip(parts, parts[1:]):
-        # Хвост СТРОГО короче prev (не вся prev целиком) — иначе для
-        # короткого предыдущего предложения кусок с overlap воспроизводит
-        # исходный текст побайтово, и деление на timeout зацикливается на
-        # той же строке вместо прогресса.
-        overlap_len = min(SENTENCE_SPLIT_OVERLAP_CHARS, max(len(prev) - 1, 0))
-        tail = prev[-overlap_len:] if overlap_len else ""
-        pieces.append(f"{tail} {cur}" if tail else cur)
-    return pieces
-
 
 def _merge_node_extractions(parts: list[WindowExtraction]) -> WindowExtraction:
     """Склеить результаты дочерних кусков в один `WindowExtraction` для
@@ -840,8 +805,28 @@ def extract_nodes_window(window_text: str, *, domain: str, heading_path: tuple[s
                 _lineage.append({"depth": _depth, "window_chars": len(window_text),
                                  "outcome": "timeout_depth_exhausted"})
             raise
-        pieces = _split_paragraphs(window_text) or _split_sentences(window_text)
-        if pieces is None:
+        # Владелец 05.09.2026: механизм деления должен быть ОДИН. Здесь
+        # была своя, более слабая лестница (абзацы, затем предложения) —
+        # на плотной таблице без пустых строк и точек она не делила
+        # вовсе, и три источника корпуса так и не прошли R8. Теперь
+        # зовётся общий `split_text()` из semantic_windows: абзацы →
+        # предложения → строки → жёсткая резка, с обратной сборкой.
+        #
+        # Половина длины как предел — то же требование прогресса, что и
+        # у прежнего деления надвое: кусок обязан быть строго меньше
+        # исходного, иначе рекурсия топчется на месте.
+        #
+        # Overlap-хвост предыдущего предложения при этом потерян: у
+        # общего механизма его нет. Сказано вслух, а не умолчано —
+        # ссылка «Из-за этого...» в начале куска теряет предшественника.
+        # Цена принята: без деления окно не разбиралось совсем.
+        # hard_cut=False: резать слово посередине здесь нельзя. У окон
+        # жёсткая резка законна — там спаны покрывают источник
+        # целиком; тут кусок уходит в модель отдельно, и обрывок
+        # даст мусор вместо знаний. Неделимое — честный провал.
+        pieces = split_text(window_text, limit=max(1, len(window_text) // 2),
+                            hard_cut=False)
+        if len(pieces) <= 1:
             if _lineage is not None:
                 _lineage.append({"depth": _depth, "window_chars": len(window_text),
                                  "outcome": "timeout_unsplittable"})

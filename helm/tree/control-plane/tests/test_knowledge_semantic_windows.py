@@ -14,7 +14,7 @@
 import pytest
 
 from helm_core.knowledge.semantic_windows import (
-    WINDOW_MAX_CHARS, WINDOW_MIN_CHARS, build_windows, split_window,
+    WINDOW_MAX_CHARS, WINDOW_MIN_CHARS, build_windows, split_text, split_window,
 )
 
 SHAPES = {
@@ -108,3 +108,50 @@ def test_the_limit_is_not_a_silent_cut() -> None:
 
     assert len(windows) > 1
     assert sum(len(w.text) for w in windows) >= len(text.strip())
+
+
+# ── Деление таблицы: строки перед жёсткой резкой ─────────────────────
+# Владелец 05.09.2026: механизм деления должен быть один, и он обязан
+# уметь плотную таблицу. Три источника корпуса не прошли R8 именно
+# здесь: у медицинского бланка нет ни пустых строк, ни конечной
+# пунктуации, поэтому абзацный и предложенческий уровни не срабатывают,
+# а без строкового остаётся только жёсткая резка — которая рвёт строку
+# посередине значения.
+
+def _table(rows: int) -> str:
+    return "\n".join(f"Показатель {i} | значение {i},{i} | норма {i}-{i + 1}"
+                     for i in range(rows))
+
+
+def test_dense_table_splits_by_lines_not_mid_value():
+    table = _table(40)
+    pieces = split_text(table, limit=len(table) // 2)
+    assert len(pieces) > 1, "таблица обязана делиться, иначе окно не разберётся"
+    # Ни один кусок не начинается и не кончается посередине строки.
+    for piece in pieces:
+        assert piece == piece.strip()
+        for line in piece.splitlines():
+            assert line in table
+
+
+def test_table_pieces_stay_whole_rows_not_forty_singletons():
+    """Куски собираются обратно до предела: сорок строк не должны стать
+    сорока вызовами модели по строке без контекста соседней."""
+    table = _table(40)
+    pieces = split_text(table, limit=len(table) // 2)
+    assert len(pieces) <= 4
+    assert max(len(p) for p in pieces) <= len(table) // 2
+
+
+def test_timeout_split_refuses_to_cut_a_word_in_half():
+    """`hard_cut=False` — контракт пути таймаута: кусок уходит в модель
+    отдельно, поэтому обрывок посередине слова недопустим, и неделимый
+    текст обязан остаться неделимым (явный провал, не тихая порча)."""
+    assert split_text("однопредложениебезточкиибезграниц", limit=16,
+                      hard_cut=False) == ["однопредложениебезточкиибезграниц"]
+
+
+def test_windows_still_hard_cut_when_there_is_no_other_boundary():
+    """У окон жёсткая резка остаётся: спаны покрывают источник целиком,
+    и уровень 5 существует именно ради текста без единой границы."""
+    assert len(split_text("А" * 500, limit=250)) == 2
