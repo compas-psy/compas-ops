@@ -297,12 +297,27 @@ def probe_weak_person_identities(graph: Session, models, *,
         .group_by(models.identity.id, models.identity.normalized_key)).all()
 
     one_token = [count for key, count in rows if len(_tokens(key or "")) < 2]
+
+    def total(model) -> int:
+        return graph.scalar(
+            select(func.count()).select_from(model)
+            .where(model.knowledge_user_id == tenant_id)) or 0
+
     return {"person_identities": len(rows),
             "one_token": len(one_token),
             "one_token_with_members": sum(1 for c in one_token if c > 0),
             # То самое число из распоряжения: однословная подпись, под
             # которую уже сведено больше одного узла.
-            "one_token_with_members_gt1": sum(1 for c in one_token if c > 1)}
+            "one_token_with_members_gt1": sum(1 for c in one_token if c > 1),
+            # Итоги трёх таблиц. Нужны, чтобы «кандидаты сохраняются»
+            # было измерением, а не рассуждением о том, что проход
+            # только вставляет: до и после прохода эти числа сверяются.
+            # `person_zero_members` — вход в R7: личность-человек без
+            # состава в ответах не участвует.
+            "identities_total": total(models.identity),
+            "members_total": total(models.member),
+            "candidates_total": total(models.candidate),
+            "person_zero_members": sum(1 for _, c in rows if c == 0)}
 
 
 def probe_all(session: Session, *, knowledge_user_id: uuid.UUID | None = None
