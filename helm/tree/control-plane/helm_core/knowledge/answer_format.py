@@ -112,8 +112,9 @@ def _nothing_found(answer: DoctorsAnswer) -> str:
             f"за {answer.year} год.")
     if answer.undated_doctors:
         count = answer.undated_doctors
+        whom = "которого" if count % 10 == 1 and count % 100 != 11 else "которых"
         text += (f"\nВ данных есть {count} {_plural_doctors(count)}, "
-                 "дату приёма у которых подтвердить не удалось.")
+                 f"дату приёма у {whom} подтвердить не удалось.")
     return text
 
 

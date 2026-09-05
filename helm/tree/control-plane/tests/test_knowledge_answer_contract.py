@@ -307,6 +307,19 @@ def test_year_without_proof_does_not_hide_that_doctors_exist():
     assert "Иванов" not in text
 
 
+@pytest.mark.parametrize("count,whom", [
+    (1, "у которого"), (2, "у которых"), (5, "у которых"),
+    (11, "у которых"), (21, "у которого"),
+])
+def test_undated_line_agrees_with_the_count(count, whom):
+    """«1 врач, дату приёма у которых» — сломанное согласование, найдено
+    владельцем в живом ответе прогона 301."""
+    answer = _answer()
+    answer.year = 2026
+    answer.undated_doctors = count
+    assert whom in format_doctors(answer)
+
+
 def test_year_answer_mentions_undated_doctors_alongside_the_list():
     answer = _answer(_doctor("Иванов И. И.", ["гастроэнтеролог"], ["2026-03-12"]))
     answer.year = 2026
