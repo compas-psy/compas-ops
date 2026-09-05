@@ -111,7 +111,9 @@ def _nothing_found(answer: DoctorsAnswer) -> str:
     text = ("Не нашёл в ваших данных подтверждённых посещений врачей "
             f"за {answer.year} год.")
     if answer.undated_doctors:
-        text += ("\nВрачи в ваших данных есть, но даты приёмов не подтверждены.")
+        count = answer.undated_doctors
+        text += (f"\nВ данных есть {count} {_plural_doctors(count)}, "
+                 "дату приёма у которых подтвердить не удалось.")
     return text
 
 

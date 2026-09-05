@@ -302,7 +302,7 @@ def test_year_without_proof_does_not_hide_that_doctors_exist():
     answer.undated_doctors = 3
     text = format_doctors(answer)
     assert text.splitlines()[0].endswith("за 2014 год.")
-    assert "даты приёмов не подтверждены" in text
+    assert "В данных есть 3 врача, дату приёма у которых подтвердить не удалось." in text
     # Ни одного имени: врачей не называем, раз к году их отнести нечем.
     assert "Иванов" not in text
 
