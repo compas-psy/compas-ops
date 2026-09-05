@@ -30,6 +30,7 @@ echo "выкачено: $(sudo cat /opt/helm/DEPLOYED_SHA 2>/dev/null || echo un
 sudo docker compose exec -T helm-core python3 - <<'PYEOF'
 """Извлечение на датонасыщенных окнах: четыре числа и примеры."""
 import re
+import time
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -88,12 +89,23 @@ with sessionmaker(engine, expire_on_commit=False)() as session:
     rejected_other = 0
     examples = []
 
-    for filename, window in picked:
+    for number, (filename, window) in enumerate(picked, start=1):
+        # Печать ПО ХОДУ, а не в конце. Первая редакция молчала до
+        # последнего окна: прогон, идущий второй час, выглядел из лога
+        # неотличимо от зависшего, и оборвать его означало потерять всё
+        # уже посчитанное. Числа всё равно сводятся в конце.
+        started = time.monotonic()
+        print(f"  окно {number}/{len(picked)} ({len(window.text)} символов, "
+              f"{filename}) — считаю…", flush=True)
         try:
             result = extract_nodes_window(window.text, domain="health")
         except Exception as exc:  # noqa: BLE001 — печатаем и идём дальше
-            print(f"  окно из {filename}: извлечение упало — {type(exc).__name__}: {exc}")
+            print(f"    извлечение упало за {time.monotonic() - started:.0f}с — "
+                  f"{type(exc).__name__}: {exc}", flush=True)
             continue
+        with_date = sum(1 for atom in result.atoms if atom.occurred_at)
+        print(f"    {time.monotonic() - started:.0f}с, атомов {len(result.atoms)}, "
+              f"из них с датой {with_date}, отклонено {len(result.rejected)}", flush=True)
         atoms_total += len(result.atoms)
         for atom in result.atoms:
             if atom.occurred_at:
