@@ -21,7 +21,8 @@ import uuid
 import pytest
 
 from helm_core.knowledge import probe as probe_mod
-from helm_core.knowledge.answer_format import NOT_FOUND, format_doctors, format_nearest_quote
+from helm_core.knowledge.answer_format import (
+    NOT_FOUND, format_doctors, format_nearest_quote, is_quotable)
 from helm_core.knowledge.query_router import (
     AnswerPath, DoctorItem, DoctorsAnswer, Proof, QuestionIntent,
 )
@@ -327,3 +328,34 @@ def test_year_answer_mentions_undated_doctors_alongside_the_list():
     text = format_doctors(answer)
     assert text.splitlines()[0] == "Гастроэнтеролог."
     assert "Ещё 2 врача без подтверждённой даты приёма" in text
+
+
+# ── Годность фрагмента на роль цитаты ────────────────────────────────
+# Оба «не годится» ниже — дословные фрагменты из живых ответов бота,
+# которые владелец 05.09.2026 назвал бредовыми, и оба ПРОХОДИЛИ прежний
+# порог длины в 20 символов. Тест держит именно их, а не выдуманные
+# примеры: регресс здесь означает возврат тех самых двух ответов.
+
+@pytest.mark.parametrize("fragment", [
+    "Врач: Безручко Дарья Юрьевна ______",   # незаполненное поле бланка
+    "ОСМОТР ГАСТРОЭНТЕРОЛОГА",               # шапка документа, 24 символа
+    "ОСМОТР ЭНДОКРИНОЛОГА",                  # ровно 20 символов — граница
+    "Дата: 24.08.2026 09:58",                # голая дата
+    "Калачева Ольга Сергеевна",              # подпись
+    "Код услуги F56.05.03.1.009",
+    "эхогенность: обычная;",
+])
+def test_fragment_that_is_not_a_statement_is_not_quotable(fragment):
+    assert is_quotable(fragment) is False
+
+
+@pytest.mark.parametrize("fragment", [
+    "Врач уролог: Волков Алексей Романович",
+    "Жалобы на боли в эпигастрии, изжогу после еды.",
+    "6,0 -6,5% - пограничное значение",
+])
+def test_statement_stays_quotable(fragment):
+    """Фильтр обязан резать шапки, а не всё короткое подряд: ФИО с
+    указанием специальности — ровно тот случай, ради которого
+    доказательная ветка вообще существует."""
+    assert is_quotable(fragment) is True

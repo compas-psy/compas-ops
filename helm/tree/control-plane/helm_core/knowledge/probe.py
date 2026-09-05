@@ -39,7 +39,7 @@ from typing import Literal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .answer_format import format_doctors, format_nearest_quote
+from .answer_format import format_doctors, format_nearest_quote, is_quotable
 from .embeddings import embed_texts_or_none
 from .health_schema import health_schema_configured, health_session
 from .query_router import QuestionIntent, answer_doctors_visited, detect_intent
@@ -407,8 +407,20 @@ def probe(session: Session, *, query: str, domain: str | None = None,
                 )
             evidence = (evidence + vector_hits)[:MAX_EVIDENCE]
 
+    # Живой чат владельца 05.09.2026: на «что там прописал врач?» пришло
+    # «Врач: <ФИО> ______», до этого — «ОСМОТР ГАСТРОЭНТЕРОЛОГА». Оба
+    # прошли порог длины и оба не ответ, а шапка документа и пустая
+    # строка бланка. Отбраковка стоит ПОСЛЕ обоих путей поиска
+    # намеренно: замер 307 показал, что лексика по этому вопросу не
+    # нашла вообще ничего (plainto_tsquery требует И всех основ), то
+    # есть виноват был не ts_rank — фрагмент подняла векторная ветка,
+    # которой «Врач: ...» близко к «что прописал врач» по одному слову.
+    # Фильтровать надо результат, а не одну из веток.
+    evidence = [e for e in evidence if is_quotable(e.chunk_text)]
+
     # §14.13 quality gate: без evidence выше порога — сразу эскалация, а
-    # не «уверенный бесплатный ответ ради экономии».
+    # не «уверенный бесплатный ответ ради экономии». Отфильтрованное в
+    # ноль означает ровно это же: доказанного ответа в данных нет.
     if not evidence:
         return ProbeResult(outcome="NEEDS_REASONING")
 
