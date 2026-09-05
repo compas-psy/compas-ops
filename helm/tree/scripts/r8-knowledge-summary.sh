@@ -18,10 +18,19 @@
 # который отвечает живому пользователю: иначе отчёт мерил бы одно, а
 # владелец видел бы другое.
 #
-# ИМЕНА И ФАЙЛЫ В ЖУРНАЛ НЕ ПОПАДАЮТ. Примеры печатаются с подписью
-# «Врач A/B/C…» и коротким идентификатором источника; полный вид — с ФИО,
-# цитатами и именами файлов — остаётся в файле 0600 на сервере, в том же
-# периметре, где лежат сами документы (§5.2 CLAUDE.md).
+# ФИО И ИМЕНА ФАЙЛОВ ПЕЧАТАЮТСЯ В ЖУРНАЛ — прямое решение владельца от
+# 05.09.2026: «имена и файлы печатай прямо в отчёт, это мои данные».
+# Данные принадлежат ему, и он распорядился ими явно; сужать это
+# решение за него агент не вправе. В журнал по-прежнему НЕ уходят
+# цитаты из документов — их в примерах нет по построению, только
+# подпись, специальность, дата и имя файла. Полный вид с цитатами
+# остаётся в файле 0600 на сервере.
+#
+# Имя файла health-источника лежит не в public.knowledge_sources, а в
+# health.knowledge_source_private: это единственное реально
+# чувствительное поле health-конверта, и оно вынесено в приватную схему
+# ещё в R1. Без объединения обеих таблиц у health-примеров источник был
+# бы пустым.
 set -uo pipefail
 cd /opt/helm/compose || exit 1
 
@@ -82,31 +91,58 @@ print("отброшено:", json.dumps(data.get("skipped", {}), ensure_ascii=Fa
 PYEOF
 rm -f "$SUM"
 
-# Полный ответ на хост, 0600, и в лог не печатается ни разу.
-sudo docker compose exec -T helm-core cat /tmp/r8-summary.json | sudo tee "$OUT" > /dev/null
-sudo chmod 600 "$OUT"
+# Полный ответ (с цитатами) — на хост, 0600. Копия в temp нужна затем,
+# что разбор ниже читает её обычным пользователем, а не через sudo.
+ANS=$(mktemp)
+sudo docker compose exec -T helm-core cat /tmp/r8-summary.json | tee "$ANS" > /dev/null
+sudo install -m 0600 -o helm -g helm "$ANS" "$OUT"
 sudo docker compose exec -T helm-core rm -f /tmp/r8-summary.json
 
-echo "############ ПРИМЕРЫ ИЗВЛЕЧЁННОГО (обезличенно) ############"
-echo "врач → специальность → дата → источник; ФИО и имена файлов — только в $OUT"
-sudo cat "$OUT" | python3 -c '
+echo "############ ПРИМЕРЫ ИЗВЛЕЧЁННОГО ############"
+echo "врач → специальность → дата → источник"
+NAMES=$(mktemp)
+psql "select id::text||E'\t'||coalesce(original_filename,'(без имени)')
+      from public.knowledge_sources
+      union all
+      select source_id::text||E'\t'||coalesce(original_filename,'(без имени)')
+      from health.knowledge_source_private" > "$NAMES"
+python3 - "$ANS" "$NAMES" <<'PYEOF'
 import json
 import sys
 
-data = json.load(sys.stdin)
+files = {}
+with open(sys.argv[2], encoding="utf-8") as fh:
+    for row in fh:
+        if "\t" in row:
+            key, _, value = row.strip().partition("\t")
+            # health-имя перекрывает пустой конверт из public: приватная
+            # строка и есть настоящее имя файла.
+            if value and value != "(без имени)" or key not in files:
+                files[key] = value
+
+def proofs_word(count):
+    tail_two, tail_one = count % 100, count % 10
+    if 11 <= tail_two <= 14 or tail_one == 0 or tail_one >= 5:
+        return "доказательств"
+    return "доказательство" if tail_one == 1 else "доказательства"
+
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    data = json.load(fh)
 items = data.get("items", [])
 if not items:
     print("  примеров нет: ни одного доказанного врача")
-for i, item in enumerate(items[:5]):
-    label = "Врач " + chr(ord("A") + i)
+for item in items[:5]:
     spec = ", ".join(item.get("specialties") or []) or "специальность не подтверждена"
     dates = ", ".join(item.get("dates") or []) or "дата не подтверждена"
     proofs = item.get("proofs") or []
-    src = proofs[0].get("source_id", "?")[:8] if proofs else "?"
-    print(f"  {label} → {spec} → {dates} → источник #{src} ({len(proofs)} док-ва)")
+    src = files.get(proofs[0].get("source_id", ""), "источник не найден") if proofs else "-"
+    print(f"  {item.get('person')} → {spec} → {dates} → {src} "
+          f"({len(proofs)} {proofs_word(len(proofs))})")
 if len(items) > 5:
     print(f"  … и ещё {len(items) - 5}")
-'
+PYEOF
+shred -u "$ANS" "$NAMES" 2>/dev/null || rm -f "$ANS" "$NAMES"
 
 echo "############ ФАЙЛ С ПОЛНЫМ ВИДОМ ############"
 sudo stat -c '  %n | права %a | %U:%G | %s байт' "$OUT"
