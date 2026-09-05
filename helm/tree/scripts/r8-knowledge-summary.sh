@@ -57,6 +57,27 @@ echo "по статусу разбора (статус | прогонов):"
 psql "select status||' | '||count(*)::text from knowledge_semantic_runs
       group by status order by status"
 
+echo "############ 1b. ДОЛГ ПОКРЫТИЯ ############"
+# Обещано владельцу 05.09.2026: источники, прочитанные не целиком,
+# называются числом, а не умалчиваются. В порции 303 один источник
+# закрылся degraded с покрытием 0.708 — «обработано» и «прочитано
+# полностью» это разные вещи, и §14.19 требует их различать.
+echo "текущие ревизии (статус | источников | окон | из них упало | среднее покрытие):"
+psql "select r.status||' | '||count(*)::text||' | '||sum(r.windows_total)::text||' | '||
+             sum(r.windows_failed)::text||' | '||coalesce(round(avg(r.coverage_ratio),3),0)::text
+      from knowledge_semantic_runs r
+      join knowledge_sources s on s.current_semantic_run_id = r.id
+      group by r.status order by count(*) desc"
+echo "прочитанные не целиком (файл | покрытие | окон упало из скольких):"
+psql "select coalesce(hp.original_filename, s.original_filename, '(без имени)')||' | '||
+             coalesce(r.coverage_ratio,0)::text||' | '||
+             r.windows_failed::text||' из '||r.windows_total::text
+      from knowledge_semantic_runs r
+      join knowledge_sources s on s.current_semantic_run_id = r.id
+      left join health.knowledge_source_private hp on hp.source_id = s.id
+      where coalesce(r.coverage_ratio,1) < 1 or r.windows_failed > 0
+      order by r.coverage_ratio limit 10"
+
 echo "############ 4. ДАТЫ СОБЫТИЙ ############"
 echo "health: событий | из них с датой:"
 psql "select count(*)||' | '||count(occurred_at_start)
