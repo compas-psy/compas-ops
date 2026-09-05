@@ -85,6 +85,10 @@ _HYPHENATED_SPECIALTY_RE = re.compile(r"врач[а-яё]*-([а-яё]+)", re.IGN
 
 _PERSON_TYPES = ("PERSON", "person")
 
+#: Сколько символов перед спаном читать в диагностике. Три токена
+#: русского текста с запасом: «врача-нефролога» это 15 символов.
+_MARKER_LOOKBEHIND_CHARS = 60
+
 
 @dataclass
 class Proof:
@@ -205,6 +209,21 @@ def doctor_proof(span_text: str, label: str) -> tuple[bool, str | None]:
     return True, None
 
 
+def marker_precedes_span(text: str, char_start: int) -> bool:
+    """Стоит ли врачебный маркер в тексте ИСТОЧНИКА прямо перед спаном.
+
+    Только диагностика. Извлекатель отдаёт цитату сам, и она может
+    начаться ровно с фамилии, отрезав «врач-уролог» на предыдущем
+    символе; тогда доказательство есть в документе, но не в цитате. Это
+    число отвечает на вопрос «почему ноль», и в ответ ничего не
+    добавляет: расширять правило доказательства без решения владельца
+    нельзя.
+    """
+    before = text[max(0, char_start - _MARKER_LOOKBEHIND_CHARS):char_start]
+    tail = _tokens(before)[-_ROLE_PROXIMITY_TOKENS:]
+    return any(_DOCTOR_MARKER_RE.fullmatch(t) for t in tail)
+
+
 def _graph_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUID],
                    answer: DoctorsAnswer) -> list[DoctorItem]:
     """Путь по графу: только уже доказанные рёбра, ничего не выводя.
@@ -288,6 +307,13 @@ def _evidence_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.
             is_doctor, specialty = doctor_proof(span, node.canonical_label)
             if not is_doctor:
                 answer.skip("в цитате нет врачебного маркера")
+                # Замер, а не смягчение правила: ответ этот случай не
+                # получает. Нужен, чтобы «ноль врачей» имело причину, а
+                # не осталось числом. R5 стоил лишнего цикла ровно
+                # потому, что прогон сказал «0» и не сказал почему.
+                if marker_precedes_span(text, mention.char_start):
+                    answer.skip("маркер не в цитате, но стоит перед спаном "
+                                "в тексте источника")
                 continue
             item = by_identity.get(str(identity.id))
             if item is None:

@@ -285,3 +285,32 @@ def test_в_публичной_сводке_нет_ни_имён_ни_цитат
     assert "Иванов" not in public
     assert "уролог" not in public
     assert json.loads(public)["items_with_specialty"] == 1
+
+
+# --- диагностика «почему ноль» --------------------------------------------
+
+def test_маркер_перед_спаном_считается_но_в_ответ_не_попадает():
+    # Цитата извлекателя началась с фамилии, «врач-уролог» остался за
+    # её левой границей. Ответ этот случай не получает — правило
+    # доказательства не смягчается, — но причина нуля названа числом.
+    text = "Приём вёл врач-уролог Иванов Пётр Сергеевич."
+    start = text.index("Иванов")
+    node = _Node("Иванов Пётр Сергеевич")
+    session = _FakeSession(pairs=[(_Identity("Иванов Пётр Сергеевич"), node)],
+                           mentions=[_Mention(node.id, start, len(text) - 1)])
+    items, answer = _evidence(session, text)
+    assert items == []
+    assert answer.skipped["в цитате нет врачебного маркера"] == 1
+    assert answer.skipped["маркер не в цитате, но стоит перед спаном "
+                          "в тексте источника"] == 1
+
+
+def test_без_маркера_нигде_диагностика_молчит():
+    text = "Пациента сопровождал Иванов Пётр Сергеевич."
+    node = _Node("Иванов Пётр Сергеевич")
+    session = _FakeSession(pairs=[(_Identity("Иванов Пётр Сергеевич"), node)],
+                           mentions=[_Mention(node.id, 21, len(text))])
+    items, answer = _evidence(session, text)
+    assert items == []
+    assert "маркер не в цитате, но стоит перед спаном в тексте источника" \
+        not in answer.skipped
