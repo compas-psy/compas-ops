@@ -28,6 +28,11 @@
 # врача и не длиннее 300 символов: отчёт должен читаться, а не быть
 # выгрузкой. Файл 0600 по-прежнему пишется и содержит всё целиком.
 #
+# Обе границы урезания названы вслух, иначе отчёт врёт умолчанием:
+# «показаны 3 из N доказательств», а у обрезанной цитаты диапазон
+# помечен «полный спан», потому что char_start/char_end описывают
+# исходный спан целиком, а не те 300 символов, что видны в отчёте.
+#
 # Имя файла health-источника лежит не в public.knowledge_sources, а в
 # health.knowledge_source_private: это единственное реально
 # чувствительное поле health-конверта, и оно вынесено в приватную схему
@@ -139,17 +144,25 @@ for item in items[:5]:
     dates = ", ".join(item.get("dates") or []) or "дата не подтверждена"
     proofs = item.get("proofs") or []
     src = files.get(proofs[0].get("source_id", ""), "источник не найден") if proofs else "-"
+    shown = min(len(proofs), 3)
+    tail = f", показаны {shown} из {len(proofs)}" if len(proofs) > 3 else ""
     print(f"  {item.get('person')} → {spec} → {dates} → {src} "
-          f"({len(proofs)} {proofs_word(len(proofs))})")
+          f"({len(proofs)} {proofs_word(len(proofs))}{tail})")
     for proof in proofs[:3]:
         quote = (proof.get("quote") or "").strip()
         if quote:
-            if len(quote) > 300:
+            # Границы спана относятся к ПОЛНОЙ цитате. Если её обрезали,
+            # печатать их как «символы X–Y» значило бы выдать границы
+            # обрезка за границы показанного — поэтому у обрезанной
+            # цитаты они прямо названы полным спаном.
+            cut = len(quote) > 300
+            if cut:
                 quote = quote[:300] + "…"
             where = files.get(proof.get("source_id", ""), "источник не найден")
             span = ""
             if proof.get("char_start") is not None:
-                span = f", символы {proof['char_start']}–{proof['char_end']}"
+                label = "полный спан: символы" if cut else "символы"
+                span = f", {label} {proof['char_start']}–{proof['char_end']}"
             print(f"      «{quote}» — {where}{span}")
         elif proof.get("edge_id"):
             # Путь графа: доказательство — само ребро, точных границ у
