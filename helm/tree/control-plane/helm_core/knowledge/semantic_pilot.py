@@ -26,10 +26,11 @@ from pathlib import Path
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from .semantic_publish import publish_semantic_run
+from .health_schema import health_schema_configured, health_session, is_health_domain
+from .semantic_publish import HEALTH_MODELS, PUBLIC_MODELS, publish_semantic_run
 from .tenancy import bind_knowledge_user
 from ..config import get_settings
-from ..models import KnowledgeNodeMention, KnowledgeSource, KnowledgeStatus
+from ..models import KnowledgeSemanticRun, KnowledgeSource, KnowledgeStatus
 
 #: Граница пилота из спеки. Не «сколько успеем»: больше — это уже R8
 #: (полный backfill), который требует отдельного решения и ревью.
@@ -44,18 +45,20 @@ class SourceOutcome:
 
     source_id: str
     domain: str
-    chars: int
     run_status: str
-    switched: bool
-    windows_total: int
-    windows_processed: int
-    windows_failed: int
-    coverage_ratio: float
-    nodes: int
-    edges: int
-    mentions_total: int
-    mentions_exact_span: int
-    mentions_without_span: int
+    #: `None`, а не 0: пересчёт уже опубликованного не открывает файлы
+    #: источников, и «не измеряли» — не то же самое, что «пусто».
+    chars: int | None = None
+    switched: bool = False
+    windows_total: int = 0
+    windows_processed: int = 0
+    windows_failed: int = 0
+    coverage_ratio: float = 0.0
+    nodes: int = 0
+    edges: int = 0
+    mentions_total: int = 0
+    mentions_exact_span: int = 0
+    mentions_without_span: int = 0
     error: str | None = None
 
 
@@ -137,26 +140,81 @@ def select_sources(session: Session, *, limit: int,
     return picked
 
 
-def _mention_stats(session: Session, run_id: uuid.UUID) -> tuple[int, int, int]:
-    """Сколько упоминаний прогона получили ТОЧНЫЙ диапазон (R5, §30.8.5 F).
+def _count(session: Session, model, run_id: uuid.UUID, *extra) -> int:
+    return session.scalar(select(func.count()).select_from(model)
+                          .where(model.semantic_run_id == run_id, *extra)) or 0
 
+
+def _counts(session: Session, models, run_id: uuid.UUID) -> dict[str, int]:
+    total = _count(session, models.mention, run_id)
+    exact = _count(session, models.mention, run_id, models.mention.char_start.is_not(None))
+    return {"nodes": _count(session, models.node, run_id),
+            "edges": _count(session, models.edge, run_id),
+            "mentions_total": total,
+            "mentions_exact_span": exact,
+            "mentions_without_span": total - exact}
+
+
+def run_counts(session: Session, run_id: uuid.UUID, *, domain: str,
+               knowledge_user_id: uuid.UUID) -> dict[str, int]:
+    """Что прогон реально положил в граф: узлы, рёбра и упоминания.
+
+    Отдельно считаются упоминания с ТОЧНЫМ диапазоном (R5.2, §30.8.5 F).
     Ненайденная цитата пишется как NULL, а не как границы окна, поэтому
-    доля точных считается обычным запросом — и именно она показывает,
-    выполняется ли требование «resolves to exact span» на живом материале,
-    а не только на фикстурах.
+    доля точных — обычный запрос, и именно она показывает, выполняется
+    ли «resolves to exact span» на живом материале, а не на фикстурах.
+
+    Считать надо в ТОЙ ЖЕ схеме, в которую писал `publish_semantic_run()`:
+    health-источник кладёт узлы, рёбра и упоминания в health-зеркало,
+    отдельным соединением и отдельной ролью (`semantic_publish._Models`).
+    Первый прогон пилота 04.09.2026 считал публичную таблицу и показал
+    `mentions_total = 0` там, где упоминания были, — «провенанса нет»
+    вместо «смотрю не туда».
     """
-    total = session.scalar(select(func.count()).select_from(KnowledgeNodeMention)
-                           .where(KnowledgeNodeMention.semantic_run_id == run_id)) or 0
-    exact = session.scalar(select(func.count()).select_from(KnowledgeNodeMention)
-                           .where(KnowledgeNodeMention.semantic_run_id == run_id,
-                                  KnowledgeNodeMention.char_start.is_not(None))) or 0
-    return total, exact, total - exact
+    if is_health_domain(domain) and health_schema_configured():
+        with health_session(knowledge_user_id) as graph:
+            return _counts(graph, HEALTH_MODELS, run_id)
+    return _counts(session, PUBLIC_MODELS, run_id)
+
+
+def inspect_published(session: Session, *, limit: int = DEFAULT_LIMIT,
+                      domains: tuple[str, ...] | None = None,
+                      knowledge_user_id: uuid.UUID | None = None) -> PilotReport:
+    """Пересчитать уже опубликованное, ничего не публикуя.
+
+    Нужен, когда вопрос не «сработает ли конвейер», а «что лежит в графе
+    прямо сейчас»: повторять пилот ради одних только чисел значило бы
+    заводить лишние ревизии источников и снова тратить час модели.
+
+    Смотрит на ТЕКУЩУЮ ревизию источника (`current_semantic_run_id`) —
+    ту, которую увидит запрос, а не последнюю попытку.
+    """
+    tenant_id = bind_knowledge_user(session, knowledge_user_id)
+    sources = select_sources(session, limit=limit, domains=domains)
+    report = PilotReport(limit=limit, selected=len(sources))
+
+    for source in sources:
+        run = (session.get(KnowledgeSemanticRun, source.current_semantic_run_id)
+               if source.current_semantic_run_id else None)
+        if run is None:
+            report.sources.append(SourceOutcome(
+                source_id=str(source.id), domain=source.domain,
+                run_status="нет текущей ревизии"))
+            continue
+        counts = run_counts(session, run.id, domain=source.domain,
+                            knowledge_user_id=tenant_id)
+        report.sources.append(SourceOutcome(
+            source_id=str(source.id), domain=source.domain, run_status=str(run.status),
+            windows_total=run.windows_total, windows_processed=run.windows_processed,
+            windows_failed=run.windows_failed,
+            coverage_ratio=float(run.coverage_ratio or 0), **counts))
+    return report
 
 
 def run_pilot(session: Session, *, limit: int = DEFAULT_LIMIT,
               domains: tuple[str, ...] | None = None,
               knowledge_user_id: uuid.UUID | None = None) -> PilotReport:
-    bind_knowledge_user(session, knowledge_user_id)
+    tenant_id = bind_knowledge_user(session, knowledge_user_id)
     sources = select_sources(session, limit=limit, domains=domains)
     report = PilotReport(limit=limit, selected=len(sources))
 
@@ -164,27 +222,21 @@ def run_pilot(session: Session, *, limit: int = DEFAULT_LIMIT,
         text = source_text(source)
         if not text:
             report.sources.append(SourceOutcome(
-                source_id=str(source.id), domain=source.domain, chars=0,
-                run_status="skipped", switched=False, windows_total=0,
-                windows_processed=0, windows_failed=0, coverage_ratio=0.0,
-                nodes=0, edges=0, mentions_total=0,
-                mentions_exact_span=0, mentions_without_span=0,
+                source_id=str(source.id), domain=source.domain, run_status="skipped",
                 error="нет разобранного текста в Vault"))
             continue
 
         result = publish_semantic_run(session, source=source, text=text)
         session.flush()
-        mentions, exact, missing = _mention_stats(session, result.run_id)
+        counts = run_counts(session, result.run_id, domain=source.domain,
+                            knowledge_user_id=tenant_id)
         report.sources.append(SourceOutcome(
             source_id=str(source.id), domain=source.domain, chars=len(text),
             run_status=str(result.status), switched=bool(result.switched),
             windows_total=result.windows_total,
             windows_processed=result.windows_processed,
             windows_failed=result.windows_failed,
-            coverage_ratio=result.coverage_ratio,
-            nodes=result.nodes_created, edges=result.edges_created,
-            mentions_total=mentions, mentions_exact_span=exact,
-            mentions_without_span=missing))
+            coverage_ratio=result.coverage_ratio, **counts))
     return report
 
 
@@ -194,6 +246,8 @@ def _cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--domains", default="",
                         help="через запятую; пусто — все домены")
     parser.add_argument("--out", default="", help="куда положить JSON-отчёт")
+    parser.add_argument("--inspect-only", action="store_true",
+                        help="не публиковать: пересчитать текущие ревизии тех же источников")
     args = parser.parse_args(argv)
 
     domains = tuple(d.strip() for d in args.domains.split(",") if d.strip()) or None
@@ -201,8 +255,11 @@ def _cli(argv: list[str] | None = None) -> int:
     # процесс, не отдельная конфигурация.
     engine = create_engine(get_settings().database_url, pool_pre_ping=True)
     with sessionmaker(engine, expire_on_commit=False)() as session:
-        report = run_pilot(session, limit=args.limit, domains=domains)
-        session.commit()
+        if args.inspect_only:
+            report = inspect_published(session, limit=args.limit, domains=domains)
+        else:
+            report = run_pilot(session, limit=args.limit, domains=domains)
+            session.commit()
 
     payload = json.dumps(report.as_dict(), ensure_ascii=False, indent=2)
     print(payload)

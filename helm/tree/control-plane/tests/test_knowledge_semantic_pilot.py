@@ -7,9 +7,14 @@
 
 from __future__ import annotations
 
+import contextlib
+import uuid
 from dataclasses import fields
 
 from helm_core.knowledge import semantic_pilot
+
+_RUN_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
+_USER_ID = uuid.UUID("00000000-0000-0000-0000-0000000000bb")
 
 
 class _FakeSource:
@@ -125,3 +130,62 @@ class TestPilotStaysWithinTheSpecifiedScale:
         """Спека R5: «5–10 real sources». Больше — это уже R8 (полный
         backfill), который требует отдельного решения."""
         assert 5 <= semantic_pilot.DEFAULT_LIMIT <= 10
+
+
+class TestCountsUseTheSchemaThatWasWrittenTo:
+    """Считать надо там, куда писал `publish_semantic_run()`.
+
+    Первый прогон пилота 04.09.2026 считал публичную таблицу для
+    health-источника и отчитался `mentions_total = 0` там, где упоминания
+    были: «провенанса нет» вместо «смотрю не туда». Проверяется сам
+    выбор схемы — он должен совпадать с выбором публикации
+    (`is_health_domain(...) and health_schema_configured()`), а не быть
+    похожим на него.
+    """
+
+    ZEROS = {"nodes": 0, "edges": 0, "mentions_total": 0,
+             "mentions_exact_span": 0, "mentions_without_span": 0}
+
+    def _spy(self, monkeypatch):
+        seen = {}
+
+        def fake_counts(session, models, run_id):
+            seen["session"], seen["models"] = session, models
+            return dict(self.ZEROS)
+
+        monkeypatch.setattr(semantic_pilot, "_counts", fake_counts)
+        return seen
+
+    def _mirror(self, monkeypatch, *, configured, graph=None):
+        monkeypatch.setattr(semantic_pilot, "health_schema_configured", lambda: configured)
+        monkeypatch.setattr(semantic_pilot, "health_session",
+                            lambda _uid: contextlib.nullcontext(graph))
+
+    def test_health_source_is_counted_in_the_health_mirror(self, monkeypatch):
+        seen = self._spy(monkeypatch)
+        graph, public = object(), object()
+        self._mirror(monkeypatch, configured=True, graph=graph)
+        semantic_pilot.run_counts(public, _RUN_ID, domain="health",
+                                  knowledge_user_id=_USER_ID)
+        assert seen["models"] is semantic_pilot.HEALTH_MODELS
+        assert seen["session"] is graph
+
+    def test_public_source_stays_in_the_public_session(self, monkeypatch):
+        seen = self._spy(monkeypatch)
+        public = object()
+        self._mirror(monkeypatch, configured=True, graph=object())
+        semantic_pilot.run_counts(public, _RUN_ID, domain="work",
+                                  knowledge_user_id=_USER_ID)
+        assert seen["models"] is semantic_pilot.PUBLIC_MODELS
+        assert seen["session"] is public
+
+    def test_without_the_mirror_health_is_counted_where_it_was_written(self, monkeypatch):
+        """Зеркало не настроено — публикация пишет в public, значит и
+        считать надо там же."""
+        seen = self._spy(monkeypatch)
+        public = object()
+        self._mirror(monkeypatch, configured=False)
+        semantic_pilot.run_counts(public, _RUN_ID, domain="health",
+                                  knowledge_user_id=_USER_ID)
+        assert seen["models"] is semantic_pilot.PUBLIC_MODELS
+        assert seen["session"] is public
