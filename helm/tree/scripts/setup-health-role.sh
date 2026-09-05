@@ -321,6 +321,58 @@ CREATE INDEX IF NOT EXISTS ix_health_knowledge_semantic_windows_run_status
 CREATE INDEX IF NOT EXISTS ix_health_knowledge_semantic_windows_source
   ON health.knowledge_semantic_windows (source_id);
 
+-- R6, канонические личности. Зеркалятся целиком: подпись врача,
+-- известная из выписки, сама по себе медицинская информация — держать
+-- её в public «ради удобства запроса» значило бы вынести из health
+-- ровно то, ради чего health заведена.
+--
+-- Ограничения выписаны прямо в CREATE TABLE, а не отдельным блоком
+-- ниже: таблицы новые, прошлым прогоном не созданы, поэтому `CREATE
+-- TABLE IF NOT EXISTS` их действительно создаёт вместе с проверками.
+CREATE TABLE IF NOT EXISTS health.knowledge_entity_identities (
+  id uuid PRIMARY KEY,
+  knowledge_user_id uuid NOT NULL,
+  entity_type varchar(64) NOT NULL,
+  canonical_label text NOT NULL,
+  normalized_key text NOT NULL,
+  created_at timestamptz NOT NULL,
+  CONSTRAINT uq_health_knowledge_entity_identities_key
+    UNIQUE (knowledge_user_id, entity_type, normalized_key)
+);
+
+CREATE TABLE IF NOT EXISTS health.knowledge_entity_identity_members (
+  id uuid PRIMARY KEY,
+  knowledge_user_id uuid NOT NULL,
+  identity_id uuid NOT NULL REFERENCES health.knowledge_entity_identities(id),
+  node_id uuid NOT NULL REFERENCES health.knowledge_nodes(id),
+  matched_on varchar(32) NOT NULL,
+  created_at timestamptz NOT NULL,
+  CONSTRAINT uq_health_knowledge_entity_identity_members_node
+    UNIQUE (knowledge_user_id, node_id),
+  CONSTRAINT ck_knowledge_entity_identity_members_matched_on
+    CHECK (matched_on IN ('normalized_label', 'alias'))
+);
+CREATE INDEX IF NOT EXISTS ix_health_knowledge_entity_identity_members_identity
+  ON health.knowledge_entity_identity_members (identity_id);
+
+CREATE TABLE IF NOT EXISTS health.knowledge_entity_resolution_candidates (
+  id uuid PRIMARY KEY,
+  knowledge_user_id uuid NOT NULL,
+  node_id uuid NOT NULL REFERENCES health.knowledge_nodes(id),
+  identity_id uuid NOT NULL REFERENCES health.knowledge_entity_identities(id),
+  reason varchar(32) NOT NULL,
+  status varchar(16) NOT NULL DEFAULT 'open',
+  created_at timestamptz NOT NULL,
+  CONSTRAINT uq_health_knowledge_entity_resolution_candidates_pair
+    UNIQUE (knowledge_user_id, node_id, identity_id, reason),
+  CONSTRAINT ck_knowledge_entity_resolution_candidates_reason
+    CHECK (reason IN ('surname_only', 'type_conflict')),
+  CONSTRAINT ck_knowledge_entity_resolution_candidates_status
+    CHECK (status IN ('open', 'accepted', 'rejected'))
+);
+CREATE INDEX IF NOT EXISTS ix_health_knowledge_entity_resolution_candidates_open
+  ON health.knowledge_entity_resolution_candidates (knowledge_user_id, status);
+
 -- Закрытые реестры и цикл ревизии — те же, что в public (R2-hardening,
 -- §14.5/§14.9). Отдельным блоком, а не в CREATE TABLE выше: таблицы уже
 -- созданы прошлым прогоном без ограничений, а `CREATE TABLE IF NOT
@@ -389,7 +441,9 @@ SQL
 echo "== RLS на health.* (тот же предикат, что ADR-030) =="
 for table in knowledge_source_private knowledge_chunks knowledge_relations \
              knowledge_notes knowledge_nodes knowledge_node_mentions \
-             knowledge_edges knowledge_entity_aliases knowledge_semantic_windows; do
+             knowledge_edges knowledge_entity_aliases knowledge_semantic_windows \
+             knowledge_entity_identities knowledge_entity_identity_members \
+             knowledge_entity_resolution_candidates; do
   sudo docker exec -i helm-postgres-1 psql -U helm -d helm -v ON_ERROR_STOP=1 <<SQL
 ALTER TABLE health.$table ENABLE ROW LEVEL SECURITY;
 ALTER TABLE health.$table FORCE ROW LEVEL SECURITY;
@@ -418,7 +472,9 @@ sudo docker exec -i helm-postgres-1 psql -U helm -d helm -tAc \
   "select has_schema_privilege('helm_app', 'health', 'USAGE')"
 for table in knowledge_source_private knowledge_chunks knowledge_relations \
              knowledge_notes knowledge_nodes knowledge_node_mentions \
-             knowledge_edges knowledge_entity_aliases knowledge_semantic_windows; do
+             knowledge_edges knowledge_entity_aliases knowledge_semantic_windows \
+             knowledge_entity_identities knowledge_entity_identity_members \
+             knowledge_entity_resolution_candidates; do
   granted=$(sudo docker exec -i helm-postgres-1 psql -U helm -d helm -tAc \
     "select has_table_privilege('helm_app', 'health.$table', 'SELECT')")
   echo "  health.$table: $granted"

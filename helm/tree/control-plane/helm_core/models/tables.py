@@ -28,7 +28,8 @@ from sqlalchemy.dialects.postgresql import TSVECTOR
 from pgvector.sqlalchemy import Vector
 
 from .base import (
-    ApprovalStatus, Base, KnowledgeBatchItemStatus, KnowledgeBatchStatus, KnowledgeIngestStatus,
+    ApprovalStatus, Base, EntityIdentityMatch, EntityResolutionReason,
+    EntityResolutionStatus, KnowledgeBatchItemStatus, KnowledgeBatchStatus, KnowledgeIngestStatus,
     KnowledgeMemoryStatus, KnowledgeStatus, KnowledgeUserStatus, NODE_KINDS_WITHOUT_RUN,
     SemanticDatePrecision, SemanticEvidenceType, SemanticNodeKind, SemanticNodeStatus,
     SemanticRelationType, SemanticRunStatus, SemanticWindowStatus, TaskStatus,
@@ -1190,6 +1191,113 @@ class KnowledgeEntityAlias(Base):
                          name="uq_knowledge_entity_aliases_node_alias"),
         Index("ix_knowledge_entity_aliases_lookup",
               "knowledge_user_id", "normalized_alias"),
+    )
+
+
+class KnowledgeEntityIdentity(Base):
+    """R6 — каноническая личность: то, чем «Гаврилова» из трёх выписок
+    является один раз.
+
+    Отдельная таблица, а не колонка в `knowledge_nodes`, по двум
+    причинам. Первая — распоряжение владельца 05.09.2026: «исходные
+    nodes/mentions/provenance не мутировать». Узлы прогона остаются ровно
+    такими, какими их записал разбор, и разрешение сущностей полностью
+    обратимо: удаление строк отсюда возвращает граф в прежнее состояние,
+    ничего не восстанавливая. Вторая — §14.6: узел прогона привязан к
+    источнику и ревизии, а личность живёт над ними и переживает
+    пересборку.
+
+    Здесь нет ни текста, ни утверждений — только имя и тип. Складывать
+    сюда прозу означало бы вернуть растущую заметку semantic-v1, ради
+    ухода от которой и затевался semantic-v2.
+    """
+
+    __tablename__ = "knowledge_entity_identities"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_users.id"), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    canonical_label: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_key: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (
+        # Ключ личности — пара «тип + нормализованная подпись» в пределах
+        # тенанта. Тип входит в ключ намеренно: «Сеченов»-человек и
+        # «Сеченов»-организация — разные личности, и совпадение написания
+        # не должно их соединять (§14.7).
+        UniqueConstraint("knowledge_user_id", "entity_type", "normalized_key",
+                         name="uq_knowledge_entity_identities_key"),
+    )
+
+
+class KnowledgeEntityIdentityMember(Base):
+    """R6 — какой узел прогона отнесён к какой личности и чем это доказано.
+
+    Связь вынесена в отдельную таблицу, а не записана в узел, по той же
+    причине: узел не мутируется. `matched_on` хранит доказательство, а не
+    оценку уверенности — числу «0.87» в этом месте нельзя было бы
+    задать вопрос «на каком основании».
+    """
+
+    __tablename__ = "knowledge_entity_identity_members"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_users.id"), nullable=False)
+    identity_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_entity_identities.id"), nullable=False)
+    node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_nodes.id"), nullable=False)
+    matched_on: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (
+        # Узел принадлежит ровно одной личности. Без этого повторный
+        # проход тихо удваивал бы состав, а «сколько документов про этого
+        # врача» стало бы неверным числом.
+        UniqueConstraint("knowledge_user_id", "node_id",
+                         name="uq_knowledge_entity_identity_members_node"),
+        CheckConstraint(f"matched_on IN ({sql_enum_values(EntityIdentityMatch)})",
+                        name="matched_on"),
+        Index("ix_knowledge_entity_identity_members_identity", "identity_id"),
+    )
+
+
+class KnowledgeEntityResolutionCandidate(Base):
+    """R6 — пара «узел ↔ личность», похожая, но не доказанная (§14.7).
+
+    Существует, чтобы «не слили» не означало «потеряли». Фамилия без
+    имени, совпадение написания при разных типах — случаи, которые §14.7
+    запрещает сливать автоматически; они записываются сюда вопросом к
+    человеку, а не решаются агентом (устав §6).
+    """
+
+    __tablename__ = "knowledge_entity_resolution_candidates"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_users.id"), nullable=False)
+    node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_nodes.id"), nullable=False)
+    identity_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("knowledge_entity_identities.id"), nullable=False)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), default=EntityResolutionStatus.OPEN, nullable=False)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (
+        # Повторный проход не должен плодить один и тот же вопрос.
+        UniqueConstraint("knowledge_user_id", "node_id", "identity_id", "reason",
+                         name="uq_knowledge_entity_resolution_candidates_pair"),
+        CheckConstraint(f"reason IN ({sql_enum_values(EntityResolutionReason)})",
+                        name="reason"),
+        CheckConstraint(f"status IN ({sql_enum_values(EntityResolutionStatus)})",
+                        name="status"),
+        Index("ix_knowledge_entity_resolution_candidates_open",
+              "knowledge_user_id", "status"),
     )
 
 

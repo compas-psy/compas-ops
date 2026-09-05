@@ -47,9 +47,12 @@ from .semantic_extract import (
 from .semantic_windows import SemanticWindow, build_windows, split_window
 from ..config import get_settings
 from ..models import (
-    HealthKnowledgeEdge, HealthKnowledgeEntityAlias, HealthKnowledgeNode,
-    HealthKnowledgeNodeMention, HealthKnowledgeSemanticWindow,
-    KnowledgeEdge, KnowledgeEntityAlias, KnowledgeNode, KnowledgeNodeMention,
+    HealthKnowledgeEdge, HealthKnowledgeEntityAlias, HealthKnowledgeEntityIdentity,
+    HealthKnowledgeEntityIdentityMember, HealthKnowledgeEntityResolutionCandidate,
+    HealthKnowledgeNode, HealthKnowledgeNodeMention, HealthKnowledgeSemanticWindow,
+    KnowledgeEdge, KnowledgeEntityAlias, KnowledgeEntityIdentity,
+    KnowledgeEntityIdentityMember, KnowledgeEntityResolutionCandidate,
+    KnowledgeNode, KnowledgeNodeMention,
     KnowledgeSemanticRun, KnowledgeSemanticWindow, KnowledgeSource,
 )
 from ..models.base import (
@@ -81,12 +84,22 @@ class _Models:
     edge: type
     alias: type
     window: type
+    #: R6. Разрешение сущностей идёт по той же паре схем и тем же
+    #: соединением, что и запись, поэтому и таблицы личности перечислены
+    #: здесь, а не отдельным списком, который разъехался бы с этим.
+    identity: type
+    member: type
+    candidate: type
 
 
 PUBLIC_MODELS = _Models(KnowledgeNode, KnowledgeNodeMention, KnowledgeEdge,
-                        KnowledgeEntityAlias, KnowledgeSemanticWindow)
+                        KnowledgeEntityAlias, KnowledgeSemanticWindow,
+                        KnowledgeEntityIdentity, KnowledgeEntityIdentityMember,
+                        KnowledgeEntityResolutionCandidate)
 HEALTH_MODELS = _Models(HealthKnowledgeNode, HealthKnowledgeNodeMention, HealthKnowledgeEdge,
-                        HealthKnowledgeEntityAlias, HealthKnowledgeSemanticWindow)
+                        HealthKnowledgeEntityAlias, HealthKnowledgeSemanticWindow,
+                        HealthKnowledgeEntityIdentity, HealthKnowledgeEntityIdentityMember,
+                        HealthKnowledgeEntityResolutionCandidate)
 
 
 @dataclass

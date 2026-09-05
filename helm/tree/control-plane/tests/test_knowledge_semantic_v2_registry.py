@@ -22,7 +22,8 @@ from sqlalchemy import text
 
 from helm_core.models import Base
 from helm_core.models.base import (
-    NODE_KINDS_WITHOUT_RUN, SemanticDatePrecision, SemanticEvidenceType, SemanticNodeKind,
+    NODE_KINDS_WITHOUT_RUN, EntityIdentityMatch,
+    EntityResolutionReason, EntityResolutionStatus, SemanticDatePrecision, SemanticEvidenceType, SemanticNodeKind,
     SemanticNodeStatus, SemanticRelationType, SemanticRunStatus,
 )
 from helm_core.models.health_tables import HealthBase
@@ -38,6 +39,14 @@ REGISTRIES = [
     ("knowledge_edges", "evidence_type", SemanticEvidenceType),
     ("knowledge_edges", "status", SemanticNodeStatus),
     ("knowledge_semantic_runs", "status", SemanticRunStatus),
+    # R6 (05.09.2026). Список расширен по тому же правилу, которым он
+    # заведён: закрытый реестр обязан быть закрыт и в базе. Зеркало
+    # health для этих трёх таблиц написано вручную в
+    # `scripts/setup-health-role.sh`, а public — генерируется из модели;
+    # разъехаться им проще, чем остальным, и ловить это должен тест.
+    ("knowledge_entity_identity_members", "matched_on", EntityIdentityMatch),
+    ("knowledge_entity_resolution_candidates", "reason", EntityResolutionReason),
+    ("knowledge_entity_resolution_candidates", "status", EntityResolutionStatus),
 ]
 
 

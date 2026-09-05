@@ -39,7 +39,8 @@ from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from .base import (
-    NAMING_CONVENTION, KnowledgeStatus, SemanticDatePrecision, SemanticEvidenceType,
+    NAMING_CONVENTION, EntityIdentityMatch, EntityResolutionReason,
+    EntityResolutionStatus, KnowledgeStatus, SemanticDatePrecision, SemanticEvidenceType,
     SemanticNodeKind, SemanticNodeStatus, SemanticRelationType, SemanticWindowStatus,
     ts_column, utcnow, sql_enum_values,
 )
@@ -411,4 +412,81 @@ class HealthKnowledgeSemanticWindow(HealthBase):
                          name="uq_health_knowledge_semantic_windows_run_ordinal"),
         Index("ix_health_knowledge_semantic_windows_run_status", "semantic_run_id", "status"),
         Index("ix_health_knowledge_semantic_windows_source", "source_id"),
+    )
+
+
+
+class HealthKnowledgeEntityIdentity(HealthBase):
+    """Зеркало `KnowledgeEntityIdentity` (R6) для health.
+
+    Личность зеркалится целиком, потому что её подпись — «Гаврилова
+    Марина Сергеевна» — сама по себе медицинская информация, когда
+    известна из выписки: имя врача раскрывает, к какому специалисту
+    ходил владелец. Держать её в public «ради удобства запроса» значило
+    бы вынести из health ровно то, ради чего health заведена.
+    """
+
+    __tablename__ = "knowledge_entity_identities"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    canonical_label: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_key: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("knowledge_user_id", "entity_type", "normalized_key",
+                         name="uq_health_knowledge_entity_identities_key"),
+    )
+
+
+class HealthKnowledgeEntityIdentityMember(HealthBase):
+    """Зеркало `KnowledgeEntityIdentityMember` (R6) для health."""
+
+    __tablename__ = "knowledge_entity_identity_members"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    identity_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("health.knowledge_entity_identities.id"), nullable=False)
+    node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("health.knowledge_nodes.id"), nullable=False)
+    matched_on: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("knowledge_user_id", "node_id",
+                         name="uq_health_knowledge_entity_identity_members_node"),
+        CheckConstraint(f"matched_on IN ({sql_enum_values(EntityIdentityMatch)})",
+                        name="matched_on"),
+        Index("ix_health_knowledge_entity_identity_members_identity", "identity_id"),
+    )
+
+
+class HealthKnowledgeEntityResolutionCandidate(HealthBase):
+    """Зеркало `KnowledgeEntityResolutionCandidate` (R6) для health."""
+
+    __tablename__ = "knowledge_entity_resolution_candidates"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    knowledge_user_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("health.knowledge_nodes.id"), nullable=False)
+    identity_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("health.knowledge_entity_identities.id"), nullable=False)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), default=EntityResolutionStatus.OPEN, nullable=False)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("knowledge_user_id", "node_id", "identity_id", "reason",
+                         name="uq_health_knowledge_entity_resolution_candidates_pair"),
+        CheckConstraint(f"reason IN ({sql_enum_values(EntityResolutionReason)})",
+                        name="reason"),
+        CheckConstraint(f"status IN ({sql_enum_values(EntityResolutionStatus)})",
+                        name="status"),
+        Index("ix_health_knowledge_entity_resolution_candidates_open",
+              "knowledge_user_id", "status"),
     )
