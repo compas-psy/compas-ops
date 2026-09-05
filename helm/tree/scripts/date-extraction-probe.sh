@@ -46,6 +46,13 @@ from helm_core.models.tables import KnowledgeSource
 
 WINDOWS_WANTED = 6
 
+#: Потолок на весь замер. Прогон 319 уложился в 14 минут, прогон 321 на
+#: тех же шести окнах шёл больше двух часов — локальная модель на CPU
+#: даёт такой разброс, а логи Actions недоступны, пока job не завершён,
+#: так что «подожду ещё» вслепую стоит часов. Бюджет проверяется ПЕРЕД
+#: окном: начатое доводится до конца, недосчитанное честно названо.
+BUDGET_SECONDS = 45 * 60
+
 #: Строгая дата: год словом, ДД.ММ.ГГГГ целиком, название месяца.
 #: Лабораторное «5.4» и номер приказа сюда не попадают.
 DATE_RE = re.compile(
@@ -94,7 +101,13 @@ with sessionmaker(engine, expire_on_commit=False)() as session:
     #: отказа: там и заявленная дата, и цитата, которая её не содержит.
     unconfirmed = []
 
+    began = time.monotonic()
+    done = 0
     for number, (filename, window) in enumerate(picked, start=1):
+        if time.monotonic() - began >= BUDGET_SECONDS:
+            print(f"  бюджет {BUDGET_SECONDS // 60} минут исчерпан, "
+                  f"окна {number}-{len(picked)} не считались", flush=True)
+            break
         # Печать ПО ХОДУ, а не в конце. Первая редакция молчала до
         # последнего окна: прогон, идущий второй час, выглядел из лога
         # неотличимо от зависшего, и оборвать его означало потерять всё
@@ -111,6 +124,7 @@ with sessionmaker(engine, expire_on_commit=False)() as session:
         with_date = sum(1 for atom in result.atoms if atom.occurred_at)
         print(f"    {time.monotonic() - started:.0f}с, атомов {len(result.atoms)}, "
               f"из них с датой {with_date}, отклонено {len(result.rejected)}", flush=True)
+        done += 1
         atoms_total += len(result.atoms)
         for atom in result.atoms:
             if atom.occurred_at:
@@ -132,7 +146,7 @@ with sessionmaker(engine, expire_on_commit=False)() as session:
                 rejected_other += 1
 
     model_gave_date = passed_with_date + rejected_by_date + rejected_relative
-    print("############ ЧЕТЫРЕ ЧИСЛА ############")
+    print(f"############ ЧЕТЫРЕ ЧИСЛА (окон посчитано: {done} из {len(picked)}) ############")
     print(f"  1. атомов всего (принято):                  {atoms_total}")
     print(f"  2. модель вернула с датой:                  {model_gave_date}")
     print(f"  3. дат прошло grounding:                    {passed_with_date}")
