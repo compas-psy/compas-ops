@@ -31,22 +31,35 @@ from sqlalchemy.orm import sessionmaker
 
 from helm_core.config import get_settings
 from helm_core.knowledge import probe as P
-from helm_core.knowledge.answer_format import is_quotable
 from helm_core.knowledge.embeddings import embed_texts_or_none
 from helm_core.knowledge.health_schema import health_schema_configured
 from helm_core.knowledge.tenancy import bind_knowledge_user
 
 QUESTION = "что там прописал врач?"
 
+# Фильтр цитируемости может быть ещё не выкачен: этот скрипт меряет то,
+# что РАБОТАЕТ на сервере, а не то, что лежит в ветке. Импортируется
+# по факту; своей копии правила здесь нет намеренно — копия разошлась бы
+# с продакшном ровно так же, как разошлась SQL-копия запроса.
+try:
+    from helm_core.knowledge.answer_format import is_quotable
+except ImportError:
+    is_quotable = None
+
+
+def verdict(text):
+    if is_quotable is None:
+        return "фильтра нет"
+    return "цитируемо  " if is_quotable(text) else "ОТБРОШЕНО  "
+
 
 def show(title, hits):
     print(f"  {title}: {len(hits)}")
     for h in hits:
-        mark = "цитируемо" if is_quotable(h.chunk_text) else "ОТБРОШЕНО "
-        rank_ok = "≥порога" if h.rank >= P.MIN_RANK_SCORE else "<порога "
+        rank_ok = "≥порога" if h.rank >= P.MIN_RANK_SCORE else "<порога"
         text = " ".join(h.chunk_text.split())[:90]
         print(f"    {h.rank:.5f} {rank_ok} | {len(h.chunk_text):>4} симв | "
-              f"{mark} | {text}")
+              f"{verdict(h.chunk_text)} | {text}")
 
 
 engine = create_engine(get_settings().database_url, pool_pre_ping=True)
@@ -54,6 +67,8 @@ with sessionmaker(engine, expire_on_commit=False)() as session:
     tenant = bind_knowledge_user(session, None)
     print(f"вопрос: «{QUESTION}»")
     print(f"health-схема настроена: {health_schema_configured()}")
+    print("фильтр цитируемости в выкаченном коде: "
+          + ("есть" if is_quotable is not None else "ЕЩЁ НЕТ (колонка вердикта пустая)"))
     print(f"MIN_RANK_SCORE={P.MIN_RANK_SCORE} "
           f"MIN_COSINE_SIMILARITY={P.MIN_COSINE_SIMILARITY} "
           f"MIN_LEXICAL_CHUNK_CHARS={P.MIN_LEXICAL_CHUNK_CHARS} "
@@ -93,15 +108,20 @@ with sessionmaker(engine, expire_on_commit=False)() as session:
             evidence = (evidence + vec + hvec)[:P.MAX_EVIDENCE]
 
     print("\n--- ИТОГ ---")
-    print(f"  до фильтра цитируемости: {len(evidence)}")
-    kept = [e for e in evidence if is_quotable(e.chunk_text)]
-    print(f"  после фильтра:           {len(kept)}")
-    if kept:
-        head = " ".join(kept[0].chunk_text.split())[:90]
-        print(f"  первым пойдёт: {head}")
+    print(f"  колчан до фильтра: {len(evidence)}")
+    if evidence:
+        print("  что ушло бы владельцу СЕЙЧАС (выкаченный код, без фильтра): "
+              + " ".join(evidence[0].chunk_text.split())[:90])
+    if is_quotable is None:
+        print("  фильтр не выкачен — что он оставит, этот прогон не меряет")
     else:
-        print("  пусто → outcome=NEEDS_REASONING → вопрос уходит в Hermes "
-              "(платная модель), НЕ детерминированный отказ")
+        kept = [e for e in evidence if is_quotable(e.chunk_text)]
+        print(f"  после фильтра:     {len(kept)}")
+        if kept:
+            print("  первым пойдёт: " + " ".join(kept[0].chunk_text.split())[:90])
+        else:
+            print("  пусто → outcome=NEEDS_REASONING → вопрос уходит в Hermes "
+                  "(платная модель), а НЕ в детерминированный отказ")
     session.rollback()
 PYEOF
 
