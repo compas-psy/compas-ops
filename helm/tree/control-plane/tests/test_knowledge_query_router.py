@@ -68,18 +68,23 @@ class _FakeSession:
     """Различает запросы по таблице/колонке, а не по тексту SQL."""
 
     def __init__(self, *, pairs=(), mentions=(), doctor_edges=(), role_edges=(),
-                 nodes=()):
+                 nodes=(), members=()):
         self.pairs = list(pairs)              # (identity, node)
         self.mentions = list(mentions)
         self.doctor_edges = list(doctor_edges)  # (edge, person_node)
         self.role_edges = list(role_edges)      # (person_id, concept_label)
         self.nodes = {n.id: n for n in nodes}
+        #: (identity_id, node_id) — состав личностей. Пусто по
+        #: умолчанию: большинство тестов про одну схему без слияния.
+        self.members = list(members)
 
     def execute(self, query):
         first = query.column_descriptions[0]
         # Имя колонки проверяется РАНЬШЕ таблицы: у `select(edge.from_node_id,
         # ...)` в описании стоит та же таблица, что у `select(edge, ...)`,
         # и проверка по таблице увела бы запрос ролей в ветку рёбер.
+        if first["name"] == "identity_id":
+            return _Result(self.members)
         if first["name"] == "from_node_id":
             return _Result(self.role_edges)
         if first.get("entity") is PUBLIC_MODELS.identity:
@@ -98,12 +103,12 @@ class _FakeSession:
         return self.nodes.get(node_id)
 
 
-def _evidence(session, text, answer=None):
+def _evidence(session, text, answer=None, skip=()):
     answer = answer or qr.DoctorsAnswer(question="каких врачей я посещал?",
                                         intent=qr.QuestionIntent.DOCTORS_VISITED)
-    items = qr._evidence_doctors(session, PUBLIC_MODELS, tenant_id=TENANT,
-                                 run_ids={RUN}, text_by_source={SOURCE: text},
-                                 answer=answer)
+    items, _known = qr._evidence_doctors(
+        session, PUBLIC_MODELS, tenant_id=TENANT, run_ids={RUN},
+        text_by_source={SOURCE: text}, skip_identities=set(skip), answer=answer)
     return items, answer
 
 
@@ -338,3 +343,94 @@ def test_рассмотренное_считается():
     assert answer.considered == {"личности-люди с составом": 1,
                                  "узлы в их составе": 1,
                                  "упоминания с точным спаном": 1}
+
+
+# --- слияние путей (§14.12) ------------------------------------------------
+
+def test_граф_и_доказательства_мержатся_а_не_вытесняют_друг_друга():
+    # На широком корпусе часть источников даёт рёбра, часть нет. Выбор
+    # ОДНОГО пути тогда либо теряет доказанное, либо выдаёт неполный
+    # граф за полный ответ.
+    text = "врач-уролог Петрова Анна Ивановна"
+    by_graph = _Node("Сидоров Иван Петрович")
+    event = _Node("приём")
+    by_evidence = _Node("Петрова Анна Ивановна")
+    edge = _Edge(event.id, by_graph.id, role="doctor")
+    graph_identity, evidence_identity = _Identity("Сидоров"), _Identity("Петрова")
+    session = _FakeSession(
+        doctor_edges=[(edge, by_graph)], nodes=[event],
+        members=[(graph_identity.id, by_graph.id),
+                 (evidence_identity.id, by_evidence.id)],
+        pairs=[(evidence_identity, by_evidence)],
+        mentions=[_Mention(by_evidence.id, 0, len(text))])
+    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+                              intent=qr.QuestionIntent.DOCTORS_VISITED)
+    items, path = qr._answer_in(session, PUBLIC_MODELS, tenant_id=TENANT,
+                                run_ids={RUN}, text_by_source={SOURCE: text},
+                                answer=answer)
+    answer.items = items
+    assert path == qr.AnswerPath.MIXED
+    assert answer.by_path(qr.AnswerPath.GRAPH) == 1
+    assert answer.by_path(qr.AnswerPath.EVIDENCE) == 1
+    assert answer.uncovered_identities == 0
+
+
+def test_личность_отвеченная_графом_не_повторяется_доказательством():
+    # Иначе один человек стал бы двумя пунктами ответа.
+    text = "врач-уролог Сидоров Иван Петрович"
+    person = _Node("Сидоров Иван Петрович")
+    event = _Node("приём")
+    identity = _Identity("Сидоров Иван Петрович")
+    edge = _Edge(event.id, person.id, role="doctor")
+    session = _FakeSession(
+        doctor_edges=[(edge, person)], nodes=[event],
+        members=[(identity.id, person.id)],
+        pairs=[(identity, person)],
+        mentions=[_Mention(person.id, 0, len(text))])
+    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+                              intent=qr.QuestionIntent.DOCTORS_VISITED)
+    items, path = qr._answer_in(session, PUBLIC_MODELS, tenant_id=TENANT,
+                                run_ids={RUN}, text_by_source={SOURCE: text},
+                                answer=answer)
+    assert len(items) == 1
+    assert path == qr.AnswerPath.GRAPH
+    assert answer.skipped["личность уже отвечена путём графа"] == 1
+
+
+def test_непокрытые_личности_считаются():
+    # Человек в документах есть, доказательства врачебной роли нет.
+    # «Один врач» без этого числа читается как «в документах один
+    # человек».
+    text = "Пациента сопровождал Кузнецов Олег Иванович."
+    node = _Node("Кузнецов Олег Иванович")
+    identity = _Identity("Кузнецов Олег Иванович")
+    session = _FakeSession(pairs=[(identity, node)],
+                           members=[(identity.id, node.id)],
+                           mentions=[_Mention(node.id, 0, len(text))])
+    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+                              intent=qr.QuestionIntent.DOCTORS_VISITED)
+    items, _ = qr._answer_in(session, PUBLIC_MODELS, tenant_id=TENANT,
+                             run_ids={RUN}, text_by_source={SOURCE: text},
+                             answer=answer)
+    assert items == []
+    assert answer.uncovered_identities == 1
+
+
+def test_публичная_сводка_несёт_разбивку_по_путям_и_остаётся_без_имён():
+    text = "врач-уролог Петрова Анна Ивановна"
+    node = _Node("Петрова Анна Ивановна")
+    identity = _Identity("Петрова Анна Ивановна")
+    session = _FakeSession(pairs=[(identity, node)],
+                           members=[(identity.id, node.id)],
+                           mentions=[_Mention(node.id, 0, len(text))])
+    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+                              intent=qr.QuestionIntent.DOCTORS_VISITED)
+    items, answer.path_used = qr._answer_in(
+        session, PUBLIC_MODELS, tenant_id=TENANT, run_ids={RUN},
+        text_by_source={SOURCE: text}, answer=answer)
+    answer.items = items
+    public = json.dumps(answer.as_public_dict(), ensure_ascii=False)
+    assert json.loads(public)["items_from_evidence"] == 1
+    assert json.loads(public)["items_from_graph"] == 0
+    assert json.loads(public)["uncovered_identities"] == 0
+    assert "Петрова" not in public and "уролог" not in public

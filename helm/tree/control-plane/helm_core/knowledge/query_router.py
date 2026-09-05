@@ -68,6 +68,12 @@ class QuestionIntent:
 class AnswerPath:
     GRAPH = "graph"
     EVIDENCE = "evidence"
+    #: Часть ответа пришла рёбрами, часть — доказательствами. §14.12
+    #: требует именно этого, когда покрытие графа неполно: «merge only
+    #: evidence-backed additions into the answer and label internally
+    #: which part came from fallback». Выбирать один путь целиком —
+    #: значит либо потерять доказанное, либо соврать про полноту.
+    MIXED = "graph+evidence"
     NONE = "none"
 
 
@@ -157,6 +163,12 @@ class DoctorsAnswer:
     #: Что вообще рассматривалось. Без этих чисел «один врач» не
     #: отличить от «один врач из одного» и от «один из шестидесяти».
     considered: dict[str, int] = field(default_factory=dict)
+    #: Личности-люди с составом, не давшие ни одного пункта ответа ни
+    #: одним путём. Не ошибка и не пропуск: это люди, про которых в
+    #: документах нет доказательства врачебной роли. Число обязано стоять
+    #: рядом с ответом, иначе «трое врачей» читается как «в документах
+    #: трое людей».
+    uncovered_identities: int = 0
 
     def skip(self, reason: str) -> None:
         self.skipped[reason] = self.skipped.get(reason, 0) + 1
@@ -164,10 +176,16 @@ class DoctorsAnswer:
     def count(self, what: str, howmany: int = 1) -> None:
         self.considered[what] = self.considered.get(what, 0) + howmany
 
+    def by_path(self, path: str) -> int:
+        return sum(1 for item in self.items if item.path == path)
+
     def as_dict(self) -> dict:
         """Полный ответ — с именами и цитатами. Только в файл."""
         return {"question": self.question, "intent": self.intent,
                 "path_used": self.path_used, "graph_edges": self.graph_edges,
+                "items_from_graph": self.by_path(AnswerPath.GRAPH),
+                "items_from_evidence": self.by_path(AnswerPath.EVIDENCE),
+                "uncovered_identities": self.uncovered_identities,
                 "considered": self.considered, "skipped": self.skipped,
                 "answer": [item.line() for item in self.items],
                 "items": [asdict(item) for item in self.items]}
@@ -176,6 +194,9 @@ class DoctorsAnswer:
         """То же без содержимого: числа и флаги."""
         return {"intent": self.intent, "path_used": self.path_used,
                 "graph_edges": self.graph_edges, "items": len(self.items),
+                "items_from_graph": self.by_path(AnswerPath.GRAPH),
+                "items_from_evidence": self.by_path(AnswerPath.EVIDENCE),
+                "uncovered_identities": self.uncovered_identities,
                 "items_with_specialty": sum(1 for i in self.items if i.specialties),
                 "items_with_date": sum(1 for i in self.items if i.occurred_at),
                 "proofs_total": sum(len(i.proofs) for i in self.items),
@@ -250,6 +271,7 @@ def marker_follows_label(span_text: str, label: str) -> bool:
 
 
 def _graph_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUID],
+                   identity_by_node: dict[uuid.UUID, uuid.UUID],
                    answer: DoctorsAnswer) -> list[DoctorItem]:
     """Путь по графу: только уже доказанные рёбра, ничего не выводя.
 
@@ -282,8 +304,13 @@ def _graph_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUI
     for edge, person in rows:
         event = graph.get(models.node, edge.from_node_id)
         occurred = event.occurred_at_start if event is not None else None
+        # Личность нужна не для красоты: по ней путь графа и путь
+        # доказательств узнают, что говорят об одном человеке, и второй
+        # не повторяет первого.
+        identity_id = identity_by_node.get(person.id)
         items.append(DoctorItem(
-            identity_id="", person=person.canonical_label,
+            identity_id=str(identity_id) if identity_id else "",
+            person=person.canonical_label,
             specialties=sorted(set(specialties.get(person.id, []))),
             occurred_at=occurred.isoformat() if occurred else None,
             proofs=[Proof(source_id=str(edge.source_id), edge_id=str(edge.id))],
@@ -292,14 +319,22 @@ def _graph_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUI
 
 
 def _evidence_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUID],
-                      text_by_source: dict[uuid.UUID, str],
-                      answer: DoctorsAnswer) -> list[DoctorItem]:
+                      text_by_source: dict[uuid.UUID, str], skip_identities: set[str],
+                      answer: DoctorsAnswer) -> tuple[list[DoctorItem], set[str]]:
     """Путь по доказательствам: личность → состав → упоминание → спан.
 
     Личность без состава сюда не попадает по построению: выборка идёт от
     строк состава, а не от личностей. Это и есть «zero-member identities
     никогда не участвуют в ответах» — свойством запроса, а не проверкой,
     которую можно забыть.
+
+    `skip_identities` — личности, про которые уже ответил путь графа.
+    Доказательство для них искать незачем: ребро сильнее, и повтор
+    превратил бы одного человека в два пункта ответа.
+
+    Возвращает пункты И множество ВСЕХ личностей-людей с составом,
+    которые попались. Второе нужно, чтобы посчитать непокрытых: без
+    него «трое врачей» не отличить от «трое из троих».
     """
     rows = graph.execute(
         select(models.identity, models.node)
@@ -312,10 +347,14 @@ def _evidence_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.
                models.node.semantic_run_id.in_(run_ids))
         .order_by(models.identity.normalized_key, models.node.created_at)).all()
 
-    answer.count("личности-люди с составом", len({r[0].id for r in rows}))
+    known = {str(r[0].id) for r in rows}
+    answer.count("личности-люди с составом", len(known))
     answer.count("узлы в их составе", len(rows))
     by_identity: dict[str, DoctorItem] = {}
     for identity, node in rows:
+        if str(identity.id) in skip_identities:
+            answer.skip("личность уже отвечена путём графа")
+            continue
         mentions = graph.scalars(
             select(models.mention)
             .where(models.mention.knowledge_user_id == tenant_id,
@@ -357,22 +396,48 @@ def _evidence_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.
                 char_start=mention.char_start, char_end=mention.char_end, quote=span))
     for item in by_identity.values():
         item.specialties.sort()
-    return list(by_identity.values())
+    return list(by_identity.values()), known
 
 
 def _answer_in(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUID],
                text_by_source: dict[uuid.UUID, str],
                answer: DoctorsAnswer) -> tuple[list[DoctorItem], str]:
-    """Один ответ в одной схеме. Сначала граф, потом доказательства."""
+    """Один ответ в одной схеме: граф, затем доказательства на остаток.
+
+    Раньше выбирался ОДИН путь целиком: есть рёбра — отвечаем графом, нет
+    — доказательствами. На пилотных восьми источниках разницы не было
+    (рёбер ноль), а на широком корпусе она появилась: часть источников
+    даёт рёбра, часть нет. Выбор одного пути тогда либо теряет
+    доказанное, либо выдаёт неполный граф за полный ответ. §14.12
+    требует ровно слияния: «merge only evidence-backed additions into the
+    answer and label internally which part came from fallback».
+    """
     if not run_ids:
         return [], AnswerPath.NONE
-    items = _graph_doctors(graph, models, tenant_id=tenant_id, run_ids=run_ids,
-                           answer=answer)
-    if items:
+
+    identity_by_node = {
+        node_id: identity_id for identity_id, node_id in graph.execute(
+            select(models.member.identity_id, models.member.node_id)
+            .where(models.member.knowledge_user_id == tenant_id)).all()}
+
+    graph_items = _graph_doctors(graph, models, tenant_id=tenant_id, run_ids=run_ids,
+                                 identity_by_node=identity_by_node, answer=answer)
+    covered = {item.identity_id for item in graph_items if item.identity_id}
+    evidence_items, known = _evidence_doctors(
+        graph, models, tenant_id=tenant_id, run_ids=run_ids,
+        text_by_source=text_by_source, skip_identities=covered, answer=answer)
+
+    items = graph_items + evidence_items
+    answered = {item.identity_id for item in items if item.identity_id}
+    answer.uncovered_identities += len(known - answered)
+
+    if graph_items and evidence_items:
+        return items, AnswerPath.MIXED
+    if graph_items:
         return items, AnswerPath.GRAPH
-    return (_evidence_doctors(graph, models, tenant_id=tenant_id, run_ids=run_ids,
-                              text_by_source=text_by_source, answer=answer),
-            AnswerPath.EVIDENCE)
+    if evidence_items:
+        return items, AnswerPath.EVIDENCE
+    return items, AnswerPath.EVIDENCE if known else AnswerPath.NONE
 
 
 def answer_doctors_visited(session: Session, *, question: str,
@@ -414,10 +479,10 @@ def answer_doctors_visited(session: Session, *, question: str,
                 graph, HEALTH_MODELS, tenant_id=tenant_id, run_ids=health_runs,
                 text_by_source=health_text, answer=answer)
         items = items + health_items
-        if health_path == AnswerPath.GRAPH:
-            path = AnswerPath.GRAPH
-        elif path == AnswerPath.NONE:
+        if path == AnswerPath.NONE:
             path = health_path
+        elif health_path not in (AnswerPath.NONE, path):
+            path = AnswerPath.MIXED
 
     answer.items = items
     answer.path_used = path
