@@ -531,7 +531,11 @@ class TestEvidenceGrounding:
              "evidence_quote": "Приём у Кириченко."}],
             edges=[]), window_text=WINDOW_TEXT)
 
-        assert result.atoms == []
+        # Атом остаётся, дата снимается (прогон 319: гейт из редкого стал
+        # основным, 38 отказов на 7 принятых атомов — вместе с датой
+        # выбрасывалось и само знание). Grounding при этом не ослаблен:
+        # неподтверждённая дата в граф по-прежнему не попадает.
+        assert [(a.occurred_at, a.date_precision) for a in result.atoms] == [(None, "unknown")]
         assert any("не подтверждён" in note for note in result.rejected)
 
     def test_foreign_date_in_evidence_does_not_confirm_occurred_at(self) -> None:
@@ -545,8 +549,27 @@ class TestEvidenceGrounding:
              "evidence_quote": "Приём у Кириченко 14.04.2025, глюкоза 5.4."}],
             edges=[]), window_text="Приём у Кириченко 14.04.2025, глюкоза 5.4.")
 
-        assert result.atoms == []
+        # Атом остаётся, дата снимается (прогон 319: гейт из редкого стал
+        # основным, 38 отказов на 7 принятых атомов — вместе с датой
+        # выбрасывалось и само знание). Grounding при этом не ослаблен:
+        # неподтверждённая дата в граф по-прежнему не попадает.
+        assert [(a.occurred_at, a.date_precision) for a in result.atoms] == [(None, "unknown")]
         assert any("не подтверждён" in note for note in result.rejected)
+
+    def test_word_unknown_in_occurred_at_is_not_a_date(self) -> None:
+        """Прогон 319: модель пишет в occurred_at слово «unknown» вместо
+        пустой строки, как требует промпт. Слово не дата — иначе атом
+        уезжает в граф с датой-строкой, а `parse_occurred_at()` молча
+        превращает её в NULL, и в отчёте «дата есть» при пустой клетке."""
+        quote = "Креатинин 111 мкмоль/л при норме 59-104."
+        result = validate(payload(atoms=[
+            {"local_id": "a1", "kind": "FACT", "title": "т", "text": "Креатинин повышен.",
+             "occurred_at": "unknown", "date_precision": "unknown",
+             "evidence_quote": quote}],
+            edges=[]), window_text=quote)
+
+        assert [(a.occurred_at, a.date_precision) for a in result.atoms] == [(None, "unknown")]
+        assert any("не в разбираемой форме" in note for note in result.rejected)
 
     def test_matching_date_in_evidence_confirms_occurred_at(self) -> None:
         """Обратная сторона: правильная дата обязана проходить, иначе
@@ -590,7 +613,9 @@ class TestEvidenceGrounding:
              "evidence_quote": "В прошлый вторник встречались по поводу контракта."}],
             edges=[]), window_text=window_text)
 
-        assert result.atoms == []
+        # Ровно то, что обещает докстринг этого же теста: остаётся
+        # unknown. Атом не выбрасывается — выдумана была дата, не факт.
+        assert [(a.occurred_at, a.date_precision) for a in result.atoms] == [(None, "unknown")]
         assert any("относительную дату" in note for note in result.rejected)
 
     def test_negation_lost_between_evidence_and_atom_text_is_rejected(self) -> None:

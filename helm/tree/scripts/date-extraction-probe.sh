@@ -86,8 +86,13 @@ with sessionmaker(engine, expire_on_commit=False)() as session:
     print()
 
     atoms_total = passed_with_date = rejected_by_date = rejected_relative = 0
-    rejected_other = 0
+    rejected_other = rejected_unparsable = 0
     examples = []
+    #: Сами отказы grounding, дословно. Прогон 319 показал 38 таких на 7
+    #: принятых атомов, и по одним числам нельзя сказать, гейт ли слишком
+    #: строг или модель приписывает атомам чужую дату. Ответ — в тексте
+    #: отказа: там и заявленная дата, и цитата, которая её не содержит.
+    unconfirmed = []
 
     for number, (filename, window) in enumerate(picked, start=1):
         # Печать ПО ХОДУ, а не в конце. Первая редакция молчала до
@@ -117,8 +122,12 @@ with sessionmaker(engine, expire_on_commit=False)() as session:
         for note in result.rejected:
             if "не подтверждён" in note:
                 rejected_by_date += 1
+                if len(unconfirmed) < 12:
+                    unconfirmed.append((note, filename))
             elif "относительную дату" in note:
                 rejected_relative += 1
+            elif "не в разбираемой форме" in note:
+                rejected_unparsable += 1
             else:
                 rejected_other += 1
 
@@ -129,6 +138,7 @@ with sessionmaker(engine, expire_on_commit=False)() as session:
     print(f"  3. дат прошло grounding:                    {passed_with_date}")
     print(f"  4. отклонено ИМЕННО date-grounding:         {rejected_by_date}")
     print(f"     (отдельно: отказ по относительной дате:  {rejected_relative})")
+    print(f"     (отдельно: occurred_at не дата вообще:   {rejected_unparsable})")
     print(f"     (отдельно: отказы по другим причинам:    {rejected_other})")
     print()
     print("############ ПРИМЕРЫ: событие → дата → цитата ############")
@@ -136,6 +146,13 @@ with sessionmaker(engine, expire_on_commit=False)() as session:
         print("  примеров нет: ни одна дата не прошла")
     for title, occurred, precision, quote, filename in examples:
         print(f"  {title} → {occurred} ({precision}) → «{quote}»")
+        print(f"      источник: {filename}")
+    print()
+    print("############ ОТКАЗЫ GROUNDING ДОСЛОВНО ############")
+    if not unconfirmed:
+        print("  ни одного")
+    for note, filename in unconfirmed:
+        print(f"  {note}")
         print(f"      источник: {filename}")
     session.rollback()
 PYEOF

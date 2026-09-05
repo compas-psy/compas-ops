@@ -347,6 +347,20 @@ _ISO_FORMATS = {
 }
 
 
+#: Единственные формы, которые `parse_occurred_at()` умеет разобрать.
+#: Всё остальное в `occurred_at` — не дата, а текст: живой прогон 319
+#: показал, что модель пишет туда слово «unknown», когда даты нет,
+#: несмотря на прямое требование промпта оставить поле пустым.
+_ISO_DATE_RE = re.compile(r"^\d{4}(-\d{2}(-\d{2})?)?$")
+
+
+def _iso_or_none(occurred_at: str | None) -> str | None:
+    """`occurred_at` в разбираемой форме — или ничего."""
+    if occurred_at and _ISO_DATE_RE.match(occurred_at):
+        return occurred_at
+    return None
+
+
 def _date_confirmed_by_quote(occurred_at: str, precision: str, quote: str) -> bool:
     """Подтверждает ли цитата ИМЕННО эту дату с ЗАЯВЛЕННОЙ точностью.
 
@@ -395,6 +409,44 @@ def _date_confirmed_by_quote(occurred_at: str, precision: str, quote: str) -> bo
             patterns.append(rf"\b0?{day}\s+{month_word}\w*\s+{year}")
 
     return any(re.search(pattern, haystack, re.IGNORECASE) for pattern in patterns)
+
+
+def _checked_date(occurred_at: str | None, precision: str | None, evidence_quote: str,
+                  rejected: list[str]) -> tuple[str | None, str | None]:
+    """Дата атома, прошедшая проверку, — или её отсутствие.
+
+    Три причины потерять дату, и ни одна из них не повод потерять атом.
+    Это не послабление grounding: непроверенная дата в граф по-прежнему
+    не попадает, отказ по-прежнему записан в `rejected`. Меняется
+    только то, что вместе с датой не выбрасывается сам факт.
+
+    Прежнее поведение — `continue`, то есть удаление атома целиком —
+    было безобидным, пока модель дат почти не давала. Живой прогон 319
+    после того, как поля стали обязательными: 38 отказов date-grounding
+    на 7 принятых атомов. Гейт из редкого стал основным, и цена «вместе
+    с датой выбросить и знание» перестала быть теоретической.
+
+    Тот же принцип уже записан в валидаторе про точность вне реестра:
+    «не повод терять весь атом».
+    """
+    if occurred_at and not _iso_or_none(occurred_at):
+        # Модель пишет сюда «unknown» вместо пустой строки (прогон 319).
+        # Не дата и не ошибка модели по существу — просто не то поле.
+        rejected.append(f"occurred_at {occurred_at!r} не в разбираемой форме — дата снята")
+        occurred_at = None
+    if occurred_at and _RELATIVE_DATE_MARKERS_RE.search(evidence_quote):
+        rejected.append(
+            f"evidence описывает относительную дату, дата снята: {occurred_at!r}")
+        occurred_at = None
+    if (occurred_at and precision in _PRECISE_DATE_PRECISIONS
+            and not _date_confirmed_by_quote(occurred_at, precision, evidence_quote)):
+        rejected.append(
+            f"occurred_at {occurred_at!r} не подтверждён ЭТОЙ ЖЕ датой в evidence, "
+            f"дата снята: {evidence_quote!r:.80}")
+        occurred_at = None
+    if occurred_at is None:
+        precision = SemanticDatePrecision.UNKNOWN.value
+    return occurred_at, precision
 
 
 def _evidence_grounded(evidence_quote: str, window_text: str) -> bool:
@@ -610,18 +662,9 @@ def validate(raw: str, *, window_text: str) -> WindowExtraction:
             # запрещает выдумывать точность, а не хранить дату.
             result.rejected.append(f"точность даты {precision!r} вне реестра")
             precision = SemanticDatePrecision.UNKNOWN.value
-        occurred_at = (str(item.get("occurred_at")).strip() or None) if item.get("occurred_at") else None
-
-        if occurred_at and _RELATIVE_DATE_MARKERS_RE.search(evidence_quote):
-            result.rejected.append(
-                f"evidence описывает относительную дату, но occurred_at выставлен: {occurred_at!r}")
-            continue
-        if (occurred_at and precision in _PRECISE_DATE_PRECISIONS
-                and not _date_confirmed_by_quote(occurred_at, precision, evidence_quote)):
-            result.rejected.append(
-                f"occurred_at {occurred_at!r} не подтверждён ЭТОЙ ЖЕ датой в evidence: "
-                f"{evidence_quote!r:.80}")
-            continue
+        raw_date = (str(item.get("occurred_at")).strip() or None) if item.get("occurred_at") else None
+        occurred_at, precision = _checked_date(raw_date, precision, evidence_quote,
+                                               result.rejected)
 
         known.add(local_id)
         result.atoms.append(ExtractedAtom(
@@ -789,18 +832,9 @@ def _validate_nodes(raw: str, *, window_text: str) -> WindowExtraction:
             # дата остаётся, точность становится «неизвестна».
             result.rejected.append(f"точность даты {precision!r} вне реестра")
             precision = SemanticDatePrecision.UNKNOWN.value
-        occurred_at = (str(item.get("occurred_at")).strip() or None) if item.get("occurred_at") else None
-
-        if occurred_at and _RELATIVE_DATE_MARKERS_RE.search(evidence_quote):
-            result.rejected.append(
-                f"evidence описывает относительную дату, но occurred_at выставлен: {occurred_at!r}")
-            continue
-        if (occurred_at and precision in _PRECISE_DATE_PRECISIONS
-                and not _date_confirmed_by_quote(occurred_at, precision, evidence_quote)):
-            result.rejected.append(
-                f"occurred_at {occurred_at!r} не подтверждён ЭТОЙ ЖЕ датой в evidence: "
-                f"{evidence_quote!r:.80}")
-            continue
+        raw_date = (str(item.get("occurred_at")).strip() or None) if item.get("occurred_at") else None
+        occurred_at, precision = _checked_date(raw_date, precision, evidence_quote,
+                                               result.rejected)
 
         known_atoms.add(raw_id)
         result.atoms.append(ExtractedAtom(
