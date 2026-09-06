@@ -33,7 +33,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date
 
-from .query_scope import _RECORD_WORD_RE, is_personal_data_question
+from .query_scope import _RECORD_WORD_RE, is_personal_data_question, is_question
 
 #: Что вопрос просит сделать. Не тема и не домен: домен решает, ГДЕ
 #: искать, а намерение — КАКОЙ ответ считается ответом.
@@ -54,8 +54,27 @@ _LOOKUP_RE = re.compile(
     # глаголом стоят ещё слова, и первая версия их не пропускала.
     r"\bкак(?:ое|ой|ая|ие)\b[^.?!]{0,30}?\b(был|были|было)\b|"
     r"\bкогда\b|\bгде\b|\bсколько\b|\bкто\b|"
-    r"\bчто\s+(показал|написал|прописал|назначил|обнаружил)",
+    # Между «что» и глаголом бывает подлежащее: «что ОН рекомендовал».
+    # Список глаголов — из разбора владельца 06.09.2026: «А что он
+    # рекомендовал?» уходило в платную модель, потому что намерение не
+    # распознавалось вовсе.
+    r"\bчто\s+(?:\w+\s+)?(показал\w*|написал\w*|прописал\w*|назначил\w*|"
+    r"обнаружил\w*|рекомендовал\w*|посоветовал\w*|советовал\w*|выписал\w*|"
+    r"сказал\w*|решил\w*)",
     re.IGNORECASE)
+
+#: РЕЖИМ ЗАПРОСА. Не тема и не намерение: режим решает единственное —
+#: можно ли за ответ на этот вопрос платить. Распоряжение владельца
+#: 06.09.2026: «Закрой local-only через режим запроса, а не словарь
+#: личных местоимений. Если вопрос задан в режиме памяти или продолжает
+#: такой диалог, отсутствие находок не разрешает платный вызов».
+#:
+#: Словарь признаков (`query_scope`) остаётся, но теперь он — только
+#: один из входов режима, и не главный: разговор сильнее формы фразы.
+#: «А что он рекомендовал?» не содержит ни одного личного слова и всё
+#: равно продолжает разговор о памяти.
+MODE_MEMORY = "memory"      # вопрос к своим документам: платить нельзя
+MODE_GENERAL = "general"    # общая или инженерная задача: прежние правила
 
 #: Указательные слова, у которых антецедент лежит вне вопроса.
 #: «Что ТАМ прописал врач» — в каком «там»? Разговора у probe нет.
@@ -64,10 +83,43 @@ _DEICTIC_RE = re.compile(
     r"\bв\s+этом\s+файле\b|\bпо\s+нему\b|\bоттуда\b",
     re.IGNORECASE)
 
+#: Местоимения, отсылающие к предыдущему ходу. В отличие от
+#: `_DEICTIC_RE` уточнения НЕ вызывают: «он» бывает и в самодостаточном
+#: вопросе. Нужны ровно для одного — расширить текст поиска прошлым
+#: вопросом, когда разговор есть.
+_ANAPHORA_RE = re.compile(
+    r"\bон\b|\bона\b|\bони\b|\bего\b|\bеё\b|\bей\b|\bему\b|\bих\b|"
+    r"\bэтот\b|\bэта\b|\bэто\b|\bэти\b|\bтот\b|\bта\b|\bте\b",
+    re.IGNORECASE)
+
 #: Год: явные четыре цифры либо «в этом году». Остальные формы периода
 #: исполнитель применить не умеет — они попадают в `unsupported`.
 _EXPLICIT_YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
 _THIS_YEAR_RE = re.compile(r"в\s+этом\s+году", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class DialogueContext:
+    """Предыдущий ход разговора — то, чего у `probe()` не было вообще.
+
+    Держит его вызывающий (плагин `helm-control` — по чату, в памяти
+    процесса, рядом с `_task_ids`): Control Plane не видит переписку и
+    не хранит её. Здесь — ровно то, что нужно, чтобы понять следующий
+    вопрос: о чём спрашивали и какие источники были в ответе.
+
+    `memory=True` — предыдущий ход был обращением к памяти (ответ из
+    документов, честное «не нашёл» или уточнение). Именно это делает
+    следующий вопрос продолжением разговора о памяти.
+    """
+
+    question: str | None = None
+    source_ids: tuple[str, ...] = field(default_factory=tuple)
+    filenames: tuple[str, ...] = field(default_factory=tuple)
+    memory: bool = False
+
+    @property
+    def present(self) -> bool:
+        return bool(self.question)
 
 
 @dataclass(frozen=True)
@@ -99,13 +151,27 @@ class QuerySpec:
     tenant_id: uuid.UUID
     intent: str
     time: TimeConstraint
-    #: Вопрос о данных владельца. Решает право уйти в платную модель.
-    personal: bool
+    #: `MODE_MEMORY` | `MODE_GENERAL`. Решает право уйти в платную модель.
+    mode: str
     #: Чего не хватает, чтобы вопрос вообще имел ответ. Не `None` —
     #: исполнять нечего, надо спрашивать.
     clarification: str | None = None
     #: Домены, куда смотреть. Пусто — везде, куда пускает тенант.
     domains: tuple[str, ...] = field(default_factory=tuple)
+    #: Источники, которыми ограничен поиск: разговор назвал документ
+    #: («что там прописал врач?» после ответа по конкретному приёму).
+    #: Пусто — искать везде.
+    focus_source_ids: tuple[str, ...] = field(default_factory=tuple)
+    #: Текст, которым идти в поиск. Отличается от `question`, когда
+    #: вопрос опирается на предыдущий («а что он рекомендовал?» — «он»
+    #: искать бесполезно, ищется прошлый вопрос вместе с этим).
+    retrieval_question: str = ""
+
+    @property
+    def personal(self) -> bool:
+        """Совместимость с вызывающим кодом и прежними проверками:
+        «личный» — это и есть режим памяти, названный по-старому."""
+        return self.mode == MODE_MEMORY
 
 
 def detect_intent(question: str) -> str:
@@ -137,40 +203,83 @@ def parse_time(question: str, *, today: date | None = None) -> TimeConstraint:
     return TimeConstraint(year=year, unsupported=unsupported_period(question))
 
 
-def build_query_spec(question: str, *, tenant_id: uuid.UUID,
-                     has_dialogue_context: bool = False,
-                     today: date | None = None) -> QuerySpec:
-    """Разобрать вопрос. Ничего не ищет и в базу не ходит.
+def classify_mode(question: str, *, context: DialogueContext, intent: str) -> str:
+    """Можно ли за ответ на этот вопрос платить.
 
-    `has_dialogue_context` — знает ли вызывающий, о каком документе шла
-    речь. Сегодня всегда `False`: памяти диалога в системе нет. Параметр
-    существует, чтобы отсутствие этой памяти было видно в сигнатуре, а
-    не подразумевалось: когда память появится, менять придётся вызов, а
-    не правило.
+    Порядок проверок и есть содержание правила. Разговор идёт первым:
+    вопрос после обращения к памяти продолжает его, чем бы он ни был
+    сформулирован. «Переведи мне текст» после разговора о врачах — не
+    вопрос, а поручение, и прежние правила для него сохраняются.
+
+    Признаки формы (`query_scope`) остаются последним рубежом — для
+    первого сообщения, когда разговора ещё нет.
     """
-    clarification = None
-    if _DEICTIC_RE.search(question) and not has_dialogue_context:
-        clarification = (
-            "Уточните, о каком документе речь: в вопросе есть «там», а "
-            "прошлые сообщения я не помню.")
-
-    intent = detect_intent(question)
-
+    if context.memory and is_question(question):
+        return MODE_MEMORY
+    if is_personal_data_question(question):
+        return MODE_MEMORY
     # Вопрос о СВОЁМ документе бывает без единого притяжательного слова:
     # «что решили по подзадачам в ТЗ» — ни «мой», ни «я», а платная
     # модель этого ТЗ всё равно не знает. Форма вопроса одна этого не
     # различает; различает связка «спрашивают о факте» + «речь о
     # записи». Определение («что такое ферритин») под неё не подходит:
     # у него нет ни того, ни другого.
-    asks_about_a_record = (intent in (INTENT_LOOKUP, INTENT_DECISION, INTENT_ENUMERATE)
-                           and bool(_RECORD_WORD_RE.search(question)))
-    personal = is_personal_data_question(question) or asks_about_a_record
+    if (intent in (INTENT_LOOKUP, INTENT_DECISION, INTENT_ENUMERATE)
+            and _RECORD_WORD_RE.search(question)):
+        return MODE_MEMORY
+    return MODE_GENERAL
+
+
+def build_query_spec(question: str, *, tenant_id: uuid.UUID,
+                     context: DialogueContext | None = None,
+                     today: date | None = None) -> QuerySpec:
+    """Разобрать вопрос. Ничего не ищет и в базу не ходит.
+
+    `context` — предыдущий ход разговора, если вызывающий его помнит.
+    До 06.09.2026 здесь стоял булев `has_dialogue_context`, всегда
+    `False`: памяти диалога в системе не было вовсе, и указательное
+    слово могло только оборвать вопрос уточнением. Теперь разговор
+    даёт три вещи: снимает уточнение, ограничивает поиск названным
+    документом и делает следующий вопрос продолжением разговора о
+    памяти.
+    """
+    context = context or DialogueContext()
+    intent = detect_intent(question)
+
+    clarification = None
+    focus_source_ids: tuple[str, ...] = ()
+    if _DEICTIC_RE.search(question):
+        if context.source_ids:
+            # «Что ТАМ прописал врач» — «там» это документы прошлого
+            # ответа. Поиск ограничивается ими: искать по всему корпусу
+            # значило бы снова угадывать, о чём речь.
+            focus_source_ids = context.source_ids
+        elif not context.present:
+            clarification = (
+                "Уточните, о каком документе речь: в вопросе есть «там», а "
+                "прошлые сообщения я не помню.")
+        else:
+            # Разговор был, но источников в прошлом ответе нет (например,
+            # это было уточнение). Указывать не на что — спрашиваем.
+            clarification = (
+                "Уточните, о каком документе речь: в прошлом ответе "
+                "источников не было.")
+
+    # Вопрос, опирающийся на предыдущий, сам по себе неинформативен для
+    # поиска: в «а что он рекомендовал?» искать нечего, кроме «он».
+    # Ищется прошлый вопрос вместе с этим — не «понимание» разговора, а
+    # ровно то, что в нём было сказано словами.
+    retrieval_question = question
+    if context.question and (focus_source_ids or _ANAPHORA_RE.search(question)):
+        retrieval_question = f"{context.question} {question}"
 
     return QuerySpec(
         question=question,
         tenant_id=tenant_id,
         intent=intent,
         time=parse_time(question, today=today),
-        personal=personal,
+        mode=classify_mode(question, context=context, intent=intent),
         clarification=clarification,
+        focus_source_ids=focus_source_ids,
+        retrieval_question=retrieval_question,
     )

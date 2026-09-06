@@ -23,7 +23,7 @@ from helm_core.config import get_settings
 from helm_core.knowledge import semantic_extract
 from helm_core.knowledge.ingest import ingest_text
 from helm_core.knowledge.semantic_extract import WindowExtraction
-from helm_core.knowledge.semantic_publish import publish_semantic_run
+from helm_core.knowledge.semantic_publish import SEMANTIC_VERSION, publish_semantic_run
 from helm_core.knowledge.tenancy import bind_knowledge_user
 from helm_core.models import KnowledgeSemanticRun
 
@@ -43,7 +43,7 @@ def test_publish_semantic_run_reads_model_from_settings_not_a_literal(session, m
         session.flush()
 
         result = publish_semantic_run(session, source=source, text="Текст без семантики.",
-                                      extract=_no_op_extractor)
+                                      extract=_no_op_extractor, semantic_version=SEMANTIC_VERSION)
 
         run = session.scalars(select(KnowledgeSemanticRun).where(
             KnowledgeSemanticRun.id == result.run_id)).one()

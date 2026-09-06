@@ -32,6 +32,7 @@ from ..knowledge.admin import try_admin_command
 from ..knowledge.memory import try_remember
 from ..knowledge.onboarding import create_invite, reactivate_user, suspend_user
 from ..knowledge.probe import probe, query_hash
+from ..knowledge.query_spec import DialogueContext
 from ..knowledge.tenancy import bind_knowledge_user
 from ..models import KnowledgeAnswerRun, ModelRun, Task, TaskEvent, TaskStatus, utcnow
 from ..outbox import enqueue
@@ -70,9 +71,23 @@ def inbound(message: InboundMessage, request: Request,
             "dedup_reason": result.dedup_reason, "status": result.task.status}
 
 
+class DialogueContextIn(BaseModel):
+    """Предыдущий ход разговора. Держит его вызывающий (плагин
+    `helm-control` — по чату, в памяти процесса): Control Plane
+    переписку не видит и не хранит. Заведено 06.09.2026 по распоряжению
+    владельца: «Для „что там прописал врач?“ установи врача и документ
+    из диалога»."""
+
+    question: str | None = Field(default=None, max_length=2000)
+    source_ids: list[str] = Field(default_factory=list, max_length=10)
+    filenames: list[str] = Field(default_factory=list, max_length=10)
+    memory: bool = False
+
+
 class KnowledgeProbeIn(BaseModel):
     query: str = Field(min_length=1)
     domain: str | None = None
+    context: DialogueContextIn | None = None
 
 
 @router.post("/knowledge/probe")
@@ -86,7 +101,20 @@ def knowledge_probe(body: KnowledgeProbeIn,
     просто отдаём результат вызывающей стороне, чтобы та решила, слать
     ли ответ напрямую или пропускать сообщение к модели.
     """
-    result = probe(session, query=body.query, domain=body.domain)
+    context = None
+    if body.context is not None:
+        # uuid-строки чужого происхождения: битый id — это ошибка
+        # вызывающего, а не повод искать по всему корпусу молча.
+        try:
+            source_ids = tuple(str(uuid.UUID(s)) for s in body.context.source_ids)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                f"context.source_ids: {exc}")
+        context = DialogueContext(question=body.context.question,
+                                  source_ids=source_ids,
+                                  filenames=tuple(body.context.filenames),
+                                  memory=body.context.memory)
+    result = probe(session, query=body.query, domain=body.domain, context=context)
     session.commit()
     # `sources` и `answer_run_id` добавлены 06.09.2026. До этого наружу
     # уходили только три поля, и вызывающий физически не мог ни показать

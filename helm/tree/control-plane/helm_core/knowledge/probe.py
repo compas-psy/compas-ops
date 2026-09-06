@@ -40,16 +40,17 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .answer_format import (PERSONAL_NOT_FOUND, format_doctors, format_nearest_quote,
-                            is_quotable)
+                            format_nothing_answered, format_with_sources, is_quotable)
 from .embeddings import embed_texts_or_none
 from .health_schema import health_schema_configured, health_session
 from .query_router import QuestionIntent, answer_doctors_visited, detect_intent
-from .query_spec import build_query_spec
+from .query_spec import MODE_GENERAL, DialogueContext, build_query_spec
 from .recall import (
     MemoryHit, build_or_tsquery, compose_memory_answer, is_future_reminder,
     is_historical_query, search_memories,
 )
 from .rephrase import rephrase_or_none
+from .synthesis import synthesize_or_none
 from .tenancy import bind_knowledge_user
 from ..models import (
     HealthKnowledgeChunk, HealthKnowledgeSourcePrivate, KnowledgeAnswerMode, KnowledgeAnswerRun,
@@ -100,12 +101,31 @@ MIN_RANK_SCORE = 0.003
 #: перечанковкой, и лечить их ранжированием больше не нужно.
 CHUNK_RANK_NORMALIZATION = 0
 
-#: Середина зазора по геометрическому среднему: 1.6 раза до шума
-#: («марка бетона», 0.01216) и 1.5 раза до самого слабого настоящего
-#: ответа (0.03040). Среднее геометрическое, а не арифметическое,
-#: потому что ранги — величина отношений, и равный запас в обе стороны
-#: тут именно кратный.
-MIN_CHUNK_RANK_SCORE = 0.02
+#: ПОРОГА РАНГА У ЧАНКОВ БОЛЬШЕ НЕТ. Снят 06.09.2026, после замера,
+#: который опроверг собственное обоснование предыдущей константы
+#: (`MIN_CHUNK_RANK_SCORE = 0.02`, взятая как середина зазора между
+#: шумом 0.01216 и слабейшим настоящим ответом 0.03040).
+#:
+#: Замер: три коротких источника «Решение №N: используем X» и два
+#: вопроса о них.
+#:
+#:   «какое решение приняли»                    ранг 0.02026 — проходил
+#:   «какие решения приняли по инфраструктуре»   ранг 0.01520 — НЕ проходил
+#:
+#: Тот же документ, то же совпадение, ранг ниже — потому что
+#: `ts_rank` считает долю совпавших лексем ОТ ВСЕГО ЗАПРОСА. Абсолютный
+#: порог на этой величине наказывает за длину вопроса: чем подробнее
+#: спрошено, тем вероятнее ответ отброшен. Зазор, померенный на
+#: конкретных вопросах разведки 378, на вопросы другой длины не
+#: переносится — это и была ошибка той калибровки.
+#:
+#: Что теперь отделяет ответ от шума: не число, а прочтение. Кандидатов
+#: даёт поиск (`@@`, длина чанка, `is_quotable`), а решает, отвечают ли
+#: они на вопрос, ступень синтеза (synthesis.py) — она читает найденное
+#: и вправе сказать «ответа здесь нет». Распоряжение владельца
+#: 06.09.2026: «Не превращай совпадение слов в обязательное условие
+#: ответа… Возможность ответить определяется содержанием доказательств
+#: и их соответствием вопросу».
 
 #: НАЙДЕНО 01.09.2026 (реальный чат владельца): "каких врачей я посещал"
 #: вернул 5 совпадений "Врач КДЛ:" — подпись лаборанта на бланке анализа,
@@ -210,8 +230,18 @@ def _apply_domain_filter(stmt, domain: str | None):
     return stmt.where(KnowledgeSource.domain.notin_(excluded))
 
 
+def _apply_source_filter(stmt, chunk_model, source_ids: tuple[str, ...]):
+    """Разговор назвал документ — искать в нём, а не по всему корпусу
+    (P4, «что там прописал врач?» после ответа по конкретному приёму).
+    Пустой кортеж — обычный поиск везде."""
+    if not source_ids:
+        return stmt
+    return stmt.where(chunk_model.source_id.in_([uuid.UUID(s) for s in source_ids]))
+
+
 def _lexical_search(session: Session, *, query: str, domain: str | None,
-                    knowledge_user_id: uuid.UUID) -> list[Evidence]:
+                    knowledge_user_id: uuid.UUID,
+                    source_ids: tuple[str, ...] = ()) -> list[Evidence]:
     # plainto_tsquery AND-combines all stems ('как' & 'решен' & 'приня') —
     # a natural-language question then matches only a document containing
     # ALL of its stems. Real documents here are single factual statements
@@ -237,7 +267,8 @@ def _lexical_search(session: Session, *, query: str, domain: str | None,
         .order_by(rank.desc())
         .limit(MAX_EVIDENCE)
     )
-    stmt = _apply_domain_filter(stmt, domain)
+    stmt = _apply_source_filter(_apply_domain_filter(stmt, domain),
+                                KnowledgeChunk, source_ids)
 
     rows = session.execute(stmt).all()
     return [
@@ -248,7 +279,8 @@ def _lexical_search(session: Session, *, query: str, domain: str | None,
 
 
 def _vector_search(session: Session, *, query_embedding: list[float], domain: str | None,
-                   knowledge_user_id: uuid.UUID, exclude_chunk_ids: set[str]) -> list[Evidence]:
+                   knowledge_user_id: uuid.UUID, exclude_chunk_ids: set[str],
+                   source_ids: tuple[str, ...] = ()) -> list[Evidence]:
     """ADR-025: та же тенантная/доменная фильтрация, что `_lexical_search`,
     но по косинусному расстоянию, а не `tsv`. `exclude_chunk_ids` — чанки,
     уже найденные лексически, не дублируются здесь (лексика приоритетнее,
@@ -263,7 +295,8 @@ def _vector_search(session: Session, *, query_embedding: list[float], domain: st
         .order_by(similarity.desc())
         .limit(MAX_EVIDENCE)
     )
-    stmt = _apply_domain_filter(stmt, domain)
+    stmt = _apply_source_filter(_apply_domain_filter(stmt, domain),
+                                KnowledgeChunk, source_ids)
 
     rows = session.execute(stmt).all()
     return [
@@ -274,7 +307,8 @@ def _vector_search(session: Session, *, query_embedding: list[float], domain: st
     ]
 
 
-def _health_lexical_search(*, query: str, knowledge_user_id: uuid.UUID) -> list[Evidence]:
+def _health_lexical_search(*, query: str, knowledge_user_id: uuid.UUID,
+                           source_ids: tuple[str, ...] = ()) -> list[Evidence]:
     """Тот же лексический поиск, что `_lexical_search`, на health-
     соединении (ADR-005/P12) — `health.knowledge_chunks` физически не
     видна `helm_app`, обычная сессия здесь не годится вообще. Вызывается
@@ -294,6 +328,7 @@ def _health_lexical_search(*, query: str, knowledge_user_id: uuid.UUID) -> list[
             .order_by(rank.desc())
             .limit(MAX_EVIDENCE)
         )
+        stmt = _apply_source_filter(stmt, HealthKnowledgeChunk, source_ids)
         rows = session.execute(stmt).all()
         return [
             Evidence(chunk_id=str(chunk.id), source_id=str(chunk.source_id), chunk_text=chunk.text,
@@ -303,7 +338,8 @@ def _health_lexical_search(*, query: str, knowledge_user_id: uuid.UUID) -> list[
 
 
 def _health_vector_search(*, query_embedding: list[float], knowledge_user_id: uuid.UUID,
-                          exclude_chunk_ids: set[str]) -> list[Evidence]:
+                          exclude_chunk_ids: set[str],
+                          source_ids: tuple[str, ...] = ()) -> list[Evidence]:
     """Health-эквивалент `_vector_search()` — см. её docstring."""
     similarity = (1 - HealthKnowledgeChunk.embedding.cosine_distance(query_embedding)).label("similarity")
     with health_session(knowledge_user_id) as session:
@@ -316,6 +352,7 @@ def _health_vector_search(*, query_embedding: list[float], knowledge_user_id: uu
             .order_by(similarity.desc())
             .limit(MAX_EVIDENCE)
         )
+        stmt = _apply_source_filter(stmt, HealthKnowledgeChunk, source_ids)
         rows = session.execute(stmt).all()
         return [
             Evidence(chunk_id=str(chunk.id), source_id=str(chunk.source_id), chunk_text=chunk.text,
@@ -344,7 +381,8 @@ def _compose_answer(evidence: list[Evidence]) -> tuple[str, str]:
 
 
 def probe(session: Session, *, query: str, domain: str | None = None,
-         knowledge_user_id: uuid.UUID | None = None) -> ProbeResult:
+         knowledge_user_id: uuid.UUID | None = None,
+         context: DialogueContext | None = None) -> ProbeResult:
     """Прогнать вопрос через локальную базу знаний до платной модели.
 
     LOCAL_ANSWER пишет строку `knowledge_answer_runs` сразу — paid_ai_used
@@ -373,7 +411,7 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     # решением об оплате, неприменимый период в форматтере. Ни одно не
     # существовало как факт, о котором можно спросить, и ответ не мог
     # честно перечислить, что применил, а что нет.
-    spec = build_query_spec(query, tenant_id=knowledge_user_id)
+    spec = build_query_spec(query, tenant_id=knowledge_user_id, context=context)
 
     # Уточнение — не ошибка и не пустой ответ, а третий исход. «Что там
     # прописал врач?» не имеет ответа сам по себе: «там» указывает на
@@ -471,12 +509,14 @@ def probe(session: Session, *, query: str, domain: str | None = None,
 
     lexical_hits: list[Evidence] = []
     if search_public:
-        lexical_hits += _lexical_search(session, query=query, domain=domain,
-                                        knowledge_user_id=knowledge_user_id)
+        lexical_hits += _lexical_search(session, query=spec.retrieval_question, domain=domain,
+                                        knowledge_user_id=knowledge_user_id,
+                                        source_ids=spec.focus_source_ids)
     if search_health:
-        lexical_hits += _health_lexical_search(query=query, knowledge_user_id=knowledge_user_id)
-    lexical = sorted((e for e in lexical_hits if e.rank >= MIN_CHUNK_RANK_SCORE),
-                     key=lambda e: e.rank, reverse=True)
+        lexical_hits += _health_lexical_search(query=spec.retrieval_question,
+                                               knowledge_user_id=knowledge_user_id,
+                                               source_ids=spec.focus_source_ids)
+    lexical = sorted(lexical_hits, key=lambda e: e.rank, reverse=True)
     # ОТБРАКОВКА ЛЕКСИКИ ДО РЕШЕНИЯ «КОЛЧАН ПОЛОН». Переставлено
     # 06.09.2026 по живому прогону 365: на «что там прописал врач?»
     # лексика вернула пять подписей бланка, три из них `is_quotable`
@@ -507,7 +547,7 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     # лексических совпадений это просто означает эскалацию, как и было
     # до ADR-025 — деградация до прежнего поведения, не новый отказ.
     if len(evidence) < MAX_EVIDENCE:
-        query_embedding = embed_texts_or_none([query])[0]
+        query_embedding = embed_texts_or_none([spec.retrieval_question])[0]
         if query_embedding is not None:
             # Исключается всё, что лексика уже рассмотрела, а не только
             # прошедшее отбраковку: отбракованный чанк не должен
@@ -518,11 +558,12 @@ def probe(session: Session, *, query: str, domain: str | None = None,
                 vector_hits += _vector_search(
                     session, query_embedding=query_embedding, domain=domain,
                     knowledge_user_id=knowledge_user_id, exclude_chunk_ids=exclude_ids,
+                    source_ids=spec.focus_source_ids,
                 )
             if search_health:
                 vector_hits += _health_vector_search(
                     query_embedding=query_embedding, knowledge_user_id=knowledge_user_id,
-                    exclude_chunk_ids=exclude_ids,
+                    exclude_chunk_ids=exclude_ids, source_ids=spec.focus_source_ids,
                 )
             evidence = (evidence + vector_hits)[:MAX_EVIDENCE]
 
@@ -558,25 +599,72 @@ def probe(session: Session, *, query: str, domain: str | None = None,
         return ProbeResult(outcome="LOCAL_NOT_FOUND", mode=KnowledgeAnswerMode.N0,
                            answer_text=PERSONAL_NOT_FOUND, answer_run_id=str(run_id))
 
-    answer_text, mode = _compose_answer(evidence)
+    # ── P4: НЕСКОЛЬКО ФРАГМЕНТОВ СКЛАДЫВАЮТСЯ В ОТВЕТ ────────────────
+    # Распоряжение владельца 06.09.2026: «Несколько найденных фрагментов
+    # должны позволять собрать ответ; автоматическая выдача ближайшей
+    # цитаты при количестве находок больше одной не выполняет эту
+    # задачу». До этой правки ответ выбирался рангом поиска, то есть
+    # совпадением слов: прогон 383 на «какое у меня было давление?»
+    # отдал протокол эндоскопии, а консультация кардиолога с самим
+    # давлением стояла третьей и в ответ не попадала.
+    #
+    # Синтез читает вопрос и ВСЕ найденные фрагменты. Три исхода
+    # (synthesis.py): ответ со ссылками на фрагменты, честное «здесь
+    # ответа нет» и недоступность модели. Смешивать их нельзя: первый —
+    # ответ, второй — тоже ответ, третий — незнание.
+    synthesis = synthesize_or_none(spec.question, [e.chunk_text for e in evidence])
 
-    # §14.12 Z2-рефраз (docs/KNOWLEDGE_MODELS.md, gemma2:2b выбран живым
-    # замером 31.08.2026) — ТОЛЬКО для Z0 (одна цитата). Замер проверял
-    # рефраз ровно одного факта за раз; Z1 (пронумерованный список
-    # нескольких находок) рефразом не покрыт — совмещать несколько
-    # разных фактов в одном вызове модели непроверено и рискованнее
-    # (больше риск подмешать одну находку в формулировку другой), это
-    # сознательно нетронутая, а не забытая часть. paid_ai_used не
-    # трогается ни в одной ветке — локальный Ollama-рефраз не платный
-    # вызов (§14.14).
-    if mode == KnowledgeAnswerMode.Z0:
-        rephrased = rephrase_or_none(
-            session, question=query, evidence_text=evidence[0].chunk_text,
-            knowledge_user_id=knowledge_user_id,
-        )
-        if rephrased is not None:
-            cite = evidence[0].original_filename or evidence[0].source_id
-            answer_text = f"{rephrased}\n\nИсточник: {cite}"
+    if synthesis is not None and not synthesis.answered:
+        # Найденное прочитано и ответа не содержит. Для общего вопроса
+        # это и есть штатная эскалация: платная модель не знает данных
+        # владельца, но общий вопрос к ним и не относится.
+        if spec.mode == MODE_GENERAL:
+            return ProbeResult(outcome="NEEDS_REASONING")
+        run_id = uuid.uuid4()
+        session.add(KnowledgeAnswerRun(
+            id=run_id, knowledge_user_id=knowledge_user_id,
+            query_hash=query_hash(query), domain=domain, mode=KnowledgeAnswerMode.N0,
+            paid_ai_used=False, evidence_count=len(evidence),
+        ))
+        # Источники остаются в ответе и при отказе: владельцу нужно
+        # видеть, что именно было просмотрено, и иметь возможность
+        # открыть это самому.
+        return ProbeResult(
+            outcome="LOCAL_NOT_FOUND", mode=KnowledgeAnswerMode.N0,
+            answer_text=format_nothing_answered([e.original_filename or e.source_id
+                                                 for e in evidence]),
+            answer_run_id=str(run_id),
+            sources=[{"kind": "chunk", "source_id": item.source_id,
+                      "chunk_id": item.chunk_id,
+                      "original_filename": item.original_filename}
+                     for item in evidence])
+
+    if synthesis is not None:
+        # Показываются только те фрагменты, на которые модель сослалась:
+        # ответ и его доказательства обязаны совпадать, иначе проверить
+        # ответ нечем (§14.12, контракт ответа 05.09.2026).
+        evidence = [evidence[i - 1] for i in synthesis.used]
+        answer_text = format_with_sources(
+            synthesis.text, [e.original_filename or e.source_id for e in evidence],
+            unsupported_period=spec.time.unsupported)
+        mode = KnowledgeAnswerMode.Z2
+    else:
+        # Модель недоступна — прежний детерминированный composer. Это
+        # деградация, а не отказ: одна цитата, честно названная цитатой.
+        answer_text, mode = _compose_answer(evidence)
+
+        # §14.12 Z2-рефраз (docs/KNOWLEDGE_MODELS.md, gemma2:2b выбран
+        # живым замером 31.08.2026) — ТОЛЬКО для Z0 (одна цитата). Замер
+        # проверял рефраз ровно одного факта за раз. paid_ai_used не
+        # трогается: локальный Ollama-рефраз не платный вызов (§14.14).
+        if mode == KnowledgeAnswerMode.Z0:
+            rephrased = rephrase_or_none(
+                session, question=query, evidence_text=evidence[0].chunk_text,
+                knowledge_user_id=knowledge_user_id,
+            )
+            if rephrased is not None:
+                cite = evidence[0].original_filename or evidence[0].source_id
+                answer_text = f"{rephrased}\n\nИсточник: {cite}"
 
     run_id = uuid.uuid4()
     session.add(KnowledgeAnswerRun(

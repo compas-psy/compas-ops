@@ -9,10 +9,12 @@ import uuid
 
 from sqlalchemy import select
 
-from helm_core.knowledge import ingest as ingest_module
+from helm_core.knowledge import chunking as chunking_module
 from helm_core.knowledge import probe as probe_module
 from helm_core.knowledge.ingest import ingest_text
-from helm_core.knowledge.probe import MIN_CHUNK_RANK_SCORE, probe
+from helm_core.knowledge.probe import probe
+from helm_core.knowledge.query_spec import DialogueContext
+from helm_core.knowledge.synthesis import Synthesis
 from helm_core.models import (
     KnowledgeAnswerRun, KnowledgeChunk, KnowledgeSource, KnowledgeUser, KnowledgeUserRole,
 )
@@ -34,15 +36,22 @@ def test_ingest_same_text_does_not_duplicate(session):
 
 
 def test_ingest_splits_paragraphs_into_chunks(session):
-    text = "Первый абзац про кота.\n\nВторой абзац про собаку."
-    source = ingest_text(session, domain="personal", text=text)
+    """Абзацы длиннее минимума остаются отдельными чанками. Короткие с
+    06.09.2026 склеиваются (chunking.py, MIN_CHUNK_CHARS): чанк из трёх
+    слов нельзя ни процитировать, ни осмысленно проранжировать — это и
+    была причина перечанковки."""
+    first = "Первый абзац про кота. " * 12
+    second = "Второй абзац про собаку. " * 12
+    source = ingest_text(session, domain="personal", text=f"{first}\n\n{second}")
     session.flush()
 
     chunks = session.scalars(
         select(KnowledgeChunk).where(KnowledgeChunk.source_id == source.id)
         .order_by(KnowledgeChunk.ordinal)
     ).all()
-    assert [c.text for c in chunks] == ["Первый абзац про кота.", "Второй абзац про собаку."]
+    assert len(chunks) == 2
+    assert "кота" in chunks[0].text and "собаку" not in chunks[0].text
+    assert "собаку" in chunks[1].text
 
 
 # ── §30.8.5 Retrieval golden cases ────────────────────────────────────────
@@ -121,7 +130,7 @@ def test_health_domain_reachable_from_general_query(session):
     ingest_text(session, domain="health", text="Анализ крови показал дефицит железа.")
     session.flush()
 
-    result = probe(session, query="что там с анализом крови")
+    result = probe(session, query="что было в анализе крови")
 
     assert result.outcome == "LOCAL_ANSWER"
 
@@ -132,7 +141,7 @@ def test_health_domain_reachable_with_explicit_scope(session):
     ingest_text(session, domain="health", text="Анализ крови показал дефицит железа.")
     session.flush()
 
-    result = probe(session, query="что там с анализом крови", domain="health")
+    result = probe(session, query="что было в анализе крови", domain="health")
 
     assert result.outcome == "LOCAL_ANSWER"
 
@@ -145,7 +154,7 @@ def test_zapiski_domain_excluded_from_general_query(session):
     ingest_text(session, domain="simpas/zapiski", text="Клиент рассказал про тревогу на работе.")
     session.flush()
 
-    result = probe(session, query="что там про тревогу на работе")
+    result = probe(session, query="про тревогу на работе")
 
     assert result.outcome == "NEEDS_REASONING", (
         "simpas/zapiski не должен попадать в обычный поиск без явного domain (§14.15)"
@@ -156,7 +165,7 @@ def test_zapiski_domain_reachable_with_explicit_scope(session):
     ingest_text(session, domain="simpas/zapiski", text="Клиент рассказал про тревогу на работе.")
     session.flush()
 
-    result = probe(session, query="что там про тревогу на работе", domain="simpas/zapiski")
+    result = probe(session, query="про тревогу на работе", domain="simpas/zapiski")
 
     assert result.outcome == "LOCAL_ANSWER"
 
@@ -175,7 +184,9 @@ def test_general_query_does_not_leak_across_other_domains_by_mistake(session):
 # ── §14.14: paid-AI avoidance metrics ─────────────────────────────────────
 
 def test_local_answer_logs_answer_run_without_paid_ai(session):
-    ingest_text(session, domain="engineering", text="Решение: используем Postgres.")
+    # Четыре слова — минимум `is_quotable()`: фрагмент из трёх слов не
+    # годится в цитату-ответ и до строки прогона не доходит вовсе.
+    ingest_text(session, domain="engineering", text="Решение по базе: используем Postgres.")
     session.flush()
 
     probe(session, query="какое решение приняли")
@@ -225,17 +236,21 @@ def test_needs_reasoning_does_not_log_answer_run(monkeypatch):
 
 # ── §14.13 quality gate ────────────────────────────────────────────────────
 
-def test_local_answer_evidence_never_below_threshold(session):
-    """§14.13: то, что дошло до LOCAL_ANSWER, обязано пройти порог —
-    проверка механизма фильтрации на реальном (не сконструированном под
-    конкретное число) корпусе, а не догадка о точном значении ts_rank."""
-    ingest_text(session, domain="engineering", text="Решение: используем Postgres.")
+def test_a_longer_question_about_the_same_thing_is_not_punished(session):
+    """Замер 06.09.2026: тот же документ, то же совпадение, ранг 0.02026
+    на коротком вопросе и 0.01520 на длинном — `ts_rank` считает долю
+    совпавших лексем от всего запроса. Абсолютный порог на этой величине
+    наказывал за подробность вопроса; порога больше нет, и оба вопроса
+    обязаны дойти до ответа."""
+    ingest_text(session, domain="engineering", text="Решение №1: используем Postgres.")
+    ingest_text(session, domain="engineering", text="Решение №2: используем Docker.")
     session.flush()
 
-    result = probe(session, query="какое решение приняли")
+    short = probe(session, query="какое решение приняли")
+    long = probe(session, query="какие решения приняли по инфраструктуре")
 
-    assert result.outcome == "LOCAL_ANSWER"
-    assert all(e.rank >= MIN_CHUNK_RANK_SCORE for e in result.evidence)
+    assert short.outcome == "LOCAL_ANSWER"
+    assert long.outcome == "LOCAL_ANSWER", "длинный вопрос о том же остался без ответа"
 
 
 # ── ADR-025 Phase 2: pgvector дополняет лексику ────────────────────────────
@@ -259,7 +274,7 @@ def test_semantic_paraphrase_without_shared_stems_now_matches(session, monkeypat
     «есть только перефразировка, ни одного общего словного корня») —
     теперь его находит _vector_search."""
     same_topic = _one_hot_embedding(0)
-    monkeypatch.setattr(ingest_module, "embed_texts_or_none",
+    monkeypatch.setattr(chunking_module, "embed_texts_or_none",
                         lambda texts: [same_topic for _ in texts])
     monkeypatch.setattr(probe_module, "embed_texts_or_none",
                         lambda texts: [same_topic for _ in texts])
@@ -268,7 +283,7 @@ def test_semantic_paraphrase_without_shared_stems_now_matches(session, monkeypat
                original_filename="infra-note.md")
     session.flush()
 
-    result = probe(session, query="что там с хранилищем данных")
+    result = probe(session, query="как у нас с хранилищем данных")
 
     assert result.outcome == "LOCAL_ANSWER"
     assert result.mode == "Z0"
@@ -301,7 +316,7 @@ def test_vector_search_does_not_leak_across_tenants(session, monkeypatch):
     session.flush()
 
     same_vector = _one_hot_embedding(1)
-    monkeypatch.setattr(ingest_module, "embed_texts_or_none",
+    monkeypatch.setattr(chunking_module, "embed_texts_or_none",
                         lambda texts: [same_vector for _ in texts])
     monkeypatch.setattr(probe_module, "embed_texts_or_none",
                         lambda texts: [same_vector for _ in texts])
@@ -310,7 +325,7 @@ def test_vector_search_does_not_leak_across_tenants(session, monkeypatch):
                knowledge_user_id=other_user.id)
     session.flush()
 
-    result = probe(session, query="что там с инфраструктурой у нас")
+    result = probe(session, query="как у нас с инфраструктурой")
 
     assert result.outcome == "NEEDS_REASONING"
 
@@ -407,12 +422,18 @@ def test_chunk_ranking_does_not_divide_by_length():
     assert CHUNK_RANK_NORMALIZATION == 0
 
 
-def test_chunk_threshold_separates_measured_noise_from_measured_answers():
-    """Числа из прогона 378 на живом корпусе: самый шумный несвязанный
-    вопрос дал 0.01216, самый слабый настоящий ответ — 0.03040."""
-    from helm_core.knowledge.probe import MIN_CHUNK_RANK_SCORE
+def test_chunks_have_no_absolute_rank_threshold_any_more():
+    """Порог 0.02 был выбран как середина зазора «шум 0.01216 против
+    ответа 0.03040» на вопросах разведки 378 — и на вопросах другой
+    длины этот зазор не существует (замер 06.09.2026, см. комментарий в
+    probe.py). Числа, зависящего от длины вопроса, в гейте быть не
+    должно; отвечает ли найденное на вопрос, решает синтез."""
+    import inspect
 
-    assert 0.01216 < MIN_CHUNK_RANK_SCORE < 0.03040
+    from helm_core.knowledge import probe as probe_mod
+
+    assert not hasattr(probe_mod, "MIN_CHUNK_RANK_SCORE")
+    assert "MIN_CHUNK_RANK_SCORE" not in inspect.getsource(probe_mod.probe)
 
 
 def test_memory_keeps_its_own_threshold():
@@ -425,4 +446,149 @@ def test_memory_keeps_its_own_threshold():
 
     source = inspect.getsource(probe_mod.probe)
     assert "hit.rank >= MIN_RANK_SCORE" in source, "порог памяти уехал вместе с чанками"
-    assert "e.rank >= MIN_CHUNK_RANK_SCORE" in source
+
+
+# ── P4: ответ собирается из НЕСКОЛЬКИХ фрагментов ─────────────────────────
+#
+# Распоряжение владельца 06.09.2026: «Несколько найденных фрагментов
+# должны позволять собрать ответ; автоматическая выдача ближайшей цитаты
+# при количестве находок больше одной не выполняет эту задачу».
+#
+# Сама модель здесь подменяется: её качество — вопрос живого замера, а не
+# unit-теста (тот же принцип, что у эмбеддингов выше). Проверяется
+# проводка: что в синтез уходят ВСЕ найденные фрагменты, что наружу
+# уходят ровно процитированные источники и что три исхода синтеза
+# (ответ / «здесь ответа нет» / модель недоступна) ведут себя по-разному.
+
+def _health_and_vector_off(monkeypatch):
+    monkeypatch.setattr(probe_module, "_health_lexical_search", lambda *a, **kw: [])
+    monkeypatch.setattr(probe_module, "embed_texts_or_none", lambda texts: [None])
+
+
+def test_answer_follows_the_content_of_the_fragments_not_their_rank(session, monkeypatch):
+    """Живой прогон 383: на «какое у меня было давление?» первым по рангу
+    встал протокол эндоскопии, а консультация с самим давлением была
+    третьей и в ответ не попадала. Ответ обязан идти за содержанием."""
+    _health_and_vector_off(monkeypatch)
+    ingest_text(session, domain="health",
+                text="Эзофагогастродуоденоскопия. Давление на стенку пищевода в норме. "
+                     "Осмотр выполнен под местной анестезией, жалоб нет.",
+                original_filename="эндоскопия.pdf")
+    ingest_text(session, domain="health",
+                text="Консультация кардиолога. Давление 120/80 мм рт. ст., пульс 68.",
+                original_filename="кардиолог.pdf")
+    session.flush()
+
+    seen = {}
+
+    def fake_synthesis(question, fragments):
+        seen["fragments"] = fragments
+        picked = next(i for i, f in enumerate(fragments, start=1) if "120/80" in f)
+        return Synthesis(answered=True, text="Давление 120/80 мм рт. ст.", used=(picked,))
+
+    monkeypatch.setattr(probe_module, "synthesize_or_none", fake_synthesis)
+    result = probe(session, query="какое у меня было давление")
+
+    assert len(seen["fragments"]) >= 2, "в синтез ушёл не весь найденный материал"
+    assert result.outcome == "LOCAL_ANSWER"
+    assert result.mode == "Z2"
+    assert "120/80" in result.answer_text
+    assert [s["original_filename"] for s in result.sources] == ["кардиолог.pdf"], \
+        "наружу ушли не процитированные источники"
+
+
+def test_the_answer_names_its_sources(session, monkeypatch):
+    """Владелец обязан видеть, по чему собран ответ, — иначе проверить
+    его нечем (контракт ответа 05.09.2026, п. 4 аудита 06.09.2026)."""
+    _health_and_vector_off(monkeypatch)
+    ingest_text(session, domain="health", text="Консультация кардиолога. Давление 120/80.",
+                original_filename="кардиолог.pdf")
+    session.flush()
+    monkeypatch.setattr(probe_module, "synthesize_or_none",
+                        lambda q, f: Synthesis(answered=True, text="Давление 120/80.", used=(1,)))
+
+    result = probe(session, query="какое у меня было давление")
+
+    assert "кардиолог.pdf" in result.answer_text
+
+
+def test_model_says_the_fragments_do_not_answer_and_that_is_free(session, monkeypatch):
+    """«Отсутствие находок не является моим разрешением оплатить ответ»:
+    прочитанное и не подошедшее — тоже отсутствие находок."""
+    _health_and_vector_off(monkeypatch)
+    ingest_text(session, domain="health", text="Консультация кардиолога. Давление 120/80.",
+                original_filename="кардиолог.pdf")
+    session.flush()
+    monkeypatch.setattr(probe_module, "synthesize_or_none",
+                        lambda q, f: Synthesis(answered=False))
+
+    result = probe(session, query="какое у меня было давление")
+
+    assert result.outcome == "LOCAL_NOT_FOUND"
+    assert result.mode == "N0"
+    assert "кардиолог.pdf" in result.answer_text, "не видно, что именно было просмотрено"
+    assert result.sources, "источники обязаны остаться и при отказе"
+    run = session.scalars(select(KnowledgeAnswerRun)).all()[-1]
+    assert run.paid_ai_used is False
+
+
+def test_general_question_still_escalates_when_the_fragments_do_not_answer(session, monkeypatch):
+    """Правила остальных направлений не меняются: общий вопрос, на
+    который найденное не отвечает, идёт к платной модели, как и раньше."""
+    _health_and_vector_off(monkeypatch)
+    ingest_text(session, domain="engineering",
+                text="Английский язык на проекте используется в коммитах и в документации.",
+                original_filename="conventions.md")
+    session.flush()
+    monkeypatch.setattr(probe_module, "synthesize_or_none",
+                        lambda q, f: Synthesis(answered=False))
+
+    result = probe(session, query="переведи этот текст на английский")
+
+    assert result.outcome == "NEEDS_REASONING"
+
+
+def test_unavailable_model_degrades_to_a_quote_not_to_silence(session, monkeypatch):
+    """Fail-open: недоступность локальной модели не отменяет ответ —
+    уходит прежняя детерминированная цитата."""
+    _health_and_vector_off(monkeypatch)
+    monkeypatch.setattr(probe_module, "synthesize_or_none", lambda q, f: None)
+    monkeypatch.setattr(probe_module, "rephrase_or_none", lambda *a, **kw: None)
+    ingest_text(session, domain="engineering", text="Встречу перенесли на четверг.",
+                original_filename="meeting-notes.md")
+    session.flush()
+
+    result = probe(session, query="когда встреча")
+
+    assert result.outcome == "LOCAL_ANSWER"
+    assert result.mode == "Z0"
+    assert "четверг" in result.answer_text
+
+
+def test_dialogue_context_confines_the_search_to_the_named_document(session, monkeypatch):
+    """«Что там прописал врач?» — «там» это документ прошлого ответа.
+    Искать по всему корпусу значило бы снова угадывать, о чём речь."""
+    _health_and_vector_off(monkeypatch)
+    first = ingest_text(session, domain="health",
+                        text="Приём терапевта. Назначен приём препарата А три раза в день.",
+                        original_filename="терапевт.pdf")
+    ingest_text(session, domain="health",
+                text="Приём хирурга. Назначен препарат Б однократно.",
+                original_filename="хирург.pdf")
+    session.flush()
+
+    seen = {}
+
+    def fake_synthesis(question, fragments):
+        seen["fragments"] = fragments
+        return Synthesis(answered=True, text="Препарат А три раза в день.", used=(1,))
+
+    monkeypatch.setattr(probe_module, "synthesize_or_none", fake_synthesis)
+    result = probe(session, query="что там прописал врач?",
+                   context=DialogueContext(question="что было на приёме терапевта?",
+                                           source_ids=(str(first.id),), memory=True))
+
+    assert seen["fragments"], "поиск не дошёл до синтеза"
+    assert all("хирург" not in f for f in seen["fragments"]), \
+        "поиск вышел за пределы названного документа"
+    assert [s["original_filename"] for s in result.sources] == ["терапевт.pdf"]

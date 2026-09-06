@@ -219,7 +219,7 @@ def test_unrecognised_question_still_goes_the_old_way(monkeypatch):
     monkeypatch.setattr(probe_mod, "embed_texts_or_none", lambda t: [None])
     seen = []
 
-    def fake_lexical(session, *, query, domain, knowledge_user_id):
+    def fake_lexical(session, *, query, domain, knowledge_user_id, source_ids=()):
         seen.append(query)
         return []
 

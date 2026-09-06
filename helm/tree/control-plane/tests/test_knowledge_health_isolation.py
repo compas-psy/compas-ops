@@ -37,7 +37,7 @@ from helm_core.knowledge import ingest as ingest_module
 from helm_core.knowledge.ingest import ingest_text, register_file_for_ingest
 from helm_core.knowledge.probe import probe
 from helm_core.knowledge.semantic_extract import ExtractedAtom, ExtractedEntity, WindowExtraction
-from helm_core.knowledge.semantic_publish import publish_semantic_run
+from helm_core.knowledge.semantic_publish import SEMANTIC_VERSION, publish_semantic_run
 from helm_core.knowledge.worker import process_job
 from helm_core.models import (
     HealthKnowledgeChunk, HealthKnowledgeEdge, HealthKnowledgeEntityAlias,
@@ -369,7 +369,7 @@ def test_probe_health_domain_finds_chunk_only_in_health_schema(session, health_c
                knowledge_user_id=user.id)
     session.flush()
 
-    result = probe(session, query="что там с анализом крови", domain="health",
+    result = probe(session, query="что было в анализе крови", domain="health",
                    knowledge_user_id=user.id)
 
     assert result.outcome == "LOCAL_ANSWER"
@@ -385,7 +385,7 @@ def test_probe_general_query_finds_health_chunk_after_move_to_sidecar(
                knowledge_user_id=user.id)
     session.flush()
 
-    result = probe(session, query="что там с анализом крови", knowledge_user_id=user.id)
+    result = probe(session, query="что было в анализе крови", knowledge_user_id=user.id)
 
     assert result.outcome == "LOCAL_ANSWER"
 
@@ -409,7 +409,7 @@ def test_probe_general_query_does_not_answer_health_twice_during_migration(
     ))
     session.flush()
 
-    result = probe(session, query="что там с анализом крови", knowledge_user_id=user.id)
+    result = probe(session, query="что было в анализе крови", knowledge_user_id=user.id)
 
     assert result.outcome == "LOCAL_ANSWER"
     assert len(result.evidence) == 1
@@ -423,7 +423,7 @@ def test_probe_general_query_still_excludes_zapiski_client_content(
                knowledge_user_id=user.id)
     session.flush()
 
-    result = probe(session, query="что там про тревогу на работе", knowledge_user_id=user.id)
+    result = probe(session, query="про тревогу на работе", knowledge_user_id=user.id)
 
     assert result.outcome == "NEEDS_REASONING"
 
@@ -651,7 +651,7 @@ def test_health_writer_preserves_entity_type_and_statement_text(session, health_
     )
     result = publish_semantic_run(
         session, source=source, text="Приём эндокринолога.",
-        extract=lambda *a, **kw: extraction)
+        extract=lambda *a, **kw: extraction, semantic_version=SEMANTIC_VERSION)
     session.commit()
     assert result.status == SemanticRunStatus.READY
 

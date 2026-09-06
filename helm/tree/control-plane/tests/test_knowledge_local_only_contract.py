@@ -183,7 +183,8 @@ def test_unquotable_lexical_hits_do_not_block_the_vector_branch(monkeypatch):
 
     asked_vector = {}
 
-    def _vector(session, *, query_embedding, domain, knowledge_user_id, exclude_chunk_ids):
+    def _vector(session, *, query_embedding, domain, knowledge_user_id,
+                exclude_chunk_ids, source_ids=()):
         asked_vector["exclude"] = exclude_chunk_ids
         return [real]
 
@@ -288,7 +289,8 @@ def _dispatch_with(monkeypatch, outcome_payload):
     monkeypatch.setattr(plugin, "_resolve_batch", lambda *a, **kw: None)
     monkeypatch.setattr(plugin, "_register_task", lambda *a, **kw: {"task_id": "t-1"})
     monkeypatch.setattr(plugin, "_send_reply", lambda gw, src, text: sent.append(text))
-    monkeypatch.setattr(plugin, "_probe_local_answer", lambda text: outcome_payload)
+    monkeypatch.setattr(plugin, "_probe_local_answer",
+                        lambda text, context=None: outcome_payload)
     return plugin._on_pre_gateway_dispatch(_Event("какие анализы я сдавал?"), None), sent
 
 

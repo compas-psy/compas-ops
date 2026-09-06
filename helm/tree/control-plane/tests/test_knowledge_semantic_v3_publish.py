@@ -31,7 +31,7 @@ from helm_core.knowledge.semantic_extract import (
     ExtractedAtom, ExtractedEdge, ExtractedEntity, ExtractionFailed, MAX_ATOMS_PER_WINDOW,
     WindowExtraction, WindowTruncated,
 )
-from helm_core.knowledge.semantic_publish import publish_semantic_run
+from helm_core.knowledge.semantic_publish import SEMANTIC_VERSION, publish_semantic_run
 from helm_core.knowledge.semantic_windows import build_windows
 from helm_core.knowledge.tenancy import bind_knowledge_user
 from helm_core.models import (
@@ -123,7 +123,7 @@ def _windows(session, run_id):
 
 def test_every_window_of_the_source_is_terminal(session, source):
     result = publish_semantic_run(session, source=source, text=long_source_text(),
-                                  extract=marker_aware_extractor)
+                                  extract=marker_aware_extractor, semantic_version=SEMANTIC_VERSION)
 
     rows = _windows(session, result.run_id)
     assert rows, "окна не заведены — проверять нечего"
@@ -140,7 +140,7 @@ def test_content_after_char_4000_is_actually_atomized(session, source):
     assert text.index(TAIL_MARKER) > 4000, "фикстура перестала быть длинной"
 
     result = publish_semantic_run(session, source=source, text=text,
-                                  extract=marker_aware_extractor)
+                                  extract=marker_aware_extractor, semantic_version=SEMANTIC_VERSION)
 
     labels = session.scalars(select(KnowledgeNode.canonical_label).where(
         KnowledgeNode.semantic_run_id == result.run_id)).all()
@@ -154,7 +154,7 @@ def test_long_source_keeps_more_than_twenty_atoms(session, source):
     result = publish_semantic_run(
         session, source=source, text=long_source_text(),
         extract=lambda t, *, domain, heading_path=(), model="": _extraction(
-            f"w{abs(hash(t)) % 10000}", window_text=t, atoms=8))
+            f"w{abs(hash(t)) % 10000}", window_text=t, atoms=8), semantic_version=SEMANTIC_VERSION)
 
     atoms = session.scalars(select(KnowledgeNode).where(
         KnowledgeNode.semantic_run_id == result.run_id,
@@ -177,7 +177,7 @@ def test_window_at_the_cap_is_split_not_truncated(session, source):
         return _extraction(f"w{abs(hash(window_text)) % 10000}", window_text=window_text)
 
     result = publish_semantic_run(session, source=source, text=long_source_text(),
-                                  extract=cap_on_long)
+                                  extract=cap_on_long, semantic_version=SEMANTIC_VERSION)
 
     rows = _windows(session, result.run_id)
     split = [w for w in rows if w.status == SemanticWindowStatus.SPLIT]
@@ -205,7 +205,7 @@ def test_unrecoverable_window_makes_the_run_degraded(session, source):
         return _extraction(f"w{calls['n']}", window_text=window_text)
 
     result = publish_semantic_run(session, source=source, text=long_source_text(),
-                                  extract=fails_once)
+                                  extract=fails_once, semantic_version=SEMANTIC_VERSION)
 
     assert result.status == SemanticRunStatus.DEGRADED
     assert result.windows_failed == 1
@@ -223,7 +223,7 @@ def test_l1_stays_searchable_when_l2_degraded(session, source):
         raise ExtractionFailed("модель недоступна")
 
     result = publish_semantic_run(session, source=source, text=long_source_text(),
-                                  extract=always_fails)
+                                  extract=always_fails, semantic_version=SEMANTIC_VERSION)
     assert result.status == SemanticRunStatus.FAILED
 
     found = probe(session, query="консультацию провёл эндокринолог",
@@ -235,7 +235,7 @@ def test_l1_stays_searchable_when_l2_degraded(session, source):
 
 def test_ready_run_becomes_current_atomically(session, source):
     result = publish_semantic_run(session, source=source, text=long_source_text(),
-                                  extract=marker_aware_extractor)
+                                  extract=marker_aware_extractor, semantic_version=SEMANTIC_VERSION)
 
     assert result.status == SemanticRunStatus.READY
     assert result.switched is True
@@ -251,7 +251,7 @@ def test_failed_run_never_becomes_current(session, source, extractor, expected):
     """Неудачный разбор не трогает указатель. Прежняя ревизия — если она
     есть — остаётся текущей (§14.20)."""
     result = publish_semantic_run(session, source=source, text=long_source_text(),
-                                  extract=extractor)
+                                  extract=extractor, semantic_version=SEMANTIC_VERSION)
 
     assert result.status == expected
     assert result.switched is False
@@ -264,7 +264,7 @@ def test_degraded_run_does_not_replace_a_good_one(session, source):
     рабочий граф (§14.20 «Never destroy last known-good semantic graph
     before replacement passes»)."""
     good = publish_semantic_run(session, source=source, text=long_source_text(),
-                                extract=marker_aware_extractor)
+                                extract=marker_aware_extractor, semantic_version=SEMANTIC_VERSION)
     assert good.switched is True
 
     calls = {"n": 0}
@@ -288,7 +288,7 @@ def test_every_node_of_a_run_has_provenance(session, source):
     """§30.8.5 F: у каждого узла есть упоминание с местом в источнике.
     Узел без происхождения — утверждение без доказательства."""
     result = publish_semantic_run(session, source=source, text=long_source_text(),
-                                  extract=marker_aware_extractor)
+                                  extract=marker_aware_extractor, semantic_version=SEMANTIC_VERSION)
 
     nodes = session.scalars(select(KnowledgeNode).where(
         KnowledgeNode.semantic_run_id == result.run_id)).all()
@@ -314,7 +314,7 @@ def test_provenance_span_points_at_the_node_quote_not_the_whole_window(session, 
     text = long_source_text()
     result = publish_semantic_run(session, source=source, text=text,
                                   extract=lambda t, *, domain, heading_path=(), model="":
-                                  _extraction(f"w{abs(hash(t)) % 10000}", window_text=t, atoms=3))
+                                  _extraction(f"w{abs(hash(t)) % 10000}", window_text=t, atoms=3), semantic_version=SEMANTIC_VERSION)
 
     windows = {w.ordinal: w for w in _windows(session, result.run_id)}
     mentions = session.scalars(select(KnowledgeNodeMention).where(
@@ -345,7 +345,7 @@ def test_provenance_span_points_at_the_node_quote_not_the_whole_window(session, 
 
 def test_edges_are_typed_and_bound_to_the_run(session, source):
     result = publish_semantic_run(session, source=source, text=long_source_text(),
-                                  extract=marker_aware_extractor)
+                                  extract=marker_aware_extractor, semantic_version=SEMANTIC_VERSION)
 
     edges = session.scalars(select(KnowledgeEdge).where(
         KnowledgeEdge.semantic_run_id == result.run_id)).all()
@@ -361,7 +361,7 @@ def test_no_knowledge_window_is_distinguishable_from_a_silent_failure(session, s
     объект». Пустой разбор даёт NO_KNOWLEDGE — С хэшем."""
     result = publish_semantic_run(
         session, source=source, text=long_source_text(),
-        extract=lambda t, *, domain, heading_path=(), model="": WindowExtraction())
+        extract=lambda t, *, domain, heading_path=(), model="": WindowExtraction(), semantic_version=SEMANTIC_VERSION)
 
     rows = _windows(session, result.run_id)
     assert rows

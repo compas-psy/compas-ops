@@ -90,14 +90,22 @@ def test_inbound_rejects_non_owner(client):
 def test_knowledge_probe_endpoint_returns_needs_reasoning_on_empty_corpus(client):
     r = post_internal(client, "/internal/knowledge/probe", {"query": "что угодно"})
     assert r.status_code == 200, r.text
-    assert r.json() == {"outcome": "NEEDS_REASONING", "mode": None, "answer_text": None}
+    body = r.json()
+    # Сравнение по трём полям, а не всего словаря: с 06.09.2026 ответ
+    # несёт ещё `sources` и `answer_run_id` — вызывающему нужно чем
+    # показать источник и чем сцепить ответ со строкой журнала.
+    assert body["outcome"] == "NEEDS_REASONING"
+    assert body["mode"] is None
+    assert body["answer_text"] is None
 
 
 def test_knowledge_probe_endpoint_returns_local_answer(client):
     from helm_core.knowledge.ingest import ingest_text
 
     with client.app.state.session_factory() as session:
-        ingest_text(session, domain="engineering", text="Решение: используем Postgres.")
+        # Четыре слова — минимум `is_quotable()`: фрагмент короче в
+        # цитату-ответ не годится и до LOCAL_ANSWER не доходит.
+        ingest_text(session, domain="engineering", text="Решение по базе: используем Postgres.")
         session.commit()
 
     r = post_internal(client, "/internal/knowledge/probe", {"query": "какое решение приняли"})

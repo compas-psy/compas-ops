@@ -709,7 +709,8 @@ def test_webhook_answers_locally_without_calling_chief_when_probe_finds_answer(a
     from helm_core.knowledge.ingest import ingest_text
 
     with app.state.session_factory() as session:
-        ingest_text(session, domain="engineering", text="Решение: используем Postgres.")
+        # Четыре слова — минимум `is_quotable()` (answer_format.py).
+        ingest_text(session, domain="engineering", text="Решение по базе: используем Postgres.")
         session.commit()
 
     response = post_hook(client, _update(text="какое решение приняли"))

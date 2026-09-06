@@ -11,7 +11,7 @@
 (окна, ревизии, гейт), не содержимое итоговых полей узла.
 
 Поэтому здесь — не unit-тест на `_write_extraction()` и не тест на
-extractor, а сквозная проверка через настоящий `publish_semantic_run()`
+extractor, а сквозная проверка через настоящий `publish_semantic_run(, semantic_version=SEMANTIC_VERSION)`
 с перечитыванием из СВЕЖЕЙ сессии после commit. Свежая сессия — не
 формальность: ORM-объект, к которому ещё не притронулся `expire`,
 показал бы значение, которое разработчик положил в конструктор, а не
@@ -28,7 +28,7 @@ from helm_core.knowledge.ingest import ingest_text
 from helm_core.knowledge.semantic_extract import (
     ExtractedAtom, ExtractedEdge, ExtractedEntity, WindowExtraction,
 )
-from helm_core.knowledge.semantic_publish import publish_semantic_run
+from helm_core.knowledge.semantic_publish import SEMANTIC_VERSION, publish_semantic_run
 from helm_core.knowledge.tenancy import bind_knowledge_user
 from helm_core.models import KnowledgeNode, SemanticRunStatus
 
@@ -72,7 +72,7 @@ def test_entity_type_and_subtype_both_survive_commit(engine, session, source):
                         label="Кириченко Сергей Александрович"),
     ])
     result = publish_semantic_run(session, source=source, text="текст",
-                                  extract=_one_window_extractor(extraction))
+                                  extract=_one_window_extractor(extraction), semantic_version=SEMANTIC_VERSION)
     session.commit()
     assert result.status == SemanticRunStatus.READY
 
@@ -94,7 +94,7 @@ def test_concept_entity_type_and_subtype_both_survive_commit(engine, session, so
                         label="гастроэнтеролог"),
     ])
     result = publish_semantic_run(session, source=source, text="текст",
-                                  extract=_one_window_extractor(extraction))
+                                  extract=_one_window_extractor(extraction), semantic_version=SEMANTIC_VERSION)
     session.commit()
 
     nodes = _refetch_nodes(engine, result.run_id)
@@ -117,7 +117,7 @@ def test_fact_title_and_text_are_both_preserved_and_distinct(engine, session, so
         ExtractedAtom(local_id="a1", kind="fact", title=title, text=text),
     ])
     result = publish_semantic_run(session, source=source, text="текст",
-                                  extract=_one_window_extractor(extraction))
+                                  extract=_one_window_extractor(extraction), semantic_version=SEMANTIC_VERSION)
     session.commit()
 
     nodes = _refetch_nodes(engine, result.run_id)
@@ -143,7 +143,7 @@ def test_decision_multiline_statement_text_is_not_truncated_or_replaced(engine, 
         ExtractedAtom(local_id="a1", kind="decision", title=title, text=text),
     ])
     result = publish_semantic_run(session, source=source, text="текст",
-                                  extract=_one_window_extractor(extraction))
+                                  extract=_one_window_extractor(extraction), semantic_version=SEMANTIC_VERSION)
     session.commit()
 
     nodes = _refetch_nodes(engine, result.run_id)
@@ -172,7 +172,7 @@ def test_entity_and_atom_do_not_cross_contaminate_their_fields(engine, session, 
                              to_local_id="e1", role="doctor")],
     )
     result = publish_semantic_run(session, source=source, text="текст",
-                                  extract=_one_window_extractor(extraction))
+                                  extract=_one_window_extractor(extraction), semantic_version=SEMANTIC_VERSION)
     session.commit()
 
     nodes = {n.kind: n for n in _refetch_nodes(engine, result.run_id)}

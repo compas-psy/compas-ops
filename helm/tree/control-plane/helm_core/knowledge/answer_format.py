@@ -207,3 +207,44 @@ def is_quotable(text: str) -> bool:
     if not _HAS_LOWERCASE_RE.search(stripped):
         return False
     return len(stripped.split()) >= _MIN_QUOTABLE_WORDS
+
+
+def _cite_list(filenames: list[str]) -> str:
+    """Имена источников без повторов, в порядке появления."""
+    seen: list[str] = []
+    for name in filenames:
+        if name and name not in seen:
+            seen.append(name)
+    return ", ".join(seen)
+
+
+def format_with_sources(answer: str, filenames: list[str], *,
+                        unsupported_period: str | None = None) -> str:
+    """Ответ + то, по чему он собран, + честно названное неприменённое
+    условие. Источники печатаются всегда, когда они есть: без них ответ
+    локальной модели нечем проверить (см. synthesis.py).
+
+    `unsupported_period` — период из вопроса, который исполнитель
+    применить не умеет. Тот же принцип, что уже действует в
+    `format_doctors()`: молчаливое игнорирование условия — худший из
+    вариантов, потому что ответ выглядит ответом на заданный вопрос.
+    """
+    parts = [answer.strip()]
+    if unsupported_period:
+        parts.append(f"Период «{unsupported_period}» я применить не умею — "
+                     f"смотрел по всем записям.")
+    cites = _cite_list(filenames)
+    if cites:
+        parts.append(f"Источники: {cites}")
+    return "\n\n".join(parts)
+
+
+def format_nothing_answered(filenames: list[str]) -> str:
+    """Локальная модель прочитала найденное и говорит, что ответа там
+    нет. Это ответ, а не сбой: владелец видит и отказ, и то, что было
+    просмотрено, — и может открыть эти документы сам."""
+    cites = _cite_list(filenames)
+    text = "Ответа на этот вопрос в ваших документах я не нашёл."
+    if cites:
+        text += f"\n\nСмотрел: {cites}"
+    return text

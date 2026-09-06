@@ -116,7 +116,11 @@ REQUEST_TIMEOUT = 5
 #: считала бесплатным. Потолок probe поднят отдельно, а не вместе с
 #: остальными вызовами: регистрации задачи и админским командам лишние
 #: секунды ожидания не нужны, они и должны падать быстро.
-PROBE_TIMEOUT = 30
+#: Поднят до 60 c 06.09.2026 вместе с локальным синтезом (P4): у него
+#: свой потолок 45 c (synthesis.py) — пять фрагментов вместо одного,
+#: плюс холодная загрузка весов. Прежние 30 c означали бы то же, что
+#: описано абзацем выше: ответ есть, но плагин его не дожидается.
+PROBE_TIMEOUT = 60
 #: §14.5.1 "bounded size" — тот же потолок, что уже применяется на
 #: стороне Control Plane (chat_intake.MAX_ATTACHMENT_BYTES); проверка
 #: здесь просто экономит скачивание заведомо слишком большого файла,
@@ -127,6 +131,14 @@ MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 #: рестарт. Смысл этого кэша — донести task_id из pre_gateway_dispatch до
 #: pre_llm_call в рамках той же обработки сообщения, не более.
 _task_ids: dict[str, str] = {}
+
+#: Предыдущий ход разговора о памяти, по чату. Живёт там же и столько
+#: же, сколько `_task_ids`: в памяти процесса гейтвея, до рестарта.
+#: Нужен, чтобы следующий вопрос можно было понять — «а что он
+#: рекомендовал?» без предыдущего вопроса не значит ничего (P4,
+#: распоряжение владельца 06.09.2026). Control Plane переписку не видит
+#: и хранить её не должен: контекст передаётся в probe явно, ходом.
+_last_turn: dict[str, dict] = {}
 
 
 def _read_secret() -> str:
@@ -516,7 +528,7 @@ async def _handle_batch_attachment_async(event, gateway, source, channel: str) -
         _send_reply(gateway, source, staged["text"])
 
 
-def _probe_local_answer(text: str) -> dict | None:
+def _probe_local_answer(text: str, context: dict | None = None) -> dict | None:
     """Free-first Knowledge Probe (ТЗ §14.11, v3.4), ДО обращения к LLM.
 
     Три исхода, и путать их нельзя (правка 06.09.2026):
@@ -537,7 +549,10 @@ def _probe_local_answer(text: str) -> dict | None:
     доходит вовсе. Значит сюда попадает только сбой САМОГО probe, и
     честный отказ здесь не отнимает у владельца обычную переписку.
     """
-    body = json.dumps({"query": text}).encode("utf-8")
+    payload: dict = {"query": text}
+    if context:
+        payload["context"] = context
+    body = json.dumps(payload).encode("utf-8")
     ts = str(time.time())
     sig = _sign(_read_secret(), ts, body)
     req = urllib.request.Request(
@@ -739,8 +754,25 @@ def _on_pre_gateway_dispatch(event, gateway):
     if source and source.chat_id:
         _task_ids[str(source.chat_id)] = result["task_id"]
 
-    probe_result = _probe_local_answer(event.text)
+    chat_key = str(source.chat_id) if source and source.chat_id is not None else None
+    probe_result = _probe_local_answer(
+        event.text, _last_turn.get(chat_key) if chat_key else None)
     outcome = (probe_result or {}).get("outcome")
+    if chat_key and outcome and outcome != "LOCAL_UNAVAILABLE":
+        # Ход запоминается ЛЮБОЙ, кроме собственного сбоя: продолжением
+        # разговора о памяти считается только `memory=True`, но текст
+        # прошлого вопроса нужен и после платного ответа — «а что он
+        # рекомендовал?» опирается на него независимо от того, кто
+        # отвечал в прошлый раз.
+        sources = (probe_result or {}).get("sources") or []
+        _last_turn[chat_key] = {
+            "question": event.text,
+            "source_ids": [s["source_id"] for s in sources if s.get("source_id")][:10],
+            "filenames": [s["original_filename"] for s in sources
+                          if s.get("original_filename")][:10],
+            "memory": outcome in ("LOCAL_ANSWER", "LOCAL_NOT_FOUND",
+                                  "NEEDS_CLARIFICATION"),
+        }
     if outcome == "LOCAL_ANSWER":
         _send_reply(gateway, source, probe_result["answer_text"])
         return {"action": "skip", "reason": "knowledge_probe_local_answer"}

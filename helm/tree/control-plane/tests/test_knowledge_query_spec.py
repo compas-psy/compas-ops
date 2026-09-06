@@ -20,7 +20,8 @@ import uuid
 import pytest
 
 from helm_core.knowledge.query_spec import (INTENT_DECISION, INTENT_ENUMERATE,
-                                            INTENT_LOOKUP, build_query_spec)
+                                            INTENT_LOOKUP, MODE_GENERAL, MODE_MEMORY,
+                                            DialogueContext, build_query_spec)
 
 TENANT = uuid.UUID("00000000-0000-0000-0000-00000000beef")
 TODAY = datetime.date(2026, 9, 6)
@@ -103,9 +104,64 @@ def test_deictic_without_antecedent_asks_instead_of_guessing():
 
 
 def test_dialogue_context_removes_the_need_to_ask():
-    """Правило про указательное слово общее, а не про врачей. Появится
-    память диалога — менять придётся вызов, а не правило."""
-    assert spec("что там прописал врач?", has_dialogue_context=True).clarification is None
+    """Правило про указательное слово общее, а не про врачей. Память
+    диалога появилась 06.09.2026 — правило не изменилось, изменился
+    вызов, ровно как и было сказано в прежней версии этого теста."""
+    context = DialogueContext(question="что было на приёме 12 марта?",
+                              source_ids=("11111111-1111-1111-1111-111111111111",),
+                              memory=True)
+    result = spec("что там прописал врач?", context=context)
+    assert result.clarification is None
+    assert result.focus_source_ids == ("11111111-1111-1111-1111-111111111111",)
+
+
+def test_deixis_with_a_dialogue_without_sources_still_asks():
+    """Разговор был, но показать не на что: прошлый ответ источников не
+    дал. Догадка здесь так же неуместна, как и без разговора вовсе."""
+    context = DialogueContext(question="переведи это", memory=False)
+    assert spec("что там прописал врач?", context=context).clarification is not None
+
+
+# ── режим запроса: чем закрывается платный переход (владелец, 06.09.2026) ──
+#
+# «Закрой local-only через режим запроса, а не словарь личных
+# местоимений». Три вопроса ниже названы владельцем поимённо: на них
+# прежний `is_personal_data_question()` отвечал False, и пустой поиск
+# уводил вопрос в платную модель.
+
+@pytest.mark.parametrize("question", [
+    "Что назначил кардиолог?",
+    "Какие решения приняты по подзадачам в ШАГАХ?",
+    "А что он рекомендовал?",
+])
+def test_named_by_the_owner_questions_are_memory_mode(question):
+    assert spec(question).mode == MODE_MEMORY
+
+
+def test_a_question_after_a_memory_answer_continues_the_memory_dialogue():
+    """Вопрос, в котором нет ни одного признака формы, всё равно
+    продолжает разговор о памяти: режим — свойство разговора."""
+    context = DialogueContext(question="что назначил кардиолог?",
+                              source_ids=("11111111-1111-1111-1111-111111111111",),
+                              memory=True)
+    assert spec("а сколько это стоило?", context=context).mode == MODE_MEMORY
+
+
+def test_a_task_after_a_memory_answer_is_not_a_continuation():
+    """Поручение — не вопрос: правила остальных направлений разговор о
+    памяти не отменяет."""
+    context = DialogueContext(question="что назначил кардиолог?", memory=True)
+    assert spec("переведи мне этот текст на английский",
+                context=context).mode == MODE_GENERAL
+
+
+def test_anaphora_searches_the_previous_question_too():
+    """«Он» искать бесполезно: в поиск идёт прошлый вопрос вместе с
+    этим — не «понимание» разговора, а то, что в нём сказано словами."""
+    context = DialogueContext(question="что назначил кардиолог?", memory=True)
+    result = spec("а что он рекомендовал?", context=context)
+    assert result.retrieval_question == "что назначил кардиолог? а что он рекомендовал?"
+    assert spec("а что он рекомендовал?").retrieval_question == "а что он рекомендовал?"
 
 
 def test_a_question_that_names_its_subject_needs_no_clarification():
