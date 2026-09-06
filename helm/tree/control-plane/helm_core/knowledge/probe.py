@@ -406,8 +406,28 @@ def probe(session: Session, *, query: str, domain: str | None = None,
                                         knowledge_user_id=knowledge_user_id)
     if search_health:
         lexical_hits += _health_lexical_search(query=query, knowledge_user_id=knowledge_user_id)
-    evidence = sorted((e for e in lexical_hits if e.rank >= MIN_RANK_SCORE),
-                      key=lambda e: e.rank, reverse=True)[:MAX_EVIDENCE]
+    lexical = sorted((e for e in lexical_hits if e.rank >= MIN_RANK_SCORE),
+                     key=lambda e: e.rank, reverse=True)
+    # ОТБРАКОВКА ЛЕКСИКИ ДО РЕШЕНИЯ «КОЛЧАН ПОЛОН». Переставлено
+    # 06.09.2026 по живому прогону 365: на «что там прописал врач?»
+    # лексика вернула пять подписей бланка, три из них `is_quotable`
+    # отбрасывала — но уже ПОСЛЕ того, как пятёрка закрыла колчан и
+    # вектор не запросился. Непригодный кандидат вытеснял пригодный
+    # дважды: и из ответа, и из самой возможности поискать вектором.
+    #
+    # Прежний порядок объяснялся тем, что «фрагмент подняла векторная
+    # ветка, значит фильтровать надо результат, а не ветку». Это
+    # объяснение построено на замере 307, который тот же разбор потом
+    # опроверг сам (§3 и §7.1 CHUNKING_AND_BAD_ANSWERS): вектор в том
+    # вопросе не вызывался вовсе. Фильтр после обеих веток остаётся —
+    # векторные находки тоже бывают шапкой, — но лексика чистится до
+    # подсчёта.
+    #
+    # Обрезка по MAX_EVIDENCE теперь ПОСЛЕ отбраковки, а не до: иначе
+    # пять строк бланка так и продолжали бы вытеснять шестого кандидата,
+    # который и есть текст.
+    considered_ids = {e.chunk_id for e in lexical}
+    evidence = [e for e in lexical if is_quotable(e.chunk_text)][:MAX_EVIDENCE]
 
     # ADR-025: pgvector дополняет лексику местами, до MAX_EVIDENCE — не
     # запрашивается вовсе, если лексика уже набрала полный колчан
@@ -420,7 +440,10 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     if len(evidence) < MAX_EVIDENCE:
         query_embedding = embed_texts_or_none([query])[0]
         if query_embedding is not None:
-            exclude_ids = {e.chunk_id for e in evidence}
+            # Исключается всё, что лексика уже рассмотрела, а не только
+            # прошедшее отбраковку: отбракованный чанк не должен
+            # вернуться вторым путём.
+            exclude_ids = considered_ids
             vector_hits: list[Evidence] = []
             if search_public:
                 vector_hits += _vector_search(
@@ -434,15 +457,8 @@ def probe(session: Session, *, query: str, domain: str | None = None,
                 )
             evidence = (evidence + vector_hits)[:MAX_EVIDENCE]
 
-    # Живой чат владельца 05.09.2026: на «что там прописал врач?» пришло
-    # «Врач: <ФИО> ______», до этого — «ОСМОТР ГАСТРОЭНТЕРОЛОГА». Оба
-    # прошли порог длины и оба не ответ, а шапка документа и пустая
-    # строка бланка. Отбраковка стоит ПОСЛЕ обоих путей поиска
-    # намеренно: замер 307 показал, что лексика по этому вопросу не
-    # нашла вообще ничего (plainto_tsquery требует И всех основ), то
-    # есть виноват был не ts_rank — фрагмент подняла векторная ветка,
-    # которой «Врач: ...» близко к «что прописал врач» по одному слову.
-    # Фильтровать надо результат, а не одну из веток.
+    # Второй проход отбраковки — по векторным находкам: они тоже бывают
+    # шапкой документа. Лексика к этому месту уже чистая (см. выше).
     evidence = [e for e in evidence if is_quotable(e.chunk_text)]
 
     # §14.13 quality gate: без evidence выше порога — сразу эскалация, а

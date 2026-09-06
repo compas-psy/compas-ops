@@ -158,3 +158,73 @@ def test_document_answer_carries_its_chunks(monkeypatch):
     assert result.sources == [{"kind": "chunk", "source_id": "src-2", "chunk_id": "c-1",
                                "original_filename": "выписка.pdf"}]
     assert result.answer_run_id
+
+
+# ── 3. Непригодный кандидат не занимает место в колчане ──────────────
+
+def test_unquotable_lexical_hits_do_not_block_the_vector_branch(monkeypatch):
+    """Живой прогон 365 (06.09.2026): на «что там прописал врач?»
+    лексика вернула пять подписей бланка, три из них `is_quotable`
+    отбрасывал — но уже ПОСЛЕ того, как пятёрка закрыла колчан и
+    векторная ветка не запросилась вовсе. Непригодный кандидат вытеснял
+    пригодный дважды: из ответа и из самой возможности его поискать.
+    """
+    _stub_common(monkeypatch)
+    monkeypatch.setattr(probe_mod, "detect_intent", lambda q: QuestionIntent.UNSUPPORTED)
+
+    junk = [probe_mod.Evidence(chunk_id=f"c-{i}", source_id="src-1",
+                               chunk_text="Врач: __________________",
+                               original_filename=None, rank=1.0 - i / 100)
+            for i in range(probe_mod.MAX_EVIDENCE)]
+    real = probe_mod.Evidence(
+        chunk_id="c-real", source_id="src-2",
+        chunk_text="Назначен приём препарата по одной таблетке дважды в сутки.",
+        original_filename="выписка.pdf", rank=0.5)
+
+    asked_vector = {}
+
+    def _vector(session, *, query_embedding, domain, knowledge_user_id, exclude_chunk_ids):
+        asked_vector["exclude"] = exclude_chunk_ids
+        return [real]
+
+    monkeypatch.setattr(probe_mod, "_lexical_search", lambda *a, **kw: junk)
+    monkeypatch.setattr(probe_mod, "_health_lexical_search", lambda *a, **kw: [])
+    monkeypatch.setattr(probe_mod, "embed_texts_or_none", lambda texts: [[0.1, 0.2]])
+    monkeypatch.setattr(probe_mod, "_vector_search", _vector)
+    monkeypatch.setattr(probe_mod, "_health_vector_search", lambda *a, **kw: [])
+    monkeypatch.setattr(probe_mod, "rephrase_or_none", lambda *a, **kw: None)
+
+    result = probe_mod.probe(_FakeSession(), query="что там прописал врач?")
+
+    assert asked_vector, "вектор снова не запросился — колчан заняла бракованная лексика"
+    assert result.outcome == "LOCAL_ANSWER"
+    assert result.sources == [{"kind": "chunk", "source_id": "src-2", "chunk_id": "c-real",
+                               "original_filename": "выписка.pdf"}]
+    # Отбракованное не должно вернуться вторым путём.
+    assert asked_vector["exclude"] == {item.chunk_id for item in junk}
+
+
+def test_a_good_lexical_hit_below_the_junk_is_not_cut_off(monkeypatch):
+    """Обрезка по MAX_EVIDENCE теперь после отбраковки: иначе пять строк
+    бланка вытесняли бы шестого кандидата, который и есть текст."""
+    _stub_common(monkeypatch)
+    monkeypatch.setattr(probe_mod, "detect_intent", lambda q: QuestionIntent.UNSUPPORTED)
+
+    junk = [probe_mod.Evidence(chunk_id=f"c-{i}", source_id="src-1",
+                               chunk_text="Врач: __________________",
+                               original_filename=None, rank=1.0 - i / 100)
+            for i in range(probe_mod.MAX_EVIDENCE)]
+    real = probe_mod.Evidence(
+        chunk_id="c-real", source_id="src-2",
+        chunk_text="Назначен приём препарата по одной таблетке дважды в сутки.",
+        original_filename="выписка.pdf", rank=0.4)
+
+    monkeypatch.setattr(probe_mod, "_lexical_search", lambda *a, **kw: [*junk, real])
+    monkeypatch.setattr(probe_mod, "_health_lexical_search", lambda *a, **kw: [])
+    monkeypatch.setattr(probe_mod, "embed_texts_or_none", lambda texts: [None])
+    monkeypatch.setattr(probe_mod, "rephrase_or_none", lambda *a, **kw: None)
+
+    result = probe_mod.probe(_FakeSession(), query="что там прописал врач?")
+
+    assert result.outcome == "LOCAL_ANSWER"
+    assert result.sources[0]["chunk_id"] == "c-real"
