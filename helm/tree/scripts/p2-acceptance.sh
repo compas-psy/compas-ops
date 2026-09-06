@@ -21,6 +21,15 @@ cd /opt/helm/compose || exit 1
 
 echo "выкачено: $(sudo cat /opt/helm/DEPLOYED_SHA 2>/dev/null || echo unknown)"
 
+echo "############ 0. СХЕМА НА МЕСТЕ ############"
+echo -n "  alembic head в базе: "
+sudo docker compose exec -T helm-core alembic current 2>/dev/null | tail -1 || echo "неизвестно"
+echo -n "  таблица очереди:     "
+sudo docker compose exec -T postgres psql -U helm -d helm -tAc \
+  "select to_regclass('public.knowledge_semantic_jobs') is not null" 2>/dev/null \
+  | tr -d ' ' | sed 's/^t$/есть/; s/^f$/НЕТ/' || echo "не проверено"
+echo
+
 sudo docker compose exec -T helm-core python3 - <<'PYEOF'
 """Регистрируем файл и ждём, пока воркер доведёт его до ревизии."""
 import time
@@ -36,7 +45,7 @@ from helm_core.knowledge.tenancy import bind_knowledge_user
 from helm_core.models import (KnowledgeIngestJob, KnowledgeSemanticJob,
                               KnowledgeSource)
 
-TEXT = """# Заметка о стенде сборки
+TEXT = """# Заметка о стенде сборки {marker}
 
 Решение от 6 сентября 2026: сборки под Linux выполняет локальный раннер,
 сборки под Windows остаются в GitHub. Причина — раннер не имеет доступа
@@ -49,9 +58,21 @@ TEXT = """# Заметка о стенде сборки
 engine = create_engine(get_settings().database_url, pool_pre_ping=True)
 Session = sessionmaker(engine, expire_on_commit=False)
 
+# `register_file_for_ingest()` сохраняет raw_path КАК ЕСТЬ
+# (ingest.py:227), а читает его другой контейнер — воркер. Значит файл
+# обязан лежать в общем томе `/opt/helm-knowledge`, одинаковом внутри
+# обоих (docker-compose.yml). Прогон 350 упал именно здесь: файл лежал
+# в /tmp контейнера helm-core, воркер получил FileNotFoundError, и до
+# очереди дело не дошло вовсе.
 marker = uuid.uuid4().hex[:8]
-path = Path(f"/tmp/p2-acceptance-{marker}.md")
-path.write_text(TEXT, encoding="utf-8")
+staging = Path("/opt/helm-knowledge/acceptance")
+staging.mkdir(parents=True, exist_ok=True)
+path = staging / f"p2-acceptance-{marker}.md"
+# Маркер В ТЕКСТЕ, а не только в имени: дедуп идёт по SHA256 содержимого
+# (ingest.py:205-212). С одинаковым текстом следующий прогон подцепил бы
+# источник предыдущего вместо нового.
+text = TEXT.replace("{marker}", marker)
+path.write_text(text, encoding="utf-8")
 
 with Session() as session:
     tenant = bind_knowledge_user(session, None)
@@ -95,7 +116,7 @@ with Session() as session:
         print(f"  узлов в ревизии:   {nodes}")
 
     # Повтор тех же байтов не должен породить второе задание.
-    path.write_text(TEXT, encoding="utf-8")
+    path.write_text(text, encoding="utf-8")
     again = register_file_for_ingest(
         session, domain="ops", raw_path=path,
         original_filename=f"стенд-сборки-{marker}.md", mime_type="text/markdown")
