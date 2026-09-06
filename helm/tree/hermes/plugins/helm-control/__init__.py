@@ -744,6 +744,18 @@ def _on_pre_gateway_dispatch(event, gateway):
     if outcome == "LOCAL_ANSWER":
         _send_reply(gateway, source, probe_result["answer_text"])
         return {"action": "skip", "reason": "knowledge_probe_local_answer"}
+    if outcome == "LOCAL_NOT_FOUND":
+        # Вопрос был о данных владельца, и в памяти их нет. Платная
+        # модель этих данных не знает — она заполнит пустоту общими
+        # рассуждениями, и владелец получит уверенный текст вместо
+        # честного «не нашёл».
+        #
+        # Распоряжение владельца 06.09.2026: «Отсутствие находок не
+        # является моим разрешением оплатить ответ». До этой правки
+        # платный переход блокировался только при LOCAL_UNAVAILABLE,
+        # то есть при СБОЕ, а при пустом поиске сохранялся.
+        _send_reply(gateway, source, probe_result["answer_text"])
+        return {"action": "skip", "reason": "knowledge_probe_local_not_found"}
     if outcome == "LOCAL_UNAVAILABLE":
         # Не уходим в платную модель по факту собственного сбоя.
         # Владелец видит причину и может повторить; молчаливая оплата
@@ -753,6 +765,9 @@ def _on_pre_gateway_dispatch(event, gateway):
                     "не обращаюсь. Повторите вопрос через минуту.")
         return {"action": "skip", "reason": "knowledge_probe_unavailable"}
 
+    # NEEDS_REASONING и только он ведёт к платной модели: вопрос не о
+    # данных владельца (перевод, объяснение термина, общий расчёт).
+    # Правила остальных направлений это не меняет.
     return None
 
 

@@ -39,10 +39,12 @@ from typing import Any, Literal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .answer_format import format_doctors, format_nearest_quote, is_quotable
+from .answer_format import (PERSONAL_NOT_FOUND, format_doctors, format_nearest_quote,
+                            is_quotable)
 from .embeddings import embed_texts_or_none
 from .health_schema import health_schema_configured, health_session
 from .query_router import QuestionIntent, answer_doctors_visited, detect_intent
+from .query_scope import is_personal_data_question
 from .recall import (
     MemoryHit, build_or_tsquery, compose_memory_answer, is_future_reminder,
     is_historical_query, search_memories,
@@ -103,7 +105,10 @@ class Evidence:
 
 @dataclass
 class ProbeResult:
-    outcome: Literal["LOCAL_ANSWER", "NEEDS_REASONING"]
+    #: LOCAL_NOT_FOUND добавлен 06.09.2026: вопрос о данных владельца,
+    #: ответа в памяти нет — и это НЕ повод платить. Отличается от
+    #: NEEDS_REASONING именно правом на эскалацию, а не текстом.
+    outcome: Literal["LOCAL_ANSWER", "LOCAL_NOT_FOUND", "NEEDS_REASONING"]
     #: Z0 | Z1, заполнено только при outcome == LOCAL_ANSWER.
     mode: str | None = None
     answer_text: str | None = None
@@ -459,11 +464,33 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     # шапкой документа. Лексика к этому месту уже чистая (см. выше).
     evidence = [e for e in evidence if is_quotable(e.chunk_text)]
 
-    # §14.13 quality gate: без evidence выше порога — сразу эскалация, а
-    # не «уверенный бесплатный ответ ради экономии». Отфильтрованное в
-    # ноль означает ровно это же: доказанного ответа в данных нет.
+    # §14.13 quality gate: без evidence выше порога бесплатного ответа
+    # нет. Что делать дальше, решает ОБЛАСТЬ ВОПРОСА, а не факт пустоты.
+    #
+    # Распоряжение владельца 06.09.2026: «Отсутствие находок не является
+    # моим разрешением оплатить ответ». До этой правки пустой поиск по
+    # личному вопросу уходил в платную модель, которая истории владельца
+    # не знает и заполняла пустоту рассуждениями — ровно то, что
+    # запрещает контракт ответа.
+    #
+    # Общий вопрос («переведи текст», «что такое ферритин») ведёт себя
+    # как раньше: локальной памяти по нему и не должно быть что сказать,
+    # запрещать по нему платную модель значило бы сломать её работу
+    # заодно с запретом (§5 CHUNKING_AND_BAD_ANSWERS откладывал это
+    # различение до QuerySpec; дальше откладывать нельзя).
     if not evidence:
-        return ProbeResult(outcome="NEEDS_REASONING")
+        if not is_personal_data_question(query):
+            return ProbeResult(outcome="NEEDS_REASONING")
+        run_id = uuid.uuid4()
+        session.add(KnowledgeAnswerRun(
+            id=run_id,
+            knowledge_user_id=knowledge_user_id,
+            query_hash=query_hash(query), domain=domain,
+            mode=KnowledgeAnswerMode.N0,
+            paid_ai_used=False, evidence_count=0,
+        ))
+        return ProbeResult(outcome="LOCAL_NOT_FOUND", mode=KnowledgeAnswerMode.N0,
+                           answer_text=PERSONAL_NOT_FOUND, answer_run_id=str(run_id))
 
     answer_text, mode = _compose_answer(evidence)
 

@@ -247,3 +247,107 @@ def test_graph_proof_is_reported_as_an_edge_not_an_empty_span(monkeypatch):
     result = probe_mod.probe(_FakeSession(), query="каких врачей я посещал?")
 
     assert result.sources == [{"kind": "edge", "source_id": "src-1", "edge_id": "edge-7"}]
+
+
+# ── 4. Строгий local-only: пустой поиск тоже не оплачивается ─────────
+#
+# Распоряжение владельца 06.09.2026: «Отсутствие находок не является
+# моим разрешением оплатить ответ». До этой правки платный переход
+# блокировался ТОЛЬКО при LOCAL_UNAVAILABLE, то есть при сбое; пустой
+# поиск по личному вопросу давал NEEDS_REASONING и уходил в платную
+# модель, которая данных владельца не знает.
+#
+# Проверяется решение диспетчера, а не флаг в журнале: `paid_ai_used=false`
+# говорит, что строку записали бесплатной, и ничего не говорит о том,
+# состоялся ли вызов.
+
+class _Src:
+    class _P:
+        value = "telegram"
+    platform = _P()
+    chat_id = 42
+
+
+class _Event:
+    def __init__(self, text):
+        self.text = text
+        self.source = _Src()
+        self.raw_message = {}
+        self.message_id = 1
+        self.user_id = 7
+
+
+def _dispatch_with(monkeypatch, outcome_payload):
+    """Диспетчер плагина с заглушенным всем, кроме решения про оплату."""
+    plugin = _load_plugin()
+    sent = []
+    monkeypatch.setattr(plugin, "_message_has_attachment", lambda raw: False)
+    monkeypatch.setattr(plugin, "_looks_like_remember_command", lambda text: False)
+    monkeypatch.setattr(plugin, "_looks_like_admin_command", lambda text: False)
+    monkeypatch.setattr(plugin, "_resolve_attachment", lambda *a, **kw: None)
+    monkeypatch.setattr(plugin, "_resolve_batch", lambda *a, **kw: None)
+    monkeypatch.setattr(plugin, "_register_task", lambda *a, **kw: {"task_id": "t-1"})
+    monkeypatch.setattr(plugin, "_send_reply", lambda gw, src, text: sent.append(text))
+    monkeypatch.setattr(plugin, "_probe_local_answer", lambda text: outcome_payload)
+    return plugin._on_pre_gateway_dispatch(_Event("какие анализы я сдавал?"), None), sent
+
+
+def test_empty_local_search_does_not_reach_the_paid_model(monkeypatch):
+    """Пустой поиск по личному вопросу: ход обязан оборваться здесь."""
+    action, sent = _dispatch_with(monkeypatch, {
+        "outcome": "LOCAL_NOT_FOUND", "mode": "N0",
+        "answer_text": "В ваших записях я такого не нашёл."})
+    assert action == {"action": "skip", "reason": "knowledge_probe_local_not_found"}
+    assert sent == ["В ваших записях я такого не нашёл."]
+
+
+def test_local_timeout_does_not_reach_the_paid_model(monkeypatch):
+    action, sent = _dispatch_with(monkeypatch, {
+        "outcome": "LOCAL_UNAVAILABLE", "error": "TimeoutError"})
+    assert action == {"action": "skip", "reason": "knowledge_probe_unavailable"}
+    assert sent and "не обращаюсь" in sent[0]
+
+
+def test_local_model_error_does_not_reach_the_paid_model(monkeypatch):
+    action, sent = _dispatch_with(monkeypatch, {
+        "outcome": "LOCAL_UNAVAILABLE", "error": "URLError"})
+    assert action == {"action": "skip", "reason": "knowledge_probe_unavailable"}
+    assert sent
+
+
+def test_a_general_question_still_reaches_the_paid_model(monkeypatch):
+    """Запрет касается вопросов о данных владельца. «Переведи текст» и
+    «что такое ферритин» платная модель отвечает как раньше — иначе
+    правка чинила бы оплату ценой работоспособности."""
+    action, _ = _dispatch_with(monkeypatch, {"outcome": "NEEDS_REASONING",
+                                             "mode": None, "answer_text": None})
+    assert action is None, "общий вопрос перестал доходить до модели"
+
+
+# ── probe: какие вопросы вообще могут дойти до NEEDS_REASONING ───────
+
+def test_personal_question_with_no_evidence_never_returns_needs_reasoning(monkeypatch):
+    _stub_common(monkeypatch)
+    monkeypatch.setattr(probe_mod, "detect_intent", lambda q: QuestionIntent.UNSUPPORTED)
+    monkeypatch.setattr(probe_mod, "_lexical_search", lambda *a, **kw: [])
+    monkeypatch.setattr(probe_mod, "_health_lexical_search", lambda *a, **kw: [])
+    monkeypatch.setattr(probe_mod, "embed_texts_or_none", lambda texts: [None])
+
+    result = probe_mod.probe(_FakeSession(), query="какие анализы я сдавал в мае?")
+
+    assert result.outcome == "LOCAL_NOT_FOUND"
+    assert result.mode == "N0"
+    assert result.answer_run_id, "честное молчание тоже обязано попасть в журнал §14.14"
+    assert "не нашёл" in result.answer_text.lower()
+
+
+def test_general_question_with_no_evidence_still_escalates(monkeypatch):
+    _stub_common(monkeypatch)
+    monkeypatch.setattr(probe_mod, "detect_intent", lambda q: QuestionIntent.UNSUPPORTED)
+    monkeypatch.setattr(probe_mod, "_lexical_search", lambda *a, **kw: [])
+    monkeypatch.setattr(probe_mod, "_health_lexical_search", lambda *a, **kw: [])
+    monkeypatch.setattr(probe_mod, "embed_texts_or_none", lambda texts: [None])
+
+    result = probe_mod.probe(_FakeSession(), query="переведи этот текст на английский")
+
+    assert result.outcome == "NEEDS_REASONING"
