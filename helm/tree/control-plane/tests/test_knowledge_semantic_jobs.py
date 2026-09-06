@@ -109,3 +109,106 @@ def test_enqueued_version_matches_what_publication_writes():
     assert signature.parameters["semantic_version"].default is inspect.Parameter.empty, (
         "версия снова получила умолчание — расхождение вернётся молча")
     assert SEMANTIC_VERSION >= 3
+
+
+# ── восстановление после падения воркера ─────────────────────────────
+#
+# Дыра из аудита владельца 06.09.2026: `claim` брал только PENDING, а
+# RUNNING фиксировался коммитом ДО разбора (worker.py: «RUNNING виден
+# снаружи на время разбора»). Воркер, убитый между этим коммитом и
+# концом разбора, оставлял задание в RUNNING навсегда — его не видел ни
+# один следующий воркер, и работа возвращалась только руками.
+#
+# Живая проверка (остановить воркер, поднять, получить завершённый
+# разбор) — приёмка `p2-queue-recovery.sh`. Здесь проверяется форма
+# запроса: без неё живая проверка сказала бы «сработало» и не сказала
+# бы, почему.
+
+class _CapturingSession:
+    """Ловит выражение, не выполняя его. Базы в тестах нет."""
+
+    def __init__(self):
+        self.statements = []
+
+    def scalar(self, stmt):
+        self.statements.append(stmt)
+        return None
+
+    def scalars(self, stmt):
+        self.statements.append(stmt)
+
+        class _Empty:
+            def all(self_inner):
+                return []
+        return _Empty()
+
+    def flush(self):
+        pass
+
+    def sql(self, index=0):
+        return str(self.statements[index].compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True}))
+
+
+def test_claim_takes_abandoned_jobs_not_only_new_ones():
+    """Претендуемо и PENDING, и RUNNING с истёкшей арендой."""
+    from helm_core.knowledge.semantic_jobs import claim_next_semantic_job
+
+    session = _CapturingSession()
+    claim_next_semantic_job(session)
+    sql = session.sql()
+
+    assert "'pending'" in sql, "новые задания больше не берутся"
+    assert "'running'" in sql, "брошенное задание снова невидимо — дыра вернулась"
+    assert "lease_expires_at" in sql
+    assert "FOR UPDATE SKIP LOCKED" in sql, (
+        "без этого два воркера возьмут одно задание одновременно")
+
+
+def test_claim_respects_the_attempt_limit():
+    """Задание, которое роняет воркер каждый раз, не крутится вечно."""
+    from helm_core.knowledge.semantic_jobs import MAX_ATTEMPTS, claim_next_semantic_job
+
+    session = _CapturingSession()
+    claim_next_semantic_job(session)
+    assert f"attempts < {MAX_ATTEMPTS}" in session.sql()
+
+
+def test_exhausted_jobs_are_closed_and_not_left_running():
+    """«RUNNING навсегда» — то же самое молчание, только под другим
+    именем: в отчёте по очереди оно читается как «работа идёт»."""
+    from helm_core.knowledge.semantic_jobs import (MAX_ATTEMPTS,
+                                                   fail_exhausted_semantic_jobs)
+
+    session = _CapturingSession()
+    fail_exhausted_semantic_jobs(session)
+    sql = session.sql()
+    assert "'running'" in sql
+    assert f"attempts >= {MAX_ATTEMPTS}" in sql
+    assert "lease_expires_at" in sql
+
+
+def test_lease_is_longer_than_observed_parse_time():
+    """Аренда короче разбора означала бы, что два воркера разбирают один
+    источник — хуже, чем поздний возврат упавшего задания. Наблюдаемый
+    разбор — минуты (приёмка P2: сорок секунд на средний документ)."""
+    from helm_core.knowledge.semantic_jobs import LEASE_SECONDS
+
+    assert LEASE_SECONDS >= 10 * 60
+
+
+def test_worker_closes_exhausted_jobs_before_taking_the_next():
+    assert "fail_exhausted_semantic_jobs" in _calls_in("run_forever")
+
+
+def test_completed_job_releases_its_lease():
+    """Оставленный срок у завершённого задания читается как «кто-то ещё
+    работает». Проверяется по исходнику: у DONE-ветки обязан быть сброс."""
+    import inspect
+
+    from helm_core.knowledge.semantic_jobs import process_semantic_job
+
+    source = inspect.getsource(process_semantic_job)
+    assert source.count("lease_expires_at = None") >= 4, (
+        "не все ветки завершения снимают аренду")

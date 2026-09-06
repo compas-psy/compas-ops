@@ -35,7 +35,7 @@ from .batch_intake import finalize_batch_if_terminal, sync_item_from_job
 from .chat_intake import voice_ready_menu_text
 from .chunking import store_chunks
 from .semantic_jobs import (claim_next_semantic_job, enqueue_semantic,
-                            process_semantic_job)
+                            fail_exhausted_semantic_jobs, process_semantic_job)
 from .health_schema import (
     health_schema_configured, is_health_domain, read_original_filename, record_parse_error,
 )
@@ -422,6 +422,11 @@ def run_forever(session_factory) -> None:  # pragma: no cover — процесс
                 # отодвигать парсинг только что присланного файла.
                 # Пользователь ждёт «принято и разобрано», а не «узлы
                 # построены» — второе догоняет само.
+                # Задания, которые роняют воркер каждый раз, закрываются
+                # ДО взятия следующего: иначе такое задание молча
+                # крутилось бы в очереди и выглядело как «работа идёт».
+                fail_exhausted_semantic_jobs(session)
+
                 semantic = claim_next_semantic_job(session)
                 if semantic is not None:
                     session.commit()  # RUNNING виден снаружи на время разбора

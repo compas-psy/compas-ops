@@ -604,6 +604,11 @@ class KnowledgeSemanticJob(Base):
     status: Mapped[str] = mapped_column(String(16), default=KnowledgeIngestStatus.PENDING,
                                         nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    #: До какого момента задание считается исполняемым. Истёк — задание
+    #: снова претендуемо: воркер, убитый на середине разбора, оставлял
+    #: `RUNNING` навсегда, и вернуть работу можно было только руками
+    #: (найдено аудитом владельца 06.09.2026). `NULL` — аренды нет.
+    lease_expires_at: Mapped[datetime | None] = ts_column()
     #: Только имя класса исключения. Текст ошибки модели может содержать
     #: кусок разбираемого документа — та же причина, что в backfill.py.
     error: Mapped[str | None] = mapped_column(String(128))
