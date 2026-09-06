@@ -58,6 +58,25 @@ timeout 5 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/18080' 2>/dev/null \
   && echo "слушает" || echo "НЕ слушает"
 
 echo
+echo "  --- шлюз действительно висит на long-poll? ---"
+# Молчание в журнале двусмысленно: и «подключился», и «умер тихо»
+# выглядят одинаково. Однозначно отвечает только живое соединение
+# наружу у процесса шлюза.
+GW_PID=$(sudo systemctl show hermes-gateway -p MainPID --value)
+echo "  MainPID: ${GW_PID:-нет}"
+if [ -n "${GW_PID:-}" ] && [ "$GW_PID" != "0" ]; then
+  sudo ss -tnp 2>/dev/null | grep "pid=$GW_PID," \
+    | sed -E 's/([0-9]{1,3})\.([0-9]{1,3})\.[0-9]{1,3}\.[0-9]{1,3}/\1.\2.x.x/g' \
+    | sed 's/^/    /' \
+    || echo "    установленных соединений нет"
+fi
+echo "  --- журнал шлюза с момента последнего рестарта ---"
+sudo journalctl -u hermes-gateway --since "$(sudo systemctl show hermes-gateway -p ExecMainStartTimestamp --value | cut -d' ' -f2-3)" \
+  --no-pager 2>/dev/null | tail -15 \
+  | sed -E 's/bot[0-9]+:[A-Za-z0-9_-]+/bot<ЗАМАСКИРОВАНО>/g; s/[A-Za-z0-9_-]{32,}/<ЗАМАСКИРОВАНО>/g' \
+  | cut -c1-200 | sed 's/^/    /'
+
+echo
 echo "############ 2. ЗНАНИЕ: probe() на вопросе владельца ############"
 sudo docker compose exec -T helm-core python3 - <<'PYEOF'
 """Что вернул бы локальный слой на тот самый вопрос."""
