@@ -75,7 +75,10 @@ def report(name, models, sess):
 pub_m, pub_live = report("public", PUBLIC_MODELS, session)
 hea_m, hea_live = 0, 0
 if health_schema_configured():
-    with health_session() as hs:
+    # `health_session()` требует тенанта явно: соединение отдельное и
+    # само привязывается к владельцу (health_schema.py:63).
+    tenant = bind_knowledge_user(session, None)
+    with health_session(tenant) as hs:
         hea_m, hea_live = report("health", HEALTH_MODELS, hs)
 else:
     print("  --- health --- схема не настроена")
