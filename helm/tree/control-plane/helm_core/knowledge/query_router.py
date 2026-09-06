@@ -178,6 +178,23 @@ class Proof:
     #: Ребро, если доказательство пришло путём графа.
     edge_id: str | None = None
 
+    def as_source(self) -> dict:
+        """Источник для ответа — названный тем, что он есть.
+
+        До 06.09.2026 все доказательства уходили наружу как `span`, и на
+        живом корпусе (прогон 367) все 35 источников структурного ответа
+        пришли путём графа: `kind: "span"` с тремя `None` вместо границ,
+        а `edge_id`, который там как раз есть, терялся. «Спан» с пустыми
+        полями — такая же неправда, как подставленное число (§5.1).
+
+        Цитата не отдаётся ни в одном виде: текст ответа её и так
+        содержит, а второй раз она уехала бы в журналы вызывающего.
+        """
+        if self.char_start is None:
+            return {"kind": "edge", "source_id": self.source_id, "edge_id": self.edge_id}
+        return {"kind": "span", "source_id": self.source_id, "window_id": self.window_id,
+                "char_start": self.char_start, "char_end": self.char_end}
+
 
 @dataclass
 class DoctorItem:

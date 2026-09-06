@@ -228,3 +228,22 @@ def test_a_good_lexical_hit_below_the_junk_is_not_cut_off(monkeypatch):
 
     assert result.outcome == "LOCAL_ANSWER"
     assert result.sources[0]["chunk_id"] == "c-real"
+
+
+def test_graph_proof_is_reported_as_an_edge_not_an_empty_span(monkeypatch):
+    """Живой прогон 367: все 35 источников структурного ответа пришли
+    путём графа и уехали наружу как `span` с тремя `None`, а `edge_id`,
+    который там есть, терялся. Спан без границ — не спан."""
+    _stub_common(monkeypatch)
+    answer = DoctorsAnswer(question="каких врачей я посещал?",
+                           intent=QuestionIntent.DOCTORS_VISITED)
+    answer.path_used = AnswerPath.GRAPH
+    answer.items = [DoctorItem(
+        identity_id=str(uuid.uuid4()), person="Иванов И. И.", specialties=[],
+        proofs=[Proof(source_id="src-1", edge_id="edge-7")])]
+    monkeypatch.setattr(probe_mod, "answer_doctors_visited",
+                        lambda session, *, question, knowledge_user_id: answer)
+
+    result = probe_mod.probe(_FakeSession(), query="каких врачей я посещал?")
+
+    assert result.sources == [{"kind": "edge", "source_id": "src-1", "edge_id": "edge-7"}]

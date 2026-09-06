@@ -368,14 +368,12 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     if detect_intent(query) == QuestionIntent.DOCTORS_VISITED:
         structured = answer_doctors_visited(session, question=query,
                                             knowledge_user_id=knowledge_user_id)
-        # Один спан — один источник. Цитата (`proof.quote`) сюда НЕ идёт:
-        # текст ответа её и так содержит, а второй раз она бы уехала в
-        # журналы вызывающего.
-        structured_sources = [
-            {"kind": "span", "source_id": proof.source_id, "window_id": proof.window_id,
-             "char_start": proof.char_start, "char_end": proof.char_end}
-            for item in structured.items for proof in item.proofs
-        ]
+        # Одно доказательство — один источник, названный тем, что он
+        # есть: путь графа даёт ребро, путь доказательств — спан. Что
+        # именно, решает сам `Proof`, а не это место: раньше решало
+        # здесь, и решало неверно на всём живом корпусе.
+        structured_sources = [proof.as_source()
+                              for item in structured.items for proof in item.proofs]
         run_id = uuid.uuid4()
         session.add(KnowledgeAnswerRun(
             id=run_id,
