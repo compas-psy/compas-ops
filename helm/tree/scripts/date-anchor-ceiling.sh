@@ -68,7 +68,7 @@ def measure(models, graph, sources):
             .join(models.node, models.node.id == models.mention.node_id)
             .where(models.node.semantic_run_id == run_id,
                    models.node.kind.in_(DATED_KINDS),
-                   models.node.occurred_at.is_(None))).all()
+                   models.node.occurred_at_start.is_(None))).all()
         by_window = Counter()
         seen_nodes = set()
         for window_id, node_id in rows:
