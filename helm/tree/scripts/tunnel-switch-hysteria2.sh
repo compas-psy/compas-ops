@@ -104,7 +104,11 @@ PYEOF
 
 echo
 echo "############ ПРОВЕРКА КОНФИГА ДО РЕСТАРТА ############"
-if sing-box check -c "$CONF" 2>&1 | sed 's/^/  /'; then
+# Через sudo и по абсолютному пути: конфиг rw------- root, а у sudo
+# свой secure_path, в который /usr/local/bin может не входить. Прогон
+# 333 упал здесь на «permission denied» — не на конфиге, на правах.
+SING_BOX=$(command -v sing-box) || fail "sing-box не найден в PATH"
+if sudo "$SING_BOX" check -c "$CONF" 2>&1 | sed 's/^/  /'; then
   echo "  конфиг валиден"
 else
   sudo cp -a "$BACKUP" "$CONF"
