@@ -90,13 +90,57 @@ class AnswerPath:
 #: действительно умеет отвечать: «каких/какие/каким».
 _ENUMERATION_RE = re.compile(r"как(?:их|ие|им)\b", re.IGNORECASE)
 
-#: Год из вопроса. Явные четыре цифры либо «в этом году».
-#: «За прошлый год», «за последние три года» намеренно НЕ разбираются:
-#: каждая такая форма — отдельное правило, и молча угадать её значит
-#: ответить не на тот вопрос. Не разобрали — отвечаем по всему корпусу,
-#: как и раньше.
+#: Год из вопроса. Явные четыре цифры либо «в этом году». Остальные
+#: формы периода исполнитель применять не умеет — и обязан сказать об
+#: этом вслух, см. `unsupported_period` ниже.
 _EXPLICIT_YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
 _THIS_YEAR_RE = re.compile(r"в\s+этом\s+году", re.IGNORECASE)
+
+#: Периоды, которые исполнитель НЕ умеет применять.
+#:
+#: До 06.09.2026 такой вопрос молча отвечался по всему корпусу, и это
+#: считалось осторожным поведением. Оно не осторожное. «Каких врачей я
+#: посещал в марте 2025» отбирался по ВСЕМУ 2025 году, а ответ выглядел
+#: как ответ про март: система сузила меньше, чем спросили, и не
+#: сказала об этом ни слова. «За последний год» отвечался вообще без
+#: отбора.
+#:
+#: Замер 06.09.2026 (прогоны 355 и 358) сделал это срочным: у 522
+#: датируемых узлов из 543 даты события нет вообще, потому что корпус
+#: её не пишет. Значит отбор по времени будет промахиваться часто и
+#: надолго, и промах обязан быть виден в ответе, а не в логе.
+#:
+#: Правило одно: применяем, что умеем, и называем то, чего не смогли.
+_UNSUPPORTED_PERIOD_RES = (
+    # Месяц: «в марте», «за март 2025». Год из такого вопроса разберётся
+    # и применится, месяц — нет.
+    re.compile(r"\b(?:в|за)\s+(январ\w+|феврал\w+|март\w*|апрел\w+|ма[ея]\b|"
+               r"июн\w+|июл\w+|август\w*|сентябр\w+|октябр\w+|ноябр\w+|"
+               r"декабр\w+)", re.IGNORECASE),
+    # Относительные: «за последний год», «в прошлом месяце», «недавно».
+    re.compile(r"\bза\s+последн\w+(?:\s+\w+){1,2}|\bза\s+прошл\w+\s+\w+|"
+               r"\bв\s+прошл\w+\s+(?:году|месяце)|\bнедавно\b", re.IGNORECASE),
+    # Сезон и квартал.
+    re.compile(r"\b(летом|зимой|весной|осенью)\b|"
+               r"\bв\s+\w+\s+квартале\b", re.IGNORECASE),
+    # Явный интервал: «с 01.01.2025 по 01.06.2025».
+    re.compile(r"\bс\s+\d{1,2}[.\-/]\d{1,2}[.\-/]\d{4}\s+по\s+"
+               r"\d{1,2}[.\-/]\d{1,2}[.\-/]\d{4}", re.IGNORECASE),
+)
+
+
+def unsupported_period(question: str) -> str | None:
+    """Кусок вопроса про время, который отбор применить не сможет.
+
+    Возвращается сам текст, а не флаг: ответ обязан назвать вслух
+    ровно то, что пользователь написал, — «сузить до „в марте“ я не
+    умею» проверяемо, а «часть условия не применена» нет.
+    """
+    for pattern in _UNSUPPORTED_PERIOD_RES:
+        match = pattern.search(question)
+        if match:
+            return match.group(0).strip()
+    return None
 _DOCTOR_WORD_RE = re.compile(r"врач", re.IGNORECASE)
 _VISIT_WORD_RE = re.compile(r"посеща|посетил|посещал|был у|ходил|приём|прием|наблюда",
                             re.IGNORECASE)
@@ -198,6 +242,11 @@ class DoctorsAnswer:
     #: Доказанные врачи с датой приёма из ДРУГОГО года — отброшены по
     #: делу, а не потеряны.
     other_year_doctors: int = 0
+    #: Период из вопроса, который отбор применить не смог («в марте»,
+    #: «за последний год»). Не `None` — ответ ОБЯЗАН сказать об этом:
+    #: иначе он выглядит ответом на более узкий вопрос, чем на самом
+    #: деле (§5.1).
+    unsupported_period: str | None = None
 
     def skip(self, reason: str) -> None:
         self.skipped[reason] = self.skipped.get(reason, 0) + 1
@@ -212,6 +261,7 @@ class DoctorsAnswer:
         """Полный ответ — с именами и цитатами. Только в файл."""
         return {"question": self.question, "intent": self.intent,
                 "path_used": self.path_used, "year": self.year,
+                "unsupported_period": self.unsupported_period,
                 "undated_doctors": self.undated_doctors,
                 "other_year_doctors": self.other_year_doctors,
                 "graph_edges": self.graph_edges,
@@ -225,7 +275,8 @@ class DoctorsAnswer:
     def as_public_dict(self) -> dict:
         """То же без содержимого: числа и флаги."""
         return {"intent": self.intent, "path_used": self.path_used,
-                "year": self.year, "undated_doctors": self.undated_doctors,
+                "year": self.year, "unsupported_period": self.unsupported_period,
+                "undated_doctors": self.undated_doctors,
                 "other_year_doctors": self.other_year_doctors,
                 "graph_edges": self.graph_edges, "items": len(self.items),
                 "items_from_graph": self.by_path(AnswerPath.GRAPH),
@@ -659,6 +710,7 @@ def answer_doctors_visited(session: Session, *, question: str,
             path = AnswerPath.MIXED
 
     answer.year = requested_year(question)
+    answer.unsupported_period = unsupported_period(question)
     if answer.year is not None:
         items, answer.undated_doctors, answer.other_year_doctors = _split_by_year(
             items, answer.year)

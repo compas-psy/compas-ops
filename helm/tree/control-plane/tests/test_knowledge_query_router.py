@@ -649,3 +649,33 @@ def test_личность_без_врачебного_доказательств
 
     assert items == []
     assert answer.uncovered_identities == 1
+
+
+# ── распознавание периода, который применить нечем ───────────────────
+
+def test_supported_periods_are_not_flagged():
+    """Год и «в этом году» отбор применяет — про них молчать правильно."""
+    assert qr.unsupported_period("каких врачей я посещал в 2025 году") is None
+    assert qr.unsupported_period("каких врачей я посещал в этом году") is None
+    assert qr.unsupported_period("каких врачей я посещал") is None
+
+
+def test_month_is_flagged_even_when_the_year_is_understood():
+    """Худший случай: год разобран, месяц выброшен, и ответ выглядит
+    ответом про месяц."""
+    question = "каких врачей я посещал в марте 2025"
+    assert qr.requested_year(question) == 2025
+    assert qr.unsupported_period(question) == "в марте"
+
+
+def test_relative_and_seasonal_periods_are_flagged():
+    assert qr.unsupported_period("врачи за последний год") == "за последний год"
+    assert qr.unsupported_period("врачи в прошлом году") == "в прошлом году"
+    assert qr.unsupported_period("врачи летом") == "летом"
+    assert qr.unsupported_period("врачи недавно") == "недавно"
+
+
+def test_explicit_interval_is_flagged_although_its_year_is_applied():
+    question = "врачи с 01.01.2025 по 01.06.2025"
+    assert qr.requested_year(question) == 2025
+    assert qr.unsupported_period(question) == "с 01.01.2025 по 01.06.2025"

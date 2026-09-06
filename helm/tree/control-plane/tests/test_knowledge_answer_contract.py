@@ -359,3 +359,45 @@ def test_statement_stays_quotable(fragment):
     указанием специальности — ровно тот случай, ради которого
     доказательная ветка вообще существует."""
     assert is_quotable(fragment) is True
+
+
+# ── период, который отбор применить не смог ──────────────────────────
+#
+# Пункт аудита владельца 06.09.2026: «нераспознанное временное
+# ограничение не должно молчаливо игнорироваться». До этой правки
+# «в марте 2025» отбиралось по всему 2025 году, а «за последний год» —
+# вообще без отбора, и ответ выглядел ответом на заданный вопрос.
+#
+# Замер того же дня (прогоны 355 и 358) сделал это срочным: у 522
+# датируемых узлов из 543 даты события нет, потому что корпус её не
+# пишет. Отбор по времени будет промахиваться часто, и промах обязан
+# быть виден в ответе.
+
+def _with_period(period, year=None, *items):
+    a = _answer(*items)
+    a.unsupported_period = period
+    a.year = year
+    return a
+
+
+def test_month_narrower_than_the_year_filter_is_named_in_the_answer():
+    text = format_doctors(_with_period("в марте", 2025, _doctor("Иванов И. И.")))
+    assert "2025" in text and "в марте" in text and "не умею" in text
+
+
+def test_relative_period_without_any_filter_is_named_too():
+    text = format_doctors(_with_period("за последний год", None, _doctor("Иванов И. И.")))
+    assert "за последний год" in text
+    assert "по всем вашим данным" in text
+
+
+def test_empty_answer_also_names_the_period_it_could_not_apply():
+    """Пустой ответ без этой строки читается как «за март ничего нет»,
+    хотя март вообще не проверяли."""
+    assert "летом" in format_doctors(_with_period("летом"))
+    assert "в марте" in format_doctors(_with_period("в марте", 2025))
+
+
+def test_question_without_a_period_says_nothing_extra():
+    text = format_doctors(_answer(_doctor("Иванов И. И.")))
+    assert "не умею" not in text

@@ -97,7 +97,28 @@ def format_doctors(answer: DoctorsAnswer) -> str:
         lines.append(f"Ещё {answer.undated_doctors} "
                      f"{_plural_doctors(answer.undated_doctors)} без подтверждённой "
                      "даты приёма — отнести к году нечем.")
+    period = _period_not_applied(answer)
+    if period:
+        lines.append(period)
     return "\n".join(lines)
+
+
+def _period_not_applied(answer: DoctorsAnswer) -> str | None:
+    """Сказать вслух, что период из вопроса не применён.
+
+    До 06.09.2026 такой ответ выглядел ответом на заданный вопрос:
+    «в марте 2025» отбиралось по всему 2025 году, «за последний год» —
+    вообще без отбора, и ни строчки об этом. Ответ, который сужен
+    меньше, чем спросили, и молчит об этом, — неправда той же природы,
+    что придуманная цифра (§5.1).
+    """
+    if not answer.unsupported_period:
+        return None
+    if answer.year is not None:
+        return (f"Отобрал по {answer.year} году целиком: сузить до "
+                f"«{answer.unsupported_period}» я пока не умею.")
+    return (f"Ответ по всем вашим данным: ограничение "
+            f"«{answer.unsupported_period}» я пока применять не умею.")
 
 
 def _nothing_found(answer: DoctorsAnswer) -> str:
@@ -109,7 +130,8 @@ def _nothing_found(answer: DoctorsAnswer) -> str:
     привязать их к году нечем.
     """
     if answer.year is None:
-        return NOT_FOUND
+        period = _period_not_applied(answer)
+        return f"{NOT_FOUND}\n{period}" if period else NOT_FOUND
     text = ("Не нашёл в ваших данных подтверждённых посещений врачей "
             f"за {answer.year} год.")
     if answer.undated_doctors:
@@ -117,6 +139,9 @@ def _nothing_found(answer: DoctorsAnswer) -> str:
         whom = "которого" if count % 10 == 1 and count % 100 != 11 else "которых"
         text += (f"\nВ данных есть {count} {_plural_doctors(count)}, "
                  f"дату приёма у {whom} подтвердить не удалось.")
+    period = _period_not_applied(answer)
+    if period:
+        text += f"\n{period}"
     return text
 
 
