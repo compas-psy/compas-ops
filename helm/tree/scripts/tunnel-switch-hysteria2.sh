@@ -118,16 +118,26 @@ fi
 echo
 echo "############ РЕСТАРТ ############"
 sudo systemctl restart "$UNIT" || { sudo cp -a "$BACKUP" "$CONF"; sudo systemctl restart "$UNIT"; fail "рестарт не удался, вернул прежний конфиг"; }
-sleep 5
+# Ждём именно `active`. Прогон 334 проверял связность через пять секунд,
+# когда служба была ещё `activating`, — то есть мерил не туннель.
+for _ in $(seq 20); do
+  [ "$(sudo systemctl is-active "$UNIT")" = "active" ] && break
+  sleep 2
+done
 sudo systemctl is-active "$UNIT" | sed 's/^/  is-active: /'
 
 echo
 echo "############ ПРОВЕРКА СВЯЗНОСТИ ЧЕРЕЗ ПРОКСИ ############"
 check() {
   local name=$1 url=$2 code
-  code=$(curl -sS -o /dev/null -m 20 -w '%{http_code}' -x http://127.0.0.1:18080 "$url" 2>/dev/null || echo 000)
-  printf '  %-14s %s\n' "$name" "$code"
-  [ "$code" != "000" ]
+  # `|| echo 000` здесь стоять НЕ ДОЛЖНО: при провале curl сам печатает
+  # 000 через -w, и запасное echo дописывало второй — получалось
+  # «000\n000», что не равно «000». Прогон 334 на этом объявил ложный
+  # успех, отката не случилось, туннель остался нерабочим.
+  code=$(curl -sS -o /dev/null -m 20 -w '%{http_code}' -x http://127.0.0.1:18080 "$url" 2>/dev/null)
+  code=${code//[!0-9]/}
+  printf '  %-14s %s\n' "$name" "${code:-000}"
+  [ -n "$code" ] && [ "$code" != "000" ]
 }
 telegram_ok=1; openrouter_ok=1
 check telegram   https://api.telegram.org/ || telegram_ok=0
