@@ -33,6 +33,14 @@ ______» — тоже, и пять таких одинаковых строк з
 from __future__ import annotations
 
 import re
+import uuid
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from ..models import KnowledgeChunk
+from .embeddings import embed_texts_or_none
+from .health_schema import health_schema_configured, is_health_domain, write_chunks
 
 #: Ниже этого склеиваем со следующим блоком. 200 символов — примерно
 #: абзац; выбрано по замеру: при медиане 65 всё, что короче, оказалось
@@ -100,3 +108,55 @@ def rechunk(text: str) -> list[str]:
     if heading and not any(chunk.startswith(heading) for chunk in chunks):
         chunks.append(heading)
     return chunks
+
+
+def store_chunks(session: Session, *, source_id: uuid.UUID,
+                 knowledge_user_id: uuid.UUID, domain: str, text: str) -> int:
+    """Нарезать текст источника и положить чанки на место прежних.
+
+    ОДНА функция на три вызова — загрузку текстом, загрузку файлом и
+    пересборку поискового слоя. Третий путь появился 06.09.2026, и
+    писать его отдельной копией значило бы гарантировать расхождение:
+    пересобранные чанки обязаны быть теми же, что сделал бы ingest.
+
+    Удаление прежних чанков перед вставкой — то, что делает пересборку
+    возможной, и одновременно то, что делает повтор задания безопасным.
+    На первой загрузке удалять нечего. Тот же приём и та же причина, что
+    у `relations.py::store_relations()`.
+
+    ЭМБЕДДИНГ СЧИТАЕТСЯ ЗДЕСЬ ЖЕ, не отдельным проходом. Чанк и его
+    вектор — одна единица поиска: заменить текст и оставить прежний
+    вектор значит получить векторный поиск, отвечающий по тому, чего в
+    базе больше нет. Ровно эта авария случилась 06.09.2026 на другом
+    слое, когда переключение поколения semantic-v3 оставило слой
+    личностей над прежним.
+
+    Возвращает число записанных чанков.
+    """
+    chunks = rechunk(text)
+    # ADR-025: недоступность embed-сервиса не мешает создать чанки —
+    # `embed_texts_or_none()` отдаёт None на чанк, лексический поиск по
+    # нему работает как раньше.
+    embeddings = embed_texts_or_none(chunks)
+
+    if is_health_domain(domain) and health_schema_configured():
+        # ADR-005/P12: текст чанка — самое чувствительное поле источника,
+        # уходит в health.knowledge_chunks своей ролью и своей сессией.
+        return write_chunks(source_id=source_id, knowledge_user_id=knowledge_user_id,
+                            chunks=chunks, embeddings=embeddings)
+
+    session.query(KnowledgeChunk).filter(
+        KnowledgeChunk.knowledge_user_id == knowledge_user_id,
+        KnowledgeChunk.source_id == source_id,
+    ).delete(synchronize_session=False)
+    for ordinal, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
+        session.add(KnowledgeChunk(
+            knowledge_user_id=knowledge_user_id, source_id=source_id, ordinal=ordinal,
+            text=chunk_text,
+            # to_tsvector на стороне БД, не в Python: русская конфигурация
+            # словаря живёт в Postgres, и дублировать её здесь значит
+            # разойтись с ней при первом же обновлении.
+            tsv=func.to_tsvector("russian", chunk_text),
+            embedding=embedding,
+        ))
+    return len(chunks)

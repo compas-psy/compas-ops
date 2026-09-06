@@ -116,7 +116,19 @@ def record_parse_error(*, source_id: uuid.UUID, knowledge_user_id: uuid.UUID,
 
 def write_chunks(*, source_id: uuid.UUID, knowledge_user_id: uuid.UUID,
                  chunks: list[str], embeddings: list[list[float] | None]) -> int:
+    """Идемпотентно: прежние чанки источника удаляются перед вставкой.
+
+    Тот же приём и та же причина, что у `write_relations()` ниже. До
+    06.09.2026 удаления здесь не было, потому что дедуп по SHA256 не
+    давал повторной загрузки тех же байтов; пересборка поискового слоя
+    новым правилом нарезки — тот самый повтор, ради которого удаление и
+    нужно, а повторное задание воркера перестаёт удваивать чанки.
+    """
     with health_session(knowledge_user_id) as session:
+        session.query(HealthKnowledgeChunk).filter(
+            HealthKnowledgeChunk.knowledge_user_id == knowledge_user_id,
+            HealthKnowledgeChunk.source_id == source_id,
+        ).delete(synchronize_session=False)
         for ordinal, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
             session.add(HealthKnowledgeChunk(
                 knowledge_user_id=knowledge_user_id, source_id=source_id, ordinal=ordinal,

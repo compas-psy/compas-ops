@@ -24,18 +24,17 @@ source») — единственное правило полного pipeline, �
 from __future__ import annotations
 
 import hashlib
-import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus, KnowledgeSource, KnowledgeStatus
+from ..models import KnowledgeIngestJob, KnowledgeIngestStatus, KnowledgeSource, KnowledgeStatus
 from .atomizer import atomize_and_store
-from .embeddings import embed_texts_or_none
-from .health_schema import health_schema_configured, is_health_domain, write_chunks, write_original_filename
+from .chunking import store_chunks
+from .health_schema import health_schema_configured, is_health_domain, write_original_filename
 from .quotas import check_and_record_ingest, check_queue_depth, record_entry_formed
 from .relations import note_id_for, store_relations
 from .tenancy import bind_knowledge_user
@@ -45,19 +44,6 @@ from .vault import scope_root
 #: указывать свой временный каталог — писать в /opt/helm-knowledge при
 #: запуске pytest на произвольной машине было бы и неверно, и опасно.
 DEFAULT_VAULT_ROOT = "/opt/helm-knowledge"
-
-#: Разбиение по абзацам — не структурные чанки Docling (с учётом таблиц и
-#: страниц), но детерминированно и достаточно для FTS уже сейчас. Меняется
-#: вместе с P8.5.2, не раньше — переписывать дважды смысла нет.
-_PARAGRAPH_SPLIT = re.compile(r"\n\s*\n+")
-
-
-def split_chunks(text: str) -> list[str]:
-    """Публичная: переиспользуется `worker.py` при индексации реально
-    распарсенных файлов (тот же контракт разбиения, что и у ingest_text())."""
-    parts = [p.strip() for p in _PARAGRAPH_SPLIT.split(text) if p.strip()]
-    return parts or [text.strip()]
-
 
 def _public_original_filename(*, domain: str, original_filename: str | None,
                               source_id: uuid.UUID, knowledge_user_id: uuid.UUID) -> str | None:
@@ -146,27 +132,8 @@ def ingest_text(session: Session, *, domain: str, text: str,
                       source_id=source.id, source_sha256=sha256, text=text,
                       vault_root=root)
 
-    chunks = split_chunks(text)
-    # ADR-025: недоступность embed-сервиса не должна мешать созданию
-    # source/чанков — embed_texts_or_none() откатывается на None на чанк,
-    # лексический поиск (tsv) по нему продолжает работать как раньше.
-    embeddings = embed_texts_or_none(chunks)
-    if is_health_domain(domain) and health_schema_configured():
-        # ADR-005/P12: текст чанка — самое чувствительное поле source'а,
-        # уходит в health.knowledge_chunks вместо public.knowledge_chunks.
-        write_chunks(source_id=source.id, knowledge_user_id=knowledge_user_id,
-                    chunks=chunks, embeddings=embeddings)
-    else:
-        for ordinal, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
-            session.add(KnowledgeChunk(
-                knowledge_user_id=knowledge_user_id, source_id=source.id, ordinal=ordinal,
-                text=chunk_text,
-                # to_tsvector на стороне БД, не Python: русская конфигурация
-                # словаря живёт в Postgres, дублировать её логику в приложении
-                # означало бы гарантированное расхождение при следующем апдейте.
-                tsv=func.to_tsvector("russian", chunk_text),
-                embedding=embedding,
-            ))
+    store_chunks(session, source_id=source.id, knowledge_user_id=knowledge_user_id,
+                 domain=domain, text=text)
     return source
 
 

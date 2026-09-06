@@ -27,26 +27,24 @@ import logging
 import time
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .audio import strip_timestamps, transcribe_audio
 from .batch_intake import finalize_batch_if_terminal, sync_item_from_job
 from .chat_intake import voice_ready_menu_text
-from .embeddings import embed_texts_or_none
+from .chunking import store_chunks
 from .semantic_jobs import (claim_next_semantic_job, enqueue_semantic,
                             process_semantic_job)
 from .health_schema import (
     health_schema_configured, is_health_domain, read_original_filename, record_parse_error,
-    write_chunks,
 )
-from .ingest import split_chunks
 from .memory import try_remember
 from .parsers import parse_file
 from .relations import note_id_for, store_relations
 from .tenancy import bind_knowledge_user
 from ..models import (
-    KnowledgeBatchItem, KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus,
+    KnowledgeBatchItem, KnowledgeIngestJob, KnowledgeIngestStatus,
     KnowledgePendingAttachment, KnowledgeSource, KnowledgeStatus, KnowledgeUser,
     KnowledgeUserStatus,
 )
@@ -318,23 +316,9 @@ def process_job(session: Session, job: KnowledgeIngestJob) -> None:
         enqueue_semantic(session, source_id=source.id, knowledge_user_id=tenant_id,
                          source_sha256=source.sha256)
 
-        chunks = split_chunks(result.text)
-        # ADR-025: та же fail-open политика, что ingest_text() — сбой
-        # embed-сервиса не должен превращать job в FAILED, чанк просто
-        # остаётся без embedding до бэкафилла.
-        embeddings = embed_texts_or_none(chunks)
-        if is_health_domain(source.domain) and health_schema_configured():
-            chunk_count = write_chunks(source_id=source.id, knowledge_user_id=tenant_id,
-                                       chunks=chunks, embeddings=embeddings)
-        else:
-            for ordinal, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
-                session.add(KnowledgeChunk(
-                    knowledge_user_id=tenant_id, source_id=source.id, ordinal=ordinal,
-                    text=chunk_text,
-                    tsv=func.to_tsvector("russian", chunk_text),
-                    embedding=embedding,
-                ))
-                chunk_count += 1
+        chunk_count = store_chunks(session, source_id=source.id,
+                                   knowledge_user_id=tenant_id,
+                                   domain=source.domain, text=result.text)
         job.status = KnowledgeIngestStatus.DONE
     except Exception as exc:
         job.status = KnowledgeIngestStatus.FAILED

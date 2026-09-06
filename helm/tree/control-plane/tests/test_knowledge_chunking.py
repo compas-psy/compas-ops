@@ -9,6 +9,11 @@
 
 from __future__ import annotations
 
+import ast
+import pathlib
+
+from helm_core.knowledge import ingest as ingest_mod
+from helm_core.knowledge import worker as worker_mod
 from helm_core.knowledge.chunking import MIN_CHUNK_CHARS, rechunk
 
 #: Кусок бланка ровно той формы, что дала пять одинаковых кандидатов и
@@ -98,3 +103,34 @@ def test_empty_text_gives_no_chunks():
 def test_trailing_heading_is_not_lost_silently():
     chunks = rechunk("Текст первого раздела.\n\nЗАКЛЮЧЕНИЕ")
     assert "ЗАКЛЮЧЕНИЕ" in chunks
+
+
+# ── проводка: одна нарезка на все пути ───────────────────────────────
+#
+# Через AST, а не поиском подстроки: упоминание в комментарии не вызов.
+# Тот же приём, что в `test_knowledge_semantic_jobs.py`.
+
+def _calls_in(module, func_name: str) -> set[str]:
+    tree = ast.parse(pathlib.Path(module.__file__).read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == func_name:
+            return {
+                child.func.id if isinstance(child.func, ast.Name) else child.func.attr
+                for child in ast.walk(node)
+                if isinstance(child, ast.Call)
+                and isinstance(child.func, (ast.Name, ast.Attribute))
+            }
+    raise AssertionError(f"нет функции {func_name}")
+
+
+def test_both_ingest_paths_use_the_same_chunker():
+    """Загрузка текстом и загрузка файлом обязаны нарезать одинаково.
+    Две копии одной нарезки разойдутся при первой же правке."""
+    assert "store_chunks" in _calls_in(ingest_mod, "ingest_text")
+    assert "store_chunks" in _calls_in(worker_mod, "process_job")
+
+
+def test_the_old_blank_line_splitter_is_gone():
+    """Иначе он останется вторым правилом нарезки, которое кто-нибудь
+    позовёт по привычке."""
+    assert not hasattr(ingest_mod, "split_chunks")
