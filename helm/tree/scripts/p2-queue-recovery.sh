@@ -29,9 +29,12 @@ SHARED=/opt/helm-knowledge/acceptance
 sudo mkdir -p "$SHARED"
 
 echo
-echo "############ 1. ЗАДАНИЕ В ОЧЕРЕДИ ############"
-# Файл кладётся в общий том: helm-core и воркер — разные контейнеры, и
-# путь источника воркер читает как есть (урок приёмки P2, прогон 350).
+echo "############ 1. ФАЙЛ ЗАГРУЖЕН ОБЫЧНЫМ ПУТЁМ ############"
+# Именно register_file_for_ingest, а не ingest_text: прогон 376 показал,
+# что ingest_text записывает source_path, но самого файла туда не кладёт
+# — source_text() возвращает None, и разбор честно падает в NoText, не
+# дойдя до сценария восстановления. Это отдельная находка, записана
+# отдельно; здесь нужен путь, которым идёт настоящая загрузка.
 sudo tee "$SHARED/$MARKER.md" >/dev/null <<EOF
 # Проверка восстановления очереди
 
@@ -39,33 +42,44 @@ sudo tee "$SHARED/$MARKER.md" >/dev/null <<EOF
 Вячеславовна, жалобы на утомляемость в течение трёх месяцев.
 Назначен контроль общего анализа крови через четыре недели.
 EOF
+sudo chmod 644 "$SHARED/$MARKER.md"
 
-JOB_ID=$(sudo docker compose exec -T helm-core python3 - <<PYEOF
+sudo docker compose exec -T helm-core python3 - <<PYEOF
+from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from helm_core.config import get_settings
-from helm_core.knowledge.ingest import ingest_text
-from helm_core.knowledge.semantic_jobs import enqueue_semantic
-from helm_core.knowledge.tenancy import bind_knowledge_user
+from helm_core.knowledge.ingest import register_file_for_ingest
 
 engine = create_engine(get_settings().database_url, pool_pre_ping=True)
 session = sessionmaker(bind=engine)()
-tenant = bind_knowledge_user(session, None)
-text = open("/opt/helm-knowledge/acceptance/$MARKER.md").read()
-source = ingest_text(session, domain="general", text=text,
-                     original_filename="$MARKER.md")
-session.flush()
-job_id = enqueue_semantic(session, source_id=source.id, knowledge_user_id=tenant,
-                          source_sha256=source.sha256)
+result = register_file_for_ingest(
+    session, domain="general",
+    raw_path=Path("/opt/helm-knowledge/acceptance/$MARKER.md"),
+    original_filename="$MARKER.md", mime_type="text/markdown")
 session.commit()
-print(job_id or "")
+print("источник:", result.source.id, "| задание L1:", result.job.id if result.job else "нет")
 PYEOF
-)
-JOB_ID=$(echo "$JOB_ID" | tr -d '[:space:]')
-echo "  задание: ${JOB_ID:-НЕ СОЗДАНО}"
-[ -z "$JOB_ID" ] && { echo "  ПРОВАЛ: задание не создано"; FAIL=1; }
 
 echo
+echo "############ 1b. L1 РАЗОБРАН, L2 ПОСТАВЛЕН САМ ############"
+# Семантическое задание НЕ ставится руками: его обязан поставить воркер
+# после парсинга. Если оно не появится, это провал P2 как такового.
+start=$(date -u +%s)
+JOB_ID=""
+until [ $(( $(date -u +%s) - start )) -ge 180 ]; do
+  JOB_ID=$(psql "select j.id from knowledge_semantic_jobs j join knowledge_sources s on s.id=j.source_id where s.original_filename='$MARKER.md'")
+  [ -n "$JOB_ID" ] && break
+  sleep 3
+done
+JOB_ID=$(echo "$JOB_ID" | tr -d '[:space:]')
+echo "  задание разбора: ${JOB_ID:-НЕ ПОЯВИЛОСЬ}"
+if [ -z "$JOB_ID" ]; then
+  echo "  ПРОВАЛ: загрузка файла не породила задание разбора"
+  echo "############ ПРОВАЛ ############"
+  exit 1
+fi
+
 echo "############ 2. ЖДЁМ ФИКСАЦИИ RUNNING ############"
 start=$(date -u +%s)
 STATE=""
