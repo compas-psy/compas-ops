@@ -429,6 +429,11 @@ jobs:
         # точка возврата снята выше (тот же гейт, что у deploy), и в
         # журнале видно, что прогон был записывающим.
         if: inputs.action == 'maintenance'
+        env:
+          # Описание outbound туннеля целиком, вместе с паролем. Живёт
+          # только здесь (CLAUDE.md §5.4): в репозитории его нет и быть
+          # не может, в лог не печатается, скрипту уходит на stdin.
+          HYSTERIA2_OUTBOUND: ${{ secrets.HYSTERIA2_OUTBOUND }}
         run: |
           if [ -z "${{ inputs.script }}" ]; then
             echo "::error::Для maintenance нужно указать script (имя файла в scripts/)"
@@ -442,13 +447,33 @@ jobs:
           esac
           scp -i ~/.ssh/id_deploy "helm/tree/scripts/${{ inputs.script }}" \
               "$VPS_USER@$VPS_HOST:/tmp/maintenance.sh"
-          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=12 \
-              -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
-            bash /tmp/maintenance.sh
-            rc=$?
-            rm -f /tmp/maintenance.sh
-            exit $rc
-          '
+          # Секрет уходит скрипту на stdin, а не аргументом команды:
+          # в аргументах он был бы виден в `ps` на сервере и мог бы
+          # попасть в лог Actions при любой ошибке разбора строки.
+          # Подаётся ТОЛЬКО скрипту, который его ждёт: остальные
+          # обслуживающие скрипты читают stdin своими heredoc'ами, и
+          # лишний поток им незачем.
+          if [ "${{ inputs.script }}" = "tunnel-switch-hysteria2.sh" ]; then
+            if [ -z "$HYSTERIA2_OUTBOUND" ]; then
+              echo "::error::Нет секрета HYSTERIA2_OUTBOUND — заведите его в настройках репозитория"
+              exit 1
+            fi
+            printf '%s' "$HYSTERIA2_OUTBOUND" | ssh -o ServerAliveInterval=30 \
+                -o ServerAliveCountMax=12 -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
+              bash /tmp/maintenance.sh
+              rc=$?
+              rm -f /tmp/maintenance.sh
+              exit $rc
+            '
+          else
+            ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=12 \
+                -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
+              bash /tmp/maintenance.sh
+              rc=$?
+              rm -f /tmp/maintenance.sh
+              exit $rc
+            '
+          fi
 
       - name: Гейт необратимого действия
         if: inputs.action == 'destructive' || inputs.action == 'rollback'
