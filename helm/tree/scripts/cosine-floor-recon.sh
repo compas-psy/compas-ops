@@ -26,7 +26,7 @@ from sqlalchemy.orm import sessionmaker
 
 from helm_core.config import get_settings
 from helm_core.knowledge.embeddings import embed_texts_or_none
-from helm_core.knowledge.probe import (MIN_COSINE_SIMILARITY, MIN_RANK_SCORE,
+from helm_core.knowledge.probe import (MIN_CHUNK_RANK_SCORE, MIN_COSINE_SIMILARITY,
                                        _health_lexical_search, _health_vector_search,
                                        _lexical_search, _vector_search)
 from helm_core.knowledge.tenancy import bind_knowledge_user
@@ -78,7 +78,7 @@ def lexical_hits(question: str) -> int:
     """
     hits = (_lexical_search(session, query=question, domain=None, knowledge_user_id=tenant)
             + _health_lexical_search(query=question, knowledge_user_id=tenant))
-    return sum(1 for hit in hits if hit.rank >= MIN_RANK_SCORE)
+    return sum(1 for hit in hits if hit.rank >= MIN_CHUNK_RANK_SCORE)
 
 
 def measure(name, questions):

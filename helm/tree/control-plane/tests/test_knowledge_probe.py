@@ -10,7 +10,7 @@ from sqlalchemy import select
 from helm_core.knowledge import ingest as ingest_module
 from helm_core.knowledge import probe as probe_module
 from helm_core.knowledge.ingest import ingest_text
-from helm_core.knowledge.probe import MIN_RANK_SCORE, probe
+from helm_core.knowledge.probe import MIN_CHUNK_RANK_SCORE, probe
 from helm_core.models import (
     KnowledgeAnswerRun, KnowledgeChunk, KnowledgeSource, KnowledgeUser, KnowledgeUserRole,
 )
@@ -216,7 +216,7 @@ def test_local_answer_evidence_never_below_threshold(session):
     result = probe(session, query="какое решение приняли")
 
     assert result.outcome == "LOCAL_ANSWER"
-    assert all(e.rank >= MIN_RANK_SCORE for e in result.evidence)
+    assert all(e.rank >= MIN_CHUNK_RANK_SCORE for e in result.evidence)
 
 
 # ── ADR-025 Phase 2: pgvector дополняет лексику ────────────────────────────
@@ -370,3 +370,40 @@ def test_z0_rephrase_receives_question_and_evidence_text(session, monkeypatch):
     assert captured["question"] == "когда встреча"
     assert captured["evidence_text"] == "Встречу перенесли на четверг."
     assert captured["knowledge_user_id"] == SYSTEM_OWNER_ID
+
+
+# ── пороги чанков и памяти разведены ─────────────────────────────────
+#
+# Перечанковка 06.09.2026 подняла медиану чанка с 65 символов до 288, а
+# `ts_rank(normalization=2)` делит ранг на длину. Ранги уехали под порог
+# и лексика замолчала: 0–1 попадание на восьми вопросах, включая четыре,
+# ответ на которые в корпусе есть (прогон 373). Базы для этих проверок
+# не нужно — они про выбор чисел, а не про данные.
+
+def test_chunk_ranking_does_not_divide_by_length():
+    """Деление на длину привязывает порог к нарезке. Нарезка меняется —
+    порог молча перестаёт работать, и это уже произошло один раз."""
+    from helm_core.knowledge.probe import CHUNK_RANK_NORMALIZATION
+
+    assert CHUNK_RANK_NORMALIZATION == 0
+
+
+def test_chunk_threshold_separates_measured_noise_from_measured_answers():
+    """Числа из прогона 378 на живом корпусе: самый шумный несвязанный
+    вопрос дал 0.01216, самый слабый настоящий ответ — 0.03040."""
+    from helm_core.knowledge.probe import MIN_CHUNK_RANK_SCORE
+
+    assert 0.01216 < MIN_CHUNK_RANK_SCORE < 0.03040
+
+
+def test_memory_keeps_its_own_threshold():
+    """Память — короткие фразы, у них деление на длину осмысленно, и
+    0.003 под них откалиброван. Одно число на два разных текста уже
+    однажды связало их судьбы; разводить обратно нельзя."""
+    import inspect
+
+    from helm_core.knowledge import probe as probe_mod
+
+    source = inspect.getsource(probe_mod.probe)
+    assert "hit.rank >= MIN_RANK_SCORE" in source, "порог памяти уехал вместе с чанками"
+    assert "e.rank >= MIN_CHUNK_RANK_SCORE" in source

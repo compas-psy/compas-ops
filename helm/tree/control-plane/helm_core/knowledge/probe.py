@@ -66,6 +66,47 @@ from ..models.base import utcnow
 #: реальном golden-set, не раньше.
 MIN_RANK_SCORE = 0.003
 
+#: Ранжирование ЧАНКОВ. Отдельно от `MIN_RANK_SCORE` с 06.09.2026: до
+#: этого одно число обслуживало и чанки, и записи «Запомни», а это
+#: разные тексты, ранжируемые по-разному. Память — короткие фразы, у
+#: них деление ранга на длину осмысленно и порог 0.003 под них
+#: откалиброван; трогать его, не измерив память, нельзя.
+#:
+#: ЧТО СЛОМАЛОСЬ. Перечанковка 06.09.2026 подняла медиану чанка с 65
+#: символов до 288. `normalization=2` делит ранг на длину — ранги
+#: уехали под порог, и лексика замолчала: замер (прогон 373) дал 0–1
+#: попадание выше порога на восьми вопросах, включая четыре, ответ на
+#: которые в корпусе есть. Отвечал один вектор, а различать «про это» и
+#: «не про это» на разнице 0.008 он не может.
+#:
+#: Разбор 05.09 предсказывал это дословно: «Даже с правильными чанками
+#: ts_rank(normalization=2) продолжит поднимать короткое. Это стоит
+#: пересмотреть вместе с перечанковкой, а не отдельно».
+#:
+#: ЧТО ИЗМЕРЕНО (прогон 378, три нормализации на одних вопросах):
+#:
+#:               norm=0     norm=1     norm=2
+#:   ответ есть  0.03040    0.00571    0.00078   давление
+#:               0.06301    0.00939    0.00163   общий анализ крови
+#:               0.05300    0.00744    0.00101   УЗИ брюшной полости
+#:               0.04559    0.00939    0.00405   кардиолог в заключении
+#:   ответа нет  0.00000    0.00000    0.00000   три несвязанные темы
+#:               0.01216    0.00253    0.00045   марка бетона
+#:
+#: Разделяют все три, но `norm=0` даёт самый широкий зазор (0.012 против
+#: 0.030) и не зависит от длины чанка — то есть переживёт следующую
+#: смену нарезки, в отличие от предшественника. Длину чанка ранг больше
+#: не штрафует: строки бланка, ради которых штраф вводился, убраны
+#: перечанковкой, и лечить их ранжированием больше не нужно.
+CHUNK_RANK_NORMALIZATION = 0
+
+#: Середина зазора по геометрическому среднему: 1.6 раза до шума
+#: («марка бетона», 0.01216) и 1.5 раза до самого слабого настоящего
+#: ответа (0.03040). Среднее геометрическое, а не арифметическое,
+#: потому что ранги — величина отношений, и равный запас в обе стороны
+#: тут именно кратный.
+MIN_CHUNK_RANK_SCORE = 0.02
+
 #: НАЙДЕНО 01.09.2026 (реальный чат владельца): "каких врачей я посещал"
 #: вернул 5 совпадений "Врач КДЛ:" — подпись лаборанта на бланке анализа,
 #: попадающая в СВОЙ отдельный чанк (несколько слов), а не реальные
@@ -180,7 +221,7 @@ def _lexical_search(session: Session, *, query: str, domain: str | None,
     # normalization=2 divides rank by document length — without it a long,
     # mostly-irrelevant document with one coincidental keyword match scores
     # identically to a short, genuinely relevant one (confirmed via psql).
-    rank = func.ts_rank(KnowledgeChunk.tsv, tsquery, 2).label("rank")
+    rank = func.ts_rank(KnowledgeChunk.tsv, tsquery, CHUNK_RANK_NORMALIZATION).label("rank")
     stmt = (
         select(KnowledgeChunk, KnowledgeSource, rank)
         .join(KnowledgeSource, KnowledgeChunk.source_id == KnowledgeSource.id)
@@ -239,7 +280,8 @@ def _health_lexical_search(*, query: str, knowledge_user_id: uuid.UUID) -> list[
     и на общий вопрос (`domain=None`), и на явный `domain="health"` —
     решение владельца 01.09.2026, health больше не исключение."""
     tsquery = build_or_tsquery(query)
-    rank = func.ts_rank(HealthKnowledgeChunk.tsv, tsquery, 2).label("rank")
+    rank = func.ts_rank(HealthKnowledgeChunk.tsv, tsquery,
+                        CHUNK_RANK_NORMALIZATION).label("rank")
     with health_session(knowledge_user_id) as session:
         stmt = (
             select(HealthKnowledgeChunk, HealthKnowledgeSourcePrivate.original_filename, rank)
@@ -409,7 +451,7 @@ def probe(session: Session, *, query: str, domain: str | None = None,
                                         knowledge_user_id=knowledge_user_id)
     if search_health:
         lexical_hits += _health_lexical_search(query=query, knowledge_user_id=knowledge_user_id)
-    lexical = sorted((e for e in lexical_hits if e.rank >= MIN_RANK_SCORE),
+    lexical = sorted((e for e in lexical_hits if e.rank >= MIN_CHUNK_RANK_SCORE),
                      key=lambda e: e.rank, reverse=True)
     # ОТБРАКОВКА ЛЕКСИКИ ДО РЕШЕНИЯ «КОЛЧАН ПОЛОН». Переставлено
     # 06.09.2026 по живому прогону 365: на «что там прописал врач?»
