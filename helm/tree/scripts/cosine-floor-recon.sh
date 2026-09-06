@@ -26,8 +26,9 @@ from sqlalchemy.orm import sessionmaker
 
 from helm_core.config import get_settings
 from helm_core.knowledge.embeddings import embed_texts_or_none
-from helm_core.knowledge.probe import (MIN_COSINE_SIMILARITY, _health_vector_search,
-                                       _vector_search)
+from helm_core.knowledge.probe import (MIN_COSINE_SIMILARITY, MIN_RANK_SCORE,
+                                       _health_lexical_search, _health_vector_search,
+                                       _lexical_search, _vector_search)
 from helm_core.knowledge.tenancy import bind_knowledge_user
 
 # Про что в корпусе заведомо есть.
@@ -50,27 +51,50 @@ session = sessionmaker(bind=engine)()
 tenant = bind_knowledge_user(session, None)
 
 
-def top_similarity(question: str) -> float | None:
+def top_similarity(question: str):
+    """(близость, была ли вообще доступна модель).
+
+    Прежняя версия возвращала None и при недоступной модели, и при
+    отсутствии находок выше порога, и печатала оба случая как «embed
+    недоступен». Прогон 372 из-за этого приписал сервису отказ там, где
+    порог сработал правильно.
+    """
     embedding = embed_texts_or_none([question])[0]
     if embedding is None:
-        return None
+        return None, False
     hits = (_vector_search(session, query_embedding=embedding, domain=None,
                            knowledge_user_id=tenant, exclude_chunk_ids=set())
             + _health_vector_search(query_embedding=embedding,
                                     knowledge_user_id=tenant, exclude_chunk_ids=set()))
-    return max((hit.rank for hit in hits), default=None)
+    return max((hit.rank for hit in hits), default=None), True
+
+
+def lexical_hits(question: str) -> int:
+    """Сколько лексических кандидатов выше порога ранга.
+
+    Нужно для решения о пороге: если у вопроса есть лексическая опора,
+    вектор ему только дополнение, и строгость к «одинокому» вектору
+    настоящих ответов не отнимет.
+    """
+    hits = (_lexical_search(session, query=question, domain=None, knowledge_user_id=tenant)
+            + _health_lexical_search(query=question, knowledge_user_id=tenant))
+    return sum(1 for hit in hits if hit.rank >= MIN_RANK_SCORE)
 
 
 def measure(name, questions):
     print(f"\n──── {name} ────")
+    print(f"  {'вектор':>7}  {'лексика':>7}  вопрос")
     values = []
     for question in questions:
-        top = top_similarity(question)
-        if top is None:
-            print(f"  (embed недоступен) | {question}")
+        top, model_ok = top_similarity(question)
+        lex = lexical_hits(question)
+        if not model_ok:
+            print(f"  {'—':>7}  {lex:>7}  {question}   (embed-сервис недоступен)")
             continue
-        values.append(top)
-        print(f"  {top:.3f} | {question}")
+        shown = f"{top:.3f}" if top is not None else "нет"
+        if top is not None:
+            values.append(top)
+        print(f"  {shown:>7}  {lex:>7}  {question}")
     return values
 
 
@@ -89,6 +113,9 @@ if related and unrelated:
         print(f"  РАЗДЕЛЯЮТСЯ. Порог имеет смысл ставить между "
               f"{max(unrelated):.3f} и {min(related):.3f}.")
     else:
+        print("  Столбец «лексика» решает, чинится ли это порогом на ОДИНОКИЙ")
+        print("  вектор: если у связанных вопросов лексическая опора есть, а у")
+        print("  несвязанных нет, строгость к вектору без опоры ничего не отнимет.")
         print("  НЕ РАЗДЕЛЯЮТСЯ одним числом: связанные и несвязанные вопросы")
         print("  перекрываются по близости. Поднимать порог значит терять")
         print("  настоящие ответы, оставлять — отвечать чем попало.")
