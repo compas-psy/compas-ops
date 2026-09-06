@@ -43,6 +43,21 @@ sudo journalctl -u hermes-gateway --since '12 hours ago' --no-pager 2>/dev/null 
   || echo "  журнал недоступен"
 
 echo
+echo "  --- доступ к api.telegram.org с хоста ---"
+# Telegram у нас за туннелем: httpx.ConnectError означает «туннеля нет»,
+# а не «Telegram лежит». Проверяем сам туннель, а не гадаем.
+for unit in sing-box tun2socks xray v2ray warp-svc; do
+  state=$(sudo systemctl is-active "$unit" 2>/dev/null || true)
+  [ -n "$state" ] && [ "$state" != "inactive" ] && echo "  $unit: $state"
+done
+echo -n "  прямой connect к api.telegram.org:443: "
+timeout 8 bash -c 'cat < /dev/null > /dev/tcp/api.telegram.org/443' 2>/dev/null \
+  && echo "открыт" || echo "НЕ открыт"
+echo -n "  локальный прокси 127.0.0.1:18080: "
+timeout 5 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/18080' 2>/dev/null \
+  && echo "слушает" || echo "НЕ слушает"
+
+echo
 echo "############ 2. ЗНАНИЕ: probe() на вопросе владельца ############"
 sudo docker compose exec -T helm-core python3 - <<'PYEOF'
 """Что вернул бы локальный слой на тот самый вопрос."""
@@ -69,12 +84,16 @@ with sessionmaker(engine, expire_on_commit=False)() as session:
             print(f"    probe() упал: {type(exc).__name__}: {exc}")
             session.rollback()
             continue
+        # Поле называется answer_text. В первой редакции скрипта я читал
+        # `answer`, которого нет, и печатал «(пусто)» на любом ответе —
+        # то есть измерял свой же getattr, а не продукт.
         print(f"    outcome:  {result.outcome}")
-        print(f"    mode:     {getattr(result, 'mode', None)}")
-        answer = (getattr(result, 'answer', None) or "").strip()
-        print(f"    ответ:    {answer[:400] if answer else '(пусто)'}")
-        evidence = getattr(result, "evidence", None) or []
+        print(f"    mode:     {result.mode}")
+        answer = (result.answer_text or "").strip()
+        print(f"    ответ:    {answer[:500] if answer else '(ПУСТО)'}")
+        evidence = result.evidence or []
         print(f"    фрагментов: {len(evidence)}")
+        print(f"    из памяти:  {len(result.memory or [])}")
         for item in evidence[:3]:
             text = " ".join((getattr(item, "chunk_text", "") or "").split())[:140]
             print(f"      — «{text}»")
