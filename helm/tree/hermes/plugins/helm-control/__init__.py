@@ -107,6 +107,16 @@ KNOWLEDGE_ADMIN_URL = "http://127.0.0.1:8080/internal/knowledge/admin"
 KNOWLEDGE_PAID_ESCALATION_URL = "http://127.0.0.1:8080/internal/knowledge/paid-escalation"
 HMAC_SECRET_PATH = "/etc/helm/secrets/hermes_service_hmac"
 REQUEST_TIMEOUT = 5
+#: Probe считает локально и может звать Ollama на рефраз. У самого
+#: рефраза потолок 20 c (`rephrase.py:47`) при документированной холодной
+#: задержке 5-8 c, а общий REQUEST_TIMEOUT — 5 c. Значит бесплатный
+#: ответ штатно НЕ УСПЕВАЛ: плагин отваливался по таймауту и уходил в
+#: платную модель, а Control Plane к этому моменту уже записывал строку
+#: `paid_ai_used=False`. Владелец платил за ответ, который метрика
+#: считала бесплатным. Потолок probe поднят отдельно, а не вместе с
+#: остальными вызовами: регистрации задачи и админским командам лишние
+#: секунды ожидания не нужны, они и должны падать быстро.
+PROBE_TIMEOUT = 30
 #: §14.5.1 "bounded size" — тот же потолок, что уже применяется на
 #: стороне Control Plane (chat_intake.MAX_ATTACHMENT_BYTES); проверка
 #: здесь просто экономит скачивание заведомо слишком большого файла,
@@ -509,10 +519,23 @@ async def _handle_batch_attachment_async(event, gateway, source, channel: str) -
 def _probe_local_answer(text: str) -> dict | None:
     """Free-first Knowledge Probe (ТЗ §14.11, v3.4), ДО обращения к LLM.
 
-    В отличие от `_register_task` это НЕ fail-closed гейт: probe — способ
-    сэкономить на платной модели, а не проверка допуска. Недоступность
-    Control Plane здесь не блокирует ответ владельцу — сообщение просто
-    идёт к LLM как обычно, без бесплатного локального пути в этот раз.
+    Три исхода, и путать их нельзя (правка 06.09.2026):
+
+    * `LOCAL_ANSWER` — ответ есть, отдаём его;
+    * `NEEDS_REASONING` — локально ответа нет, это ЗАПЛАНИРОВАННАЯ
+      эскалация, сообщение идёт к платной модели;
+    * `LOCAL_UNAVAILABLE` — probe не ответил (таймаут, разрыв, битый
+      JSON). Про вопрос неизвестно ничего.
+
+    Раньше третий случай возвращал `None` и был неотличим от второго:
+    сообщение молча уходило в платную модель. Для вопросов к памяти это
+    и есть та самая дыра в local-only — оплата по факту сбоя своего же
+    кода. Теперь сбой называется сбоем.
+
+    Оговорка про доступность: выше по потоку `_register_task` уже
+    fail-closed, и при лежащем Control Plane сообщение до этой точки не
+    доходит вовсе. Значит сюда попадает только сбой САМОГО probe, и
+    честный отказ здесь не отнимает у владельца обычную переписку.
     """
     body = json.dumps({"query": text}).encode("utf-8")
     ts = str(time.time())
@@ -528,11 +551,11 @@ def _probe_local_answer(text: str) -> dict | None:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT) as resp:
             return json.loads(resp.read().decode())
     except Exception as exc:
         print(f"[helm-control] knowledge_probe failed: {exc}", flush=True)
-        return None
+        return {"outcome": "LOCAL_UNAVAILABLE", "error": type(exc).__name__}
 
 
 def _log_paid_escalation(channel: str, text: str) -> None:
@@ -717,9 +740,18 @@ def _on_pre_gateway_dispatch(event, gateway):
         _task_ids[str(source.chat_id)] = result["task_id"]
 
     probe_result = _probe_local_answer(event.text)
-    if probe_result and probe_result.get("outcome") == "LOCAL_ANSWER":
+    outcome = (probe_result or {}).get("outcome")
+    if outcome == "LOCAL_ANSWER":
         _send_reply(gateway, source, probe_result["answer_text"])
         return {"action": "skip", "reason": "knowledge_probe_local_answer"}
+    if outcome == "LOCAL_UNAVAILABLE":
+        # Не уходим в платную модель по факту собственного сбоя.
+        # Владелец видит причину и может повторить; молчаливая оплата
+        # выглядела бы как обычный ответ и не оставляла бы следа.
+        _send_reply(gateway, source,
+                    "Локальная память сейчас не отвечает, к платной модели "
+                    "не обращаюсь. Повторите вопрос через минуту.")
+        return {"action": "skip", "reason": "knowledge_probe_unavailable"}
 
     return None
 

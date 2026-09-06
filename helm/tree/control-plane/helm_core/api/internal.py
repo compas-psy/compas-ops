@@ -88,7 +88,14 @@ def knowledge_probe(body: KnowledgeProbeIn,
     """
     result = probe(session, query=body.query, domain=body.domain)
     session.commit()
-    return {"outcome": result.outcome, "mode": result.mode, "answer_text": result.answer_text}
+    # `sources` и `answer_run_id` добавлены 06.09.2026. До этого наружу
+    # уходили только три поля, и вызывающий физически не мог ни показать
+    # пользователю источник, ни сцепить увиденный ответ с серверной
+    # строкой журнала: «ответ пришёл» и «ответ записан бесплатным»
+    # оставались двумя независимыми утверждениями.
+    return {"outcome": result.outcome, "mode": result.mode,
+            "answer_text": result.answer_text,
+            "sources": result.sources, "answer_run_id": result.answer_run_id}
 
 
 class RememberIn(BaseModel):

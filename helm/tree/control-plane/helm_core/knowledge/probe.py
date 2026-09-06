@@ -34,7 +34,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -111,6 +111,18 @@ class ProbeResult:
     #: Заполнено вместо `evidence`, когда ответ пришёл из Micro-Memory —
     #: память и документные чанки не смешиваются в одном ответе.
     memory: list[MemoryHit] = field(default_factory=list)
+    #: Источники в ОДНОЙ форме для всех режимов. `evidence` — чанки,
+    #: `proofs` структурного пути — спаны; вызывающему нужен один список,
+    #: который можно показать пользователю. До 06.09.2026 структурный
+    #: ответ терял доказательства целиком: `format_doctors()` их не
+    #: печатает, а `ProbeResult` не выносил наружу — ответ приходил без
+    #: единой ссылки, хотя спаны были посчитаны.
+    sources: list[dict[str, Any]] = field(default_factory=list)
+    #: id строки `knowledge_answer_runs`. Нужен, чтобы сцепить ответ,
+    #: который увидел пользователь, с серверным следом: без него
+    #: «ответ пришёл» и «ответ записан бесплатным» — два независимых
+    #: утверждения, и проверить их совпадение нечем.
+    answer_run_id: str | None = None
 
 
 def query_hash(query: str) -> str:
@@ -331,13 +343,17 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     ]
     if memory_hits:
         answer_text, mode = compose_memory_answer(memory_hits)
+        run_id = uuid.uuid4()
         session.add(KnowledgeAnswerRun(
+            id=run_id,
             knowledge_user_id=knowledge_user_id,
             query_hash=query_hash(query), domain=domain, mode=mode,
             paid_ai_used=False, evidence_count=len(memory_hits),
         ))
         return ProbeResult(outcome="LOCAL_ANSWER", mode=mode, answer_text=answer_text,
-                           memory=memory_hits)
+                           memory=memory_hits, answer_run_id=str(run_id),
+                           sources=[{"kind": "memory", "memory_id": str(hit.memory_id)}
+                                    for hit in memory_hits])
 
     # Структурный вопрос отвечается по доказанному (R5-R7), а не поиском
     # похожего текста. Это место — то самое, где найденная 05.09.2026
@@ -352,13 +368,24 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     if detect_intent(query) == QuestionIntent.DOCTORS_VISITED:
         structured = answer_doctors_visited(session, question=query,
                                             knowledge_user_id=knowledge_user_id)
+        # Один спан — один источник. Цитата (`proof.quote`) сюда НЕ идёт:
+        # текст ответа её и так содержит, а второй раз она бы уехала в
+        # журналы вызывающего.
+        structured_sources = [
+            {"kind": "span", "source_id": proof.source_id, "window_id": proof.window_id,
+             "char_start": proof.char_start, "char_end": proof.char_end}
+            for item in structured.items for proof in item.proofs
+        ]
+        run_id = uuid.uuid4()
         session.add(KnowledgeAnswerRun(
+            id=run_id,
             knowledge_user_id=knowledge_user_id,
             query_hash=query_hash(query), domain=domain, mode=KnowledgeAnswerMode.S1,
             paid_ai_used=False, evidence_count=len(structured.items),
         ))
         return ProbeResult(outcome="LOCAL_ANSWER", mode=KnowledgeAnswerMode.S1,
-                           answer_text=format_doctors(structured))
+                           answer_text=format_doctors(structured),
+                           answer_run_id=str(run_id), sources=structured_sources)
 
     # ADR-005/P12 + решение владельца 01.09.2026: health участвует в
     # общем бесплатном поиске наравне со всеми доменами — единственное,
@@ -444,10 +471,16 @@ def probe(session: Session, *, query: str, domain: str | None = None,
             cite = evidence[0].original_filename or evidence[0].source_id
             answer_text = f"{rephrased}\n\nИсточник: {cite}"
 
+    run_id = uuid.uuid4()
     session.add(KnowledgeAnswerRun(
+        id=run_id,
         knowledge_user_id=knowledge_user_id,
         query_hash=query_hash(query), domain=domain, mode=mode,
         paid_ai_used=False, evidence_count=len(evidence),
     ))
     return ProbeResult(outcome="LOCAL_ANSWER", mode=mode, answer_text=answer_text,
-                       evidence=evidence)
+                       evidence=evidence, answer_run_id=str(run_id),
+                       sources=[{"kind": "chunk", "source_id": item.source_id,
+                                 "chunk_id": item.chunk_id,
+                                 "original_filename": item.original_filename}
+                                for item in evidence])
