@@ -75,9 +75,54 @@ SYSTEM_PROMPT = (
     "о том, чего во фрагментах нет. Отвечай по-русски, коротко."
 )
 
+#: Слово, по которому фрагмент можно узнать в ответе: четыре и более
+#: символов, включая точки и слэши (адреса, коды услуг, номера).
+_TOKEN_RE = re.compile(r"[0-9a-zа-яё][0-9a-zа-яё._/\-]{3,}", re.IGNORECASE)
+
 _CITATION_RE = re.compile(r"^[^\S\n]*ФРАГМЕНТЫ[^\S\n]*:[^\S\n]*([0-9][0-9,\s]*)[^\S\n]*$",
                           re.IGNORECASE | re.MULTILINE)
 _NO_ANSWER_RE = re.compile(r"НЕТ\s+ОТВЕТА", re.IGNORECASE)
+
+
+def _tokens(text: str) -> set[str]:
+    return {match.group(0).lower().strip("._/-") for match in _TOKEN_RE.finditer(text)}
+
+
+def grounded_fragments(answer: str, fragments: list[str]) -> tuple[int, ...]:
+    """По каким фрагментам ответ РЕАЛЬНО собран — по содержанию, а не по
+    словам модели о себе.
+
+    Нужно по двум причинам сразу. Модель нередко пишет ответ и забывает
+    строку со ссылками (живой прогон 388: «Дай ссылку на мой канал B17»
+    — ответ был, формат не выдержан, и ответ отбрасывался целиком). И
+    даже когда ссылки есть, они — утверждение модели, а не проверка.
+
+    Различающим считается слово ответа, встречающееся ровно в ОДНОМ из
+    показанных фрагментов: адрес, код услуги, фамилия. Общие слова
+    («ссылки», «канал») есть везде и ничего не различают — они
+    отсеиваются сами, без словаря стоп-слов, потому что критерий не
+    «частое слово», а «слово, по которому фрагменты различаются».
+    """
+    per_fragment = [_tokens(fragment) for fragment in fragments]
+    answer_tokens = _tokens(answer)
+    distinctive = {token for token in answer_tokens
+                   if sum(token in tokens for tokens in per_fragment) == 1}
+    if distinctive:
+        # Не «все, у кого есть хоть одно», а сильнейшие, и вес слова —
+        # его длина: одна случайная словоформа («ссылку») не должна
+        # уравнивать посторонний фрагмент с тем, где стоит сам адрес
+        # («www.b17.ru/eliah»). Длина здесь — грубая мера того, насколько
+        # слово вообще опознаёт источник.
+        scores = [sum(len(token) for token in tokens & distinctive)
+                  for tokens in per_fragment]
+        best = max(scores)
+        return tuple(i for i, count in enumerate(scores, start=1) if count == best)
+    # Различающих слов нет — берутся фрагменты с наибольшим пересечением.
+    overlaps = [len(tokens & answer_tokens) for tokens in per_fragment]
+    best = max(overlaps, default=0)
+    if best == 0:
+        return ()
+    return tuple(i for i, count in enumerate(overlaps, start=1) if count == best)
 
 
 @dataclass(frozen=True)
@@ -100,40 +145,49 @@ def build_prompt(question: str, fragments: list[str]) -> str:
     return (
         f"Вопрос: {question}\n\n"
         f"Фрагменты из документов пользователя:\n{numbered}\n\n"
-        "Ответь на вопрос, используя только эти фрагменты. "
-        "Последней строкой напиши номера использованных фрагментов в виде\n"
+        "Ответь на вопрос, используя только эти фрагменты. Если в них "
+        "есть точное значение (адрес, число, дата, название) — приведи "
+        "его дословно.\n"
+        "Последней строкой напиши номера использованных фрагментов: "
         "ФРАГМЕНТЫ: 1,2\n"
         "Если ответа во фрагментах нет, напиши ровно одну строку: НЕТ ОТВЕТА"
     )
 
 
-def parse_response(raw: str, *, fragment_count: int) -> Synthesis | None:
+def parse_response(raw: str, *, fragments: list[str]) -> Synthesis | None:
     """Разобрать ответ модели. `None` — формат не выдержан, доверять нечему."""
+    fragment_count = len(fragments)
     text = (raw or "").strip()
     if not text:
         return None
 
+    # Строк со ссылками бывает больше одной (модель повторяет формат
+    # после каждого абзаца) — берутся все номера, и все такие строки
+    # убираются из текста ответа: это разметка, а не ответ.
     matches = list(_CITATION_RE.finditer(text))
-    if matches:
-        # Строк со ссылками бывает больше одной (модель повторяет формат
-        # после каждого абзаца) — берутся все номера, и все такие строки
-        # убираются из текста ответа: это разметка, а не ответ.
-        used = tuple(sorted({
-            n
-            for match in matches
-            for n in (int(part) for part in match.group(1).replace(" ", "").split(",") if part)
-            if 1 <= n <= fragment_count
-        }))
-        body = _CITATION_RE.sub("", text).strip()
-        if used and body:
-            return Synthesis(answered=True, text=body, used=used)
-        # Ссылки есть, а текста нет (или номера выдуманы) — это не ответ.
-        return None
+    claimed = tuple(sorted({
+        n
+        for match in matches
+        for n in (int(part) for part in match.group(1).replace(" ", "").split(",") if part)
+        if 1 <= n <= fragment_count
+    }))
+    body = _CITATION_RE.sub("", text).strip()
 
-    if _NO_ANSWER_RE.search(text):
+    if not body:
+        return None
+    if _NO_ANSWER_RE.search(body) and not claimed:
         return Synthesis(answered=False)
-    # Текст без ссылок: проверить его нечем, показывать нельзя.
-    return None
+
+    # Заземление по содержанию — главное, ссылки модели — уточнение.
+    # Пересечение, если оно непусто: модель могла сослаться и на лишний
+    # фрагмент, из которого в ответе ничего нет.
+    grounded = grounded_fragments(body, fragments)
+    used = tuple(sorted(set(claimed) & set(grounded))) or grounded or claimed
+    if not used:
+        # Ответ не опирается ни на один показанный фрагмент. Проверить
+        # его нечем — значит, показывать нельзя.
+        return None
+    return Synthesis(answered=True, text=body, used=used)
 
 
 def synthesize_or_none(question: str, fragments: list[str]) -> Synthesis | None:
@@ -157,4 +211,4 @@ def synthesize_or_none(question: str, fragments: list[str]) -> Synthesis | None:
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         logger.warning("локальный синтез недоступен, откат на composer: %s", exc)
         return None
-    return parse_response(result.get("response") or "", fragment_count=len(fragments))
+    return parse_response(result.get("response") or "", fragments=fragments)
