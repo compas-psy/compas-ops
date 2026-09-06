@@ -30,11 +30,12 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .atomizer import atomize_and_store
 from .audio import strip_timestamps, transcribe_audio
 from .batch_intake import finalize_batch_if_terminal, sync_item_from_job
 from .chat_intake import voice_ready_menu_text
 from .embeddings import embed_texts_or_none
+from .semantic_jobs import (claim_next_semantic_job, enqueue_semantic,
+                            process_semantic_job)
 from .health_schema import (
     health_schema_configured, is_health_domain, read_original_filename, record_parse_error,
     write_chunks,
@@ -304,15 +305,18 @@ def process_job(session: Session, job: KnowledgeIngestJob) -> None:
                                             source_id=source.id),
                         source_id=source.id, text=result.text)
 
-        # ADR-019: L2 semantic atomizer, аддитивно поверх store_relations()
-        # выше (fail-open, см. atomizer.py). vault_root восстанавливается из
-        # source_path ("<vault_root>/sources/<sha256>.md") — тот же корень,
-        # что был передан register_file_for_ingest(), не жёстко зашитый
-        # DEFAULT_VAULT_ROOT (тесты регистрируют файл с vault_root=tmp_path).
-        vault_root = str(Path(source.source_path).parent.parent)
-        atomize_and_store(session, domain=source.domain, knowledge_user_id=tenant_id,
-                          source_id=source.id, source_sha256=source.sha256, text=result.text,
-                          vault_root=vault_root)
+        # L2 ставится ЗАДАНИЕМ, а не выполняется здесь. До 06.09.2026 на
+        # этом месте стоял `atomize_and_store()`, замороженный с R2 и
+        # безусловно возвращающий 0 (`atomizer.py:411`) — то есть обычная
+        # загрузка семантического разбора не получала вовсе, и весь
+        # корпус существовал только потому, что backfill запускали
+        # руками.
+        #
+        # Именно заданием, а не вызовом: разбор идёт минутами и зовёт
+        # модель, а эта транзакция держит парсинг и чанки. Сбой модели не
+        # обязан отменять уже разобранный текст, который уже ищется.
+        enqueue_semantic(session, source_id=source.id, knowledge_user_id=tenant_id,
+                         source_sha256=source.sha256)
 
         chunks = split_chunks(result.text)
         # ADR-025: та же fail-open политика, что ingest_text() — сбой
@@ -427,6 +431,19 @@ def run_forever(session_factory) -> None:  # pragma: no cover — процесс
                     process_voice_pending(session, pending)
                     session.commit()
                     logger.info("knowledge voice pending %s обработан", pending.id)
+                    continue
+
+                # L2 опрашивается ПОСЛЕДНИМ и по той же причине, что
+                # voice: разбор минутный и модельный, он не должен
+                # отодвигать парсинг только что присланного файла.
+                # Пользователь ждёт «принято и разобрано», а не «узлы
+                # построены» — второе догоняет само.
+                semantic = claim_next_semantic_job(session)
+                if semantic is not None:
+                    session.commit()  # RUNNING виден снаружи на время разбора
+                    process_semantic_job(session, semantic)
+                    session.commit()
+                    logger.info("semantic job %s -> %s", semantic.id, semantic.status)
                     continue
 
                 session.commit()

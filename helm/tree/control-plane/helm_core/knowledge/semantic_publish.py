@@ -32,7 +32,7 @@ import json
 import logging
 import re
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from sqlalchemy import text as sql_text
@@ -41,7 +41,7 @@ from sqlalchemy.orm import Session
 from .health_schema import health_schema_configured, health_session, is_health_domain
 from .relation_compiler import compile_relations
 from .semantic_extract import (
-    ExtractionFailed, MAX_ATOMS_PER_WINDOW, WindowExtraction, WindowTruncated,
+    ExtractionFailed, WindowExtraction, WindowTruncated,
     extract_nodes_window,
 )
 from .semantic_windows import SemanticWindow, build_windows, split_window
@@ -100,6 +100,34 @@ HEALTH_MODELS = _Models(HealthKnowledgeNode, HealthKnowledgeNodeMention, HealthK
                         HealthKnowledgeEntityAlias, HealthKnowledgeSemanticWindow,
                         HealthKnowledgeEntityIdentity, HealthKnowledgeEntityIdentityMember,
                         HealthKnowledgeEntityResolutionCandidate)
+
+
+#: Версия разбора. Живёт рядом с тем, кто публикует, и импортируется
+#: всеми остальными: «что считается готовым» и «что публикуется»
+#: обязаны быть одним числом.
+#:
+#: 06.09.2026 они им не были. Константа лежала в `backfill.py`, а у
+#: `publish_semantic_run()` стоял свой умолчательный `semantic_version=2`
+#: — и всякий вызов не из backfill (пилот R5, приёмка R10) писал
+#: ревизии версии 2, которые `_is_current()` не признаёт текущими.
+#: Умолчание убрано: версию обязан назвать вызывающий.
+#:
+#: 2 → 3 (05.09.2026): контракт извлечения изменился, и граф, собранный
+#: старым, сам новым не станет. Изменилось три вещи: даты стали
+#: обязательными в схеме, подтверждение даты требует ТОЙ ЖЕ даты в
+#: цитате, и непрошедшая дата больше не уносит с собой атом. Последнее
+#: не про даты вовсе: на замере (прогон 322) те же шесть окон дали 31
+#: атом вместо 7. То есть старый граф беден не только временем.
+#:
+#: Поднятие версии — единственный способ заставить перенос перечитать
+#: всё: `_is_current()` сверяет версию, и все 90 источников снова
+#: становятся `todo`. Ничего не удаляется: старые ревизии остаются на
+#: месте, `current_semantic_run_id` переключается только на READY
+#: (§14.20), поиск по L1 работает всё время переноса. Побочный эффект,
+#: который надо знать: в графе будут лежать оба поколения узлов, а
+#: отвечать будет только текущее; уборка старых — отдельное
+#: необратимое действие, не это.
+SEMANTIC_VERSION = 3
 
 
 @dataclass
@@ -400,7 +428,7 @@ def _process(graph, models: _Models, *, window: SemanticWindow, ordinal: int,
 
 def publish_semantic_run(session: Session, *, source: KnowledgeSource, text: str,
                          model: str | None = None, extract=extract_nodes_window,
-                         semantic_version: int = 2) -> PublishResult:
+                         semantic_version: int) -> PublishResult:
     """Разобрать источник целиком и опубликовать ревизию, если она годна.
 
     Единственная точка, которой разрешено менять `current_semantic_run_

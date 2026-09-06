@@ -35,7 +35,8 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from .r10_fixtures import FIXTURES, Fixture, FixtureOutcome
-from .semantic_publish import PUBLIC_MODELS, normalize_key, publish_semantic_run
+from .semantic_publish import (PUBLIC_MODELS, SEMANTIC_VERSION, normalize_key,
+                               publish_semantic_run)
 from .tenancy import bind_knowledge_user
 from ..config import get_settings
 from ..models import KnowledgeSource
@@ -127,7 +128,8 @@ def run_fixtures(session: Session, *,
             session.add(source)
             session.flush()
             try:
-                result = publish_semantic_run(session, source=source, text=fixture.text)
+                result = publish_semantic_run(session, source=source, text=fixture.text,
+                                              semantic_version=SEMANTIC_VERSION)
             except Exception as exc:  # noqa: BLE001 — одна фикстура не рушит приёмку
                 outcome.error = type(exc).__name__
                 continue

@@ -565,6 +565,60 @@ class KnowledgeIngestJob(Base):
     __table_args__ = (Index("ix_knowledge_ingest_jobs_status", "status", "created_at"),)
 
 
+class KnowledgeSemanticJob(Base):
+    """Очередь семантического разбора: L2 после L1, без участия человека.
+
+    Заведена 06.09.2026. До неё разбора у обычной загрузки не было
+    вовсе: `worker.py` звал `atomize_and_store()`, который с R2 заморожен
+    и возвращает 0, а настоящий `publish_semantic_run()` вызывали только
+    три ручных CLI. То есть корпус существовал ровно потому, что кто-то
+    руками запускал backfill, а любой новый файл останавливался на L1 и
+    в память не попадал.
+
+    Отдельная таблица, а не поле у `knowledge_ingest_jobs`: L1 и L2 —
+    разные по стоимости и по способу отказа работы. Разбор идёт минутами
+    и зовёт модель; провал разбора не обязан помечать неудачным парсинг
+    и чанки, которые уже легли и уже ищутся.
+
+    Качество ревизии здесь НЕ дублируется: `semantic_run_id` ведёт на
+    саму ревизию, а `READY/DEGRADED/FAILED` у неё уже есть. Задание
+    отвечает только на вопрос «работа выполнялась», ревизия — на вопрос
+    «что получилось». Два поля с одним смыслом однажды разъедутся.
+    """
+
+    __tablename__ = "knowledge_semantic_jobs"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_users.id"))
+    source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("knowledge_sources.id"),
+                                                 nullable=False)
+    #: Отпечаток содержимого на момент постановки. Вместе с версией даёт
+    #: ключ единственности: повторная загрузка тех же байтов той же
+    #: версией — то же задание, а не второе знание о том же документе.
+    source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: Версия контракта разбора (`semantic_publish.SEMANTIC_VERSION`).
+    #: В ключе единственности потому, что подъём версии обязан вызвать
+    #: повторный разбор — это и есть механизм переноса корпуса.
+    semantic_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default=KnowledgeIngestStatus.PENDING,
+                                        nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    #: Только имя класса исключения. Текст ошибки модели может содержать
+    #: кусок разбираемого документа — та же причина, что в backfill.py.
+    error: Mapped[str | None] = mapped_column(String(128))
+    semantic_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_semantic_runs.id"))
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("knowledge_user_id", "source_id", "source_sha256",
+                         "semantic_version", name="uq_knowledge_semantic_jobs_work"),
+        Index("ix_knowledge_semantic_jobs_status", "status", "created_at"),
+    )
+
+
 class KnowledgePendingAttachment(Base):
     """Файл, уже сохранённый в spool, ждущий ответа владельца с доменом
     (P8.5.7, §14.5.1 + двухшаговый диалог — решение владельца 29.08.2026).

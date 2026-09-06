@@ -28,7 +28,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .health_schema import health_schema_configured, health_session, is_health_domain
 from .relation_compiler import is_mentioned
-from .semantic_publish import HEALTH_MODELS, PUBLIC_MODELS, publish_semantic_run
+from .semantic_publish import (HEALTH_MODELS, PUBLIC_MODELS, SEMANTIC_VERSION,
+                               publish_semantic_run)
 from .tenancy import bind_knowledge_user
 from ..config import get_settings
 from ..models import KnowledgeSemanticRun, KnowledgeSource, KnowledgeStatus
@@ -368,7 +369,8 @@ def run_pilot(session: Session, *, limit: int = DEFAULT_LIMIT,
                 error="нет разобранного текста в Vault"))
             continue
 
-        result = publish_semantic_run(session, source=source, text=text)
+        result = publish_semantic_run(session, source=source, text=text,
+                                     semantic_version=SEMANTIC_VERSION)
         session.flush()
         counts, breakdown = run_counts(session, result.run_id, domain=source.domain,
                                        knowledge_user_id=tenant_id, text=text)

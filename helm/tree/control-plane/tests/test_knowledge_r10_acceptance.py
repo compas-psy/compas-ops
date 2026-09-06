@@ -57,7 +57,13 @@ class _Published:
         self.fail_keys = set(fail_keys)
         self.paths = []
 
-    def __call__(self, session, *, source, text):
+    def __call__(self, session, *, source, text, semantic_version):
+        # `semantic_version` обязателен с 06.09.2026: умолчание «2» в
+        # `publish_semantic_run()` расходилось с порогом «3» и молча
+        # писало ревизии, которые `_is_current()` не признаёт текущими.
+        # Дубль обязан требовать его так же, иначе тест перестанет
+        # ловить пропущенный аргумент.
+        assert semantic_version >= 3, "приёмка обязана публиковать текущую версию"
         self.calls.append(source.domain)
         self.paths.append(source.source_path)
         if source.original_filename.removesuffix(".md") in self.fail_keys:
