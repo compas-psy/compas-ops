@@ -168,13 +168,13 @@ async def knowledge_telegram_webhook(request: Request,
         session.commit()
         return {"status": "local_answer"}
 
-    if probe_result.outcome == "LOCAL_NOT_FOUND":
+    if probe_result.outcome in ("LOCAL_NOT_FOUND", "NEEDS_CLARIFICATION"):
         # Этот роутер платную модель и так вызвать не может, но текст у
         # честного отсутствия свой: он говорит, что искали именно в
         # записях пользователя, а не что «роль без платного ИИ».
         _reply(session, inbound, probe_result.answer_text)
         session.commit()
-        return {"status": "local_not_found"}
+        return {"status": probe_result.outcome.lower()}
 
     # §14.18: "Knowledge-only users have no Hermes/OpenRouter/LiteLLM
     # credential path" — этот роутер не может вызвать Hermes, даже

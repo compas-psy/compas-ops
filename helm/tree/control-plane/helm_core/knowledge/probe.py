@@ -44,7 +44,7 @@ from .answer_format import (PERSONAL_NOT_FOUND, format_doctors, format_nearest_q
 from .embeddings import embed_texts_or_none
 from .health_schema import health_schema_configured, health_session
 from .query_router import QuestionIntent, answer_doctors_visited, detect_intent
-from .query_scope import is_personal_data_question
+from .query_spec import build_query_spec
 from .recall import (
     MemoryHit, build_or_tsquery, compose_memory_answer, is_future_reminder,
     is_historical_query, search_memories,
@@ -149,7 +149,8 @@ class ProbeResult:
     #: LOCAL_NOT_FOUND добавлен 06.09.2026: вопрос о данных владельца,
     #: ответа в памяти нет — и это НЕ повод платить. Отличается от
     #: NEEDS_REASONING именно правом на эскалацию, а не текстом.
-    outcome: Literal["LOCAL_ANSWER", "LOCAL_NOT_FOUND", "NEEDS_REASONING"]
+    outcome: Literal["LOCAL_ANSWER", "LOCAL_NOT_FOUND",
+                     "NEEDS_CLARIFICATION", "NEEDS_REASONING"]
     #: Z0 | Z1, заполнено только при outcome == LOCAL_ANSWER.
     mode: str | None = None
     answer_text: str | None = None
@@ -366,6 +367,29 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     """
     knowledge_user_id = bind_knowledge_user(session, knowledge_user_id)
 
+    # P4: вопрос разбирается ОДИН раз и целиком, до всякого поиска.
+    # Раньше его свойства выяснялись по дороге в разных местах — тенант
+    # здесь, год внутри исполнителя врачей, область данных перед
+    # решением об оплате, неприменимый период в форматтере. Ни одно не
+    # существовало как факт, о котором можно спросить, и ответ не мог
+    # честно перечислить, что применил, а что нет.
+    spec = build_query_spec(query, tenant_id=knowledge_user_id)
+
+    # Уточнение — не ошибка и не пустой ответ, а третий исход. «Что там
+    # прописал врач?» не имеет ответа сам по себе: «там» указывает на
+    # документ из разговора, а памяти разговора у probe нет. До сих пор
+    # система отвечала на такой вопрос ближайшим похожим текстом, то
+    # есть угадывала, о чём речь.
+    if spec.clarification:
+        run_id = uuid.uuid4()
+        session.add(KnowledgeAnswerRun(
+            id=run_id, knowledge_user_id=knowledge_user_id,
+            query_hash=query_hash(query), domain=domain,
+            mode=KnowledgeAnswerMode.Q0, paid_ai_used=False, evidence_count=0,
+        ))
+        return ProbeResult(outcome="NEEDS_CLARIFICATION", mode=KnowledgeAnswerMode.Q0,
+                           answer_text=spec.clarification, answer_run_id=str(run_id))
+
     # §14.13: «напомни» + явный будущий триггер + действие — это
     # постановка напоминания, а не вопрос к памяти. Подсистемы задач/
     # напоминаний в HELM нет вообще, поэтому единственная честная форма
@@ -521,7 +545,7 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     # заодно с запретом (§5 CHUNKING_AND_BAD_ANSWERS откладывал это
     # различение до QuerySpec; дальше откладывать нельзя).
     if not evidence:
-        if not is_personal_data_question(query):
+        if not spec.personal:
             return ProbeResult(outcome="NEEDS_REASONING")
         run_id = uuid.uuid4()
         session.add(KnowledgeAnswerRun(

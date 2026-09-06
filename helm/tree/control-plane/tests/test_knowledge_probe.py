@@ -5,6 +5,8 @@ GigaAM, Graphify — см. V3.4-DELTA.md): exact fact, RU lexical mismatch,
 absent-from-corpus, health ACL isolation, SHA256-дедуп.
 """
 
+import uuid
+
 from sqlalchemy import select
 
 from helm_core.knowledge import ingest as ingest_module
@@ -185,23 +187,40 @@ def test_local_answer_logs_answer_run_without_paid_ai(session):
     assert run.evidence_count == 1
 
 
-def test_needs_reasoning_does_not_log_answer_run():
+def test_needs_reasoning_does_not_log_answer_run(monkeypatch):
     """NEEDS_REASONING логируется вызывающим кодом ПОСЛЕ реального ответа
     Hermes (cloud_model/latency известны только тогда) — probe() сам по
-    себе строку не пишет. Проверяется на уровне probe.py::probe напрямую,
-    без БД: если бы строка писалась здесь, для этого потребовалась бы сессия.
-    """
-    import inspect
+    себе строку не пишет.
 
+    Проверка поведенческая. Прежняя сравнивала СМЕЩЕНИЯ в исходнике
+    («NEEDS_REASONING встречается раньше, чем KnowledgeAnswerRun») и
+    сломалась 06.09.2026 от появления ветки уточнения выше по коду —
+    хотя проверяемое свойство осталось верным. Позиция в тексте функции
+    не свойство, а совпадение.
+    """
     from helm_core.knowledge import probe as probe_module
 
-    source = inspect.getsource(probe_module.probe)
-    assert "NEEDS_REASONING" in source
-    # Единственное место, где создаётся KnowledgeAnswerRun — ветка после
-    # успешной композиции ответа, не до неё.
-    needs_reasoning_line = source.index('outcome="NEEDS_REASONING")')
-    answer_run_line = source.index("KnowledgeAnswerRun(")
-    assert needs_reasoning_line < answer_run_line
+    class _RecordingSession:
+        def __init__(self):
+            self.added = []
+
+        def add(self, row):
+            self.added.append(row)
+
+    monkeypatch.setattr(probe_module, "bind_knowledge_user", lambda s, u: uuid.uuid4())
+    monkeypatch.setattr(probe_module, "is_future_reminder", lambda q: False)
+    monkeypatch.setattr(probe_module, "search_memories", lambda *a, **kw: [])
+    monkeypatch.setattr(probe_module, "detect_intent", lambda q: "unsupported")
+    monkeypatch.setattr(probe_module, "_lexical_search", lambda *a, **kw: [])
+    monkeypatch.setattr(probe_module, "_health_lexical_search", lambda *a, **kw: [])
+    monkeypatch.setattr(probe_module, "embed_texts_or_none", lambda texts: [None])
+
+    fake = _RecordingSession()
+    # Вопрос общий: личный дал бы LOCAL_NOT_FOUND, и это уже другая ветка.
+    result = probe_module.probe(fake, query="переведи этот текст на английский")
+
+    assert result.outcome == "NEEDS_REASONING"
+    assert fake.added == [], "probe записал строку прогона там, где не должен"
 
 
 # ── §14.13 quality gate ────────────────────────────────────────────────────

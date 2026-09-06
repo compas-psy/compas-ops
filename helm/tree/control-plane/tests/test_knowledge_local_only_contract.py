@@ -194,7 +194,7 @@ def test_unquotable_lexical_hits_do_not_block_the_vector_branch(monkeypatch):
     monkeypatch.setattr(probe_mod, "_health_vector_search", lambda *a, **kw: [])
     monkeypatch.setattr(probe_mod, "rephrase_or_none", lambda *a, **kw: None)
 
-    result = probe_mod.probe(_FakeSession(), query="что там прописал врач?")
+    result = probe_mod.probe(_FakeSession(), query="какие назначения мне делали?")
 
     assert asked_vector, "вектор снова не запросился — колчан заняла бракованная лексика"
     assert result.outcome == "LOCAL_ANSWER"
@@ -224,7 +224,7 @@ def test_a_good_lexical_hit_below_the_junk_is_not_cut_off(monkeypatch):
     monkeypatch.setattr(probe_mod, "embed_texts_or_none", lambda texts: [None])
     monkeypatch.setattr(probe_mod, "rephrase_or_none", lambda *a, **kw: None)
 
-    result = probe_mod.probe(_FakeSession(), query="что там прописал врач?")
+    result = probe_mod.probe(_FakeSession(), query="какие назначения мне делали?")
 
     assert result.outcome == "LOCAL_ANSWER"
     assert result.sources[0]["chunk_id"] == "c-real"
@@ -351,3 +351,36 @@ def test_general_question_with_no_evidence_still_escalates(monkeypatch):
     result = probe_mod.probe(_FakeSession(), query="переведи этот текст на английский")
 
     assert result.outcome == "NEEDS_REASONING"
+
+
+# ── 5. Уточнение вместо догадки ──────────────────────────────────────
+
+def test_deictic_question_asks_instead_of_guessing(monkeypatch):
+    """«Что ТАМ прописал врач» не имеет ответа сам по себе: «там»
+    указывает на документ из разговора, а памяти разговора у probe нет
+    (§6 CHUNKING_AND_BAD_ANSWERS). До 06.09.2026 система отвечала на
+    такой вопрос ближайшим похожим текстом, то есть угадывала, о чём
+    речь — и в живом чате владельца выдала подпись врача из чужого
+    протокола."""
+    _stub_common(monkeypatch)
+    searched = []
+    monkeypatch.setattr(probe_mod, "_lexical_search",
+                        lambda *a, **kw: searched.append("lexical") or [])
+    monkeypatch.setattr(probe_mod, "_health_lexical_search",
+                        lambda *a, **kw: searched.append("health") or [])
+
+    result = probe_mod.probe(_FakeSession(), query="что там прописал врач?")
+
+    assert result.outcome == "NEEDS_CLARIFICATION"
+    assert result.mode == "Q0"
+    assert "уточните" in result.answer_text.lower()
+    assert not searched, "искали, хотя не поняли, о чём вопрос"
+    assert result.answer_run_id, "уточнение тоже уход от платной модели, §14.14"
+
+
+def test_clarification_does_not_reach_the_paid_model(monkeypatch):
+    action, sent = _dispatch_with(monkeypatch, {
+        "outcome": "NEEDS_CLARIFICATION", "mode": "Q0",
+        "answer_text": "Уточните, о каком документе речь."})
+    assert action == {"action": "skip", "reason": "knowledge_probe_needs_clarification"}
+    assert sent == ["Уточните, о каком документе речь."]

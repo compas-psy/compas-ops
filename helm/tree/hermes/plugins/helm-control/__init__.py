@@ -744,6 +744,13 @@ def _on_pre_gateway_dispatch(event, gateway):
     if outcome == "LOCAL_ANSWER":
         _send_reply(gateway, source, probe_result["answer_text"])
         return {"action": "skip", "reason": "knowledge_probe_local_answer"}
+    if outcome == "NEEDS_CLARIFICATION":
+        # Вопрос не имеет ответа сам по себе: в нём есть указание на
+        # что-то, чего в самом вопросе нет («что ТАМ прописал врач»).
+        # Спросить — правильный ответ; платить за догадку платной модели
+        # неправильно вдвойне, она не видит ни памяти, ни разговора.
+        _send_reply(gateway, source, probe_result["answer_text"])
+        return {"action": "skip", "reason": "knowledge_probe_needs_clarification"}
     if outcome == "LOCAL_NOT_FOUND":
         # Вопрос был о данных владельца, и в памяти их нет. Платная
         # модель этих данных не знает — она заполнит пустоту общими

@@ -353,7 +353,7 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
         session.commit()
         return {"status": "local_answer", "task_id": task_id}
 
-    if probe_result.outcome == "LOCAL_NOT_FOUND":
+    if probe_result.outcome in ("LOCAL_NOT_FOUND", "NEEDS_CLARIFICATION"):
         # Вопрос о данных владельца, в памяти их нет. chief не
         # вызывается: платная модель этих данных не знает и заполнила бы
         # пустоту рассуждениями. Распоряжение владельца 06.09.2026 —
@@ -363,7 +363,7 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
                 reference=f"knowledge-probe:{task_id}",
                 payload_reference={"text": probe_result.answer_text})
         session.commit()
-        return {"status": "local_not_found", "task_id": task_id}
+        return {"status": probe_result.outcome.lower(), "task_id": task_id}
 
     background.add_task(_run_chief_and_enqueue_reply, request.app.state,
                         task_id=task_id, owner_id=request.app.state.owner_id,
