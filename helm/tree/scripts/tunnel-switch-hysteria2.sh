@@ -38,6 +38,17 @@ OUTBOUND=$(cat)
 echo "$OUTBOUND" | python3 -c 'import json,sys; json.load(sys.stdin)' \
   || fail "секрет HYSTERIA2_OUTBOUND не разбирается как JSON"
 
+# Секрет кладётся во временный файл с правами 0600, а не передаётся
+# питону на stdin: `python3 -` уже читает оттуда САМУ ПРОГРАММУ, и
+# heredoc затирает поток — прогон 332 упал именно на этом
+# (JSONDecodeError на первом же символе). Через argv и окружение тоже
+# нельзя: и то и другое видно в `ps`. Файл живёт секунды и снимается
+# ловушкой в любом исходе.
+umask 077
+SECRET_FILE=$(mktemp) || fail "не удалось создать временный файл"
+trap 'shred -u "$SECRET_FILE" 2>/dev/null || rm -f "$SECRET_FILE"' EXIT
+printf '%s' "$OUTBOUND" > "$SECRET_FILE"
+
 echo "############ ДО ############"
 sudo test -f "$CONF" || fail "нет $CONF"
 echo -n "  действующий route.final: "
@@ -55,23 +66,32 @@ echo "  резервная копия: $BACKUP"
 
 echo
 echo "############ ПРАВКА ############"
-printf '%s' "$OUTBOUND" | sudo python3 - "$CONF" <<'PYEOF'
+sudo python3 - "$CONF" "$SECRET_FILE" <<'PYEOF'
 """Меняем только выход. Вход, dns и всё прочее остаются как были."""
 import json
 import sys
 
-path = sys.argv[1]
-outbound = json.load(sys.stdin)
+path, secret_path = sys.argv[1], sys.argv[2]
+with open(secret_path) as handle:
+    outbound = json.load(handle)
 if not isinstance(outbound, dict) or "tag" not in outbound or "type" not in outbound:
     raise SystemExit("outbound обязан быть объектом с полями type и tag")
 
 with open(path) as handle:
     data = json.load(handle)
 
-# `direct` оставляем: на него ссылается detour у local-DNS, и без него
-# конфиг перестанет проходить проверку.
-data["outbounds"] = [outbound, {"type": "direct", "tag": "direct"}]
+# Убираем РОВНО тот outbound, на который сейчас указывает route.final
+# (мёртвый mieru-out), остальные оставляем как есть. Первая редакция
+# оставляла только `direct` и выбрасывала прочие — а на них ссылается
+# `detour` у DNS-серверов (`remote`, `google`), и конфиг перестал бы
+# проходить проверку. `sing-box check` это бы поймал, но чинить надо
+# причину, а не полагаться на гейт.
+dead = data.get("route", {}).get("final")
+kept = [item for item in data.get("outbounds", []) if item.get("tag") != dead]
+data["outbounds"] = [outbound] + [item for item in kept if item.get("tag") != outbound["tag"]]
 data.setdefault("route", {})["final"] = outbound["tag"]
+print(f"  убран мёртвый outbound: {dead}")
+print(f"  сохранены: {', '.join(item.get('tag', '?') for item in kept) or '(нет)'}")
 
 with open(path, "w") as handle:
     json.dump(data, handle, indent=2)
@@ -80,7 +100,7 @@ with open(path, "w") as handle:
 print(f"  outbound заменён на {outbound['type']} / {outbound['tag']}")
 print(f"  route.final = {outbound['tag']}")
 PYEOF
-[ "${PIPESTATUS[1]:-1}" = "0" ] || { sudo cp -a "$BACKUP" "$CONF"; fail "правка конфига не прошла, вернул прежний"; }
+[ $? -eq 0 ] || { sudo cp -a "$BACKUP" "$CONF"; fail "правка конфига не прошла, вернул прежний"; }
 
 echo
 echo "############ ПРОВЕРКА КОНФИГА ДО РЕСТАРТА ############"
