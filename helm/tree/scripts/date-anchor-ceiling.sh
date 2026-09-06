@@ -45,12 +45,15 @@ roles = Counter()
 event_per_window = Counter()   # сколько окон с 0 / 1 / 2+ якорями события
 dateless_total = 0
 dateless_recoverable = 0
+dateless_in_dated_window = 0   # потолок ЛЮБОЙ схемы наследования
+windows_with_any_anchor = 0
 windows_total = 0
 sources_seen = 0
 
 
 def measure(models, graph, sources):
     global dateless_total, dateless_recoverable, windows_total, sources_seen
+    global dateless_in_dated_window, windows_with_any_anchor
     for source in sources:
         text = source_text(source)
         if text is None:
@@ -85,6 +88,12 @@ def measure(models, graph, sources):
                 roles[anchor.role] += 1
             events = sum(1 for a in anchors if a.role == ROLE_EVENT)
             event_per_window["0" if events == 0 else "1" if events == 1 else "2+"] += 1
+            # Потолок ЛЮБОЙ схемы наследования, независимо от словаря
+            # подписей: узел без даты может получить её только из окна,
+            # где хоть какая-то дата написана.
+            if anchors:
+                windows_with_any_anchor += 1
+                dateless_in_dated_window += by_window.get(ordinal, 0)
             if inheritable_anchor(anchors) is not None:
                 dateless_recoverable += by_window.get(ordinal, 0)
 
@@ -105,11 +114,15 @@ print(f"  источников с текстом:        {sources_seen}")
 print(f"  окон:                        {windows_total}")
 print(f"  якорей по ролям:             {dict(roles)}")
 print(f"  окон по числу якорей event:  {dict(event_per_window)}")
+print(f"  окон хоть с одной датой:     {windows_with_any_anchor}")
 print(f"  датируемых узлов без даты:   {dateless_total}")
+print(f"  из них в окне с любой датой: {dateless_in_dated_window}")
 print(f"  из них в окнах с одним event: {dateless_recoverable}")
 if dateless_total:
-    share = 100.0 * dateless_recoverable / dateless_total
-    print(f"  доля восстановимых:          {share:.1f}%")
+    print(f"  потолок ЛЮБОЙ схемы:         "
+          f"{100.0 * dateless_in_dated_window / dateless_total:.1f}%")
+    print(f"  доля восстановимых:          "
+          f"{100.0 * dateless_recoverable / dateless_total:.1f}%")
 print()
 print("  Это ПОТОЛОК, а не результат: правило наследования ещё не")
 print("  написано, и часть этих узлов может оказаться не событием, а")

@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 from helm_core.knowledge.temporal import (
-    ROLE_DOCUMENT, ROLE_EVENT, ROLE_REFERENCE, ROLE_UNLABELLED,
+    ROLE_DOCUMENT, ROLE_EVENT, ROLE_PLANNED, ROLE_REFERENCE, ROLE_UNLABELLED,
     find_date_anchors, inheritable_anchor,
 )
 
@@ -122,3 +122,70 @@ def test_span_points_at_the_date_itself():
 def test_anchors_come_in_text_order():
     anchors = find_date_anchors("Дата приёма: 12.03.2025. Дата выдачи: 20.03.2025")
     assert [a.char_start for a in anchors] == sorted(a.char_start for a in anchors)
+
+
+# ── формы, снятые с корпуса (прогон 356) ─────────────────────────────
+#
+# Первый словарь узнал 87 якорей из 273: я перечислил формы по своему
+# представлению о бланке. Ниже — то, чем корпус подписывает даты на
+# самом деле, с числом якорей на каждую группу.
+
+def test_bare_data_in_the_form_header_is_a_document_date():
+    """79 якорей, 42% всех неузнанных: «Направление №123 Дата <дата>».
+
+    Соблазн засчитать её событием велик — в направлении это обычно и
+    есть день визита. Но это ровно та подстановка, которую владелец
+    запретил, и правило наследования от неё работать не должно.
+    """
+    assert _roles("Направление № 123 Дата 12.03.2025") == [
+        ("2025-03-12", ROLE_DOCUMENT)]
+    assert _roles("ЭМК № 45 Дата: 12.03.2025") == [("2025-03-12", ROLE_DOCUMENT)]
+    assert inheritable_anchor(find_date_anchors("Направление № 123 Дата 12.03.2025")) is None
+
+
+def test_appointment_scheduled_for_a_future_date_is_not_an_event():
+    """24 якоря: «Повторная явка на 12.03.2025». Дата В БУДУЩЕМ.
+
+    Разделяет их предлог: «от» — то, что произошло, «на» — то, что
+    назначено. Унаследованная как дата приёма, эта дата поставила бы
+    факту время, когда его ещё не было.
+    """
+    assert _roles("Повторная явка на 12.03.2025") == [("2025-03-12", ROLE_PLANNED)]
+    assert _roles("Записан на 12.03.2025") == [("2025-03-12", ROLE_PLANNED)]
+    assert inheritable_anchor(find_date_anchors("Повторная явка на 12.03.2025")) is None
+
+
+def test_the_same_word_with_ot_is_the_past_and_is_an_event():
+    """Тот же корень, другой предлог — другая роль."""
+    assert _roles("Приём от 12.03.2025") == [("2025-03-12", ROLE_EVENT)]
+    assert _roles("Осмотр от 12.03.2025") == [("2025-03-12", ROLE_EVENT)]
+
+
+def test_modality_abbreviations_are_events():
+    """«норме ЭГДС от», «УЗИ ОБП от» — прежний список знал только слово
+    «исследование» и эти формы пропускал."""
+    assert _roles("В норме ЭГДС от 12.03.2025") == [("2025-03-12", ROLE_EVENT)]
+    assert _roles("УЗИ ОБП от 12.03.2025") == [("2025-03-12", ROLE_EVENT)]
+    assert _roles("МРТ головного мозга от 12.03.2025") == [("2025-03-12", ROLE_EVENT)]
+
+
+def test_regulation_reference_is_not_an_event():
+    """7 якорей: «Приказ Минздрава России №123н от 12.03.2025».
+
+    Форма «… от <дата>» здесь та же, что у ЭГДС, и без отдельного
+    правила норматив попал бы в события вместе с ней.
+    """
+    assert _roles("Приказ Минздрава России № 123н от 12.03.2025") == [
+        ("2025-03-12", ROLE_REFERENCE)]
+    assert inheritable_anchor(
+        find_date_anchors("Приказ Минздрава России № 123н от 12.03.2025")) is None
+
+
+def test_section_header_and_material_are_events():
+    """«Биохимические исследования <дата>» (6), «биопсийного
+    операционного материала <дата>» (4) — дата выполнения и дата
+    забора."""
+    assert _roles("Биохимические исследования 12.03.2025") == [
+        ("2025-03-12", ROLE_EVENT)]
+    assert _roles("Дата поступления биопсийного операционного материала 12.03.2025") == [
+        ("2025-03-12", ROLE_EVENT)]
