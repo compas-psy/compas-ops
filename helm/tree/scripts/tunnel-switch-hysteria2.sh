@@ -80,18 +80,43 @@ if not isinstance(outbound, dict) or "tag" not in outbound or "type" not in outb
 with open(path) as handle:
     data = json.load(handle)
 
-# Убираем РОВНО тот outbound, на который сейчас указывает route.final
-# (мёртвый mieru-out), остальные оставляем как есть. Первая редакция
-# оставляла только `direct` и выбрасывала прочие — а на них ссылается
-# `detour` у DNS-серверов (`remote`, `google`), и конфиг перестал бы
-# проходить проверку. `sing-box check` это бы поймал, но чинить надо
-# причину, а не полагаться на гейт.
+# Убираем РОВНО тот outbound, на который сейчас указывает route.final,
+# остальные оставляем как есть.
+#
+# И перенацеливаем ВСЕ ссылки на него. Прогон 334 этого не сделал:
+# у DNS-сервера `remote` остался `detour: mieru-out`, и sing-box ушёл
+# в цикл падений — «start dns/udp[remote]: outbound detour not found».
+# Служба не поднялась ни разу, порт 18080 не слушался, а я объявил, что
+# туннель проверен.
+#
+# `sing-box check` этого НЕ ловит — вопреки тому, что я написал в
+# прошлой правке. Он разбирает схему; висячий detour вскрывается только
+# при старте службы. Поэтому единственная настоящая проверка ниже —
+# служба живёт, счётчик перезапусков не растёт, порт слушается.
 dead = data.get("route", {}).get("final")
 kept = [item for item in data.get("outbounds", []) if item.get("tag") != dead]
 data["outbounds"] = [outbound] + [item for item in kept if item.get("tag") != outbound["tag"]]
 data.setdefault("route", {})["final"] = outbound["tag"]
 print(f"  убран мёртвый outbound: {dead}")
 print(f"  сохранены: {', '.join(item.get('tag', '?') for item in kept) or '(нет)'}")
+
+# Проверяем не «ссылку на убранный тег», а ЛЮБУЮ висячую ссылку.
+# Проверка на слепке живого конфига показала, почему это важно: после
+# прогона 334 route.final уже указывает на hysteria2-out, а сломанный
+# detour ведёт на mieru-out, которого в списке нет вовсе. Правило «чиню
+# ссылки на тот, кого убрал» такую не увидело бы и повторный прогон
+# оставил бы sing-box падать.
+alive = {item.get("tag") for item in data["outbounds"]}
+for server in data.get("dns", {}).get("servers", []):
+    detour = server.get("detour")
+    if detour and detour not in alive:
+        server["detour"] = outbound["tag"]
+        print(f"  dns[{server.get('tag')}].detour: {detour} → {outbound['tag']} (висячая)")
+for index, rule in enumerate(data.get("route", {}).get("rules", [])):
+    target = rule.get("outbound")
+    if target and target not in alive:
+        rule["outbound"] = outbound["tag"]
+        print(f"  route.rules[{index}].outbound: {target} → {outbound['tag']} (висячая)")
 
 with open(path, "w") as handle:
     json.dump(data, handle, indent=2)
@@ -118,13 +143,31 @@ fi
 echo
 echo "############ РЕСТАРТ ############"
 sudo systemctl restart "$UNIT" || { sudo cp -a "$BACKUP" "$CONF"; sudo systemctl restart "$UNIT"; fail "рестарт не удался, вернул прежний конфиг"; }
-# Ждём именно `active`. Прогон 334 проверял связность через пять секунд,
-# когда служба была ещё `activating`, — то есть мерил не туннель.
-for _ in $(seq 20); do
-  [ "$(sudo systemctl is-active "$UNIT")" = "active" ] && break
-  sleep 2
-done
-sudo systemctl is-active "$UNIT" | sed 's/^/  is-active: /'
+# `is-active: active` само по себе не значит ничего: в цикле падений
+# systemd успевает отвечать «active» между стартом и падением — в
+# прогоне 334 именно это и было. Проверяем три вещи: счётчик
+# перезапусков не вырос за десять секунд, служба жива, порт слушается.
+restarts_before=$(sudo systemctl show "$UNIT" -p NRestarts --value)
+sleep 12
+restarts_after=$(sudo systemctl show "$UNIT" -p NRestarts --value)
+state=$(sudo systemctl is-active "$UNIT")
+echo "  is-active: $state"
+echo "  NRestarts: $restarts_before → $restarts_after"
+if [ "$restarts_before" != "$restarts_after" ] || [ "$state" != "active" ]; then
+  echo "  --- почему упал ---"
+  sudo journalctl -u "$UNIT" --since '2 minutes ago' --no-pager 2>/dev/null \
+    | grep -iE 'FATAL|ERROR' | tail -5 | sed 's/^/  /'
+  sudo cp -a "$BACKUP" "$CONF"
+  sudo systemctl restart "$UNIT"
+  fail "sing-box не держится с новым конфигом, вернул прежний"
+fi
+if sudo ss -ltn 2>/dev/null | grep -q ':18080'; then
+  echo "  порт 18080: слушается"
+else
+  sudo cp -a "$BACKUP" "$CONF"
+  sudo systemctl restart "$UNIT"
+  fail "служба жива, но 18080 не слушается — прокси не работает, вернул прежний"
+fi
 
 echo
 echo "############ ПРОВЕРКА СВЯЗНОСТИ ЧЕРЕЗ ПРОКСИ ############"
@@ -149,11 +192,13 @@ if [ "$telegram_ok" = "1" ]; then
   echo "  что TCP и TLS прошли; 404 на корне api.telegram.org — норма."
 else
   echo
-  echo "  Telegram через туннель НЕ отвечает — возвращаю прежний конфиг."
-  sudo cp -a "$BACKUP" "$CONF"
-  sudo systemctl restart "$UNIT"
-  sleep 3
-  sudo systemctl is-active "$UNIT" | sed 's/^/  is-active после отката: /'
+  # Конфиг НЕ откатывается: прежний upstream мёртв, а этот хотя бы
+  # поднимает службу и слушает порт. Возврат к падающему конфигу —
+  # строго хуже. Скрипт падает, состояние названо честно.
+  echo "  Telegram через туннель НЕ отвечает."
+  echo "  Служба поднята и слушает 18080 — значит рвётся дальше, в самом"
+  echo "  туннеле. Конфиг оставлен как есть: прежний upstream мёртв,"
+  echo "  возвращать нечего. Диагностика — tunnel-hysteria2-diag.sh."
   fail "hysteria2 не дал связности до Telegram"
 fi
 
