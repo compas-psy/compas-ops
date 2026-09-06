@@ -121,6 +121,11 @@ with Session() as session:
         session, domain="ops", raw_path=path,
         original_filename=f"стенд-сборки-{marker}.md", mime_type="text/markdown")
     session.commit()
+    # Привязка тенанта транзакционно-локальная (`set_config(..., true)`,
+    # tenancy.py:61): после commit она снята, и RLS спрячет от нас
+    # собственные строки. Прогон 351 напечатал из-за этого «заданий 0»
+    # там, где задание было и отработало. Привязываемся заново.
+    bind_knowledge_user(session, tenant)
     jobs = session.scalars(
         select(KnowledgeSemanticJob.id)
         .where(KnowledgeSemanticJob.source_id == source_id)).all()
