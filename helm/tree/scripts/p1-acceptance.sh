@@ -13,6 +13,12 @@
 #      то есть увиденный ответ сцепляется с серверной строкой, а не
 #      просто содержит красивое поле.
 set -uo pipefail
+
+# Счётчик провалов. До 06.09.2026 каждая неудачная проверка печаталась
+# через `|| echo "ПРОВАЛ"`, а `echo` всегда успешен — скрипт возвращал
+# ноль, и прогон был зелёным при провалившейся приёмке. Найдено аудитом
+# владельца.
+FAIL=0
 cd /opt/helm/compose || exit 1
 
 echo "############ 1. ЧТО ВЫКАЧЕНО ############"
@@ -32,6 +38,7 @@ if [ "$probe_to" != "нет" ] && [ "$reph_to" != "нет" ] && [ "$probe_to" -g
   echo "  ОК: бесплатный ответ успевает уложиться в бюджет плагина"
 else
   echo "  ПРОВАЛ: probe снова отвалится раньше собственного рефраза"
+  FAIL=1
 fi
 
 echo
@@ -73,13 +80,19 @@ echo "############ 4. СЦЕПКА С ЖУРНАЛОМ ############"
 RUN_ID=$(sudo cat /tmp/p1-run-id 2>/dev/null || echo "")
 sudo rm -f /tmp/p1-run-id
 if [ -z "$RUN_ID" ]; then
-  echo "  пропущено: answer_run_id не пришёл"
+  echo "  ПРОВАЛ: answer_run_id не пришёл — ответ нечем сцепить с журналом"
+  FAIL=1
 else
   sudo docker compose exec -T postgres psql -U helm -d helm -tAc \
     "select mode || ' | paid_ai_used=' || paid_ai_used || ' | evidence_count=' || evidence_count
        from knowledge_answer_runs where id = '$RUN_ID'" 2>/dev/null \
     | sed 's/^/  строка журнала: /' | grep . \
-    || echo "  ПРОВАЛ: строки с таким id в knowledge_answer_runs нет"
+    || { echo "  ПРОВАЛ: строки с таким id в knowledge_answer_runs нет"; FAIL=1; }
+fi
+
+if [ "$FAIL" -ne 0 ]; then
+  echo "############ ПРОВАЛ ############"
+  exit 1
 fi
 
 echo "############ ГОТОВО ############"
