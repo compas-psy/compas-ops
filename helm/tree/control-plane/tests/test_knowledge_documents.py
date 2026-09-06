@@ -6,6 +6,7 @@
 
 import hashlib
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -124,11 +125,26 @@ def test_unknown_document_is_refused(session):
         read_original(session, uuid.uuid4())
 
 
-def test_text_only_source_says_it_has_no_original(session):
-    """`ingest_text()` файла на диск не пишет вовсе. Честнее сказать это,
-    чем отдать разобранный текст под видом оригинала."""
-    source = ingest_text(session, domain="personal", text="Просто текст")
+def test_text_source_now_has_a_real_original(session, tmp_path):
+    """До 06.09.2026 `ingest_text()` записывал в базу путь к файлу,
+    которого не создавал, и §14.15 честно отвечала «исходного файла
+    нет». Теперь текст сохраняется целиком, и оригинал у него есть —
+    ровно те байты, по которым посчитан sha256."""
+    source = ingest_text(session, domain="personal", text="Просто текст",
+                         vault_root=str(tmp_path))
     session.flush()
+
+    original = read_original(session, source.id)
+
+    assert original.data == "Просто текст".encode("utf-8")
+    assert original.sha256 == source.sha256
+
+
+def test_source_without_a_file_on_disk_is_refused(session):
+    """Путь есть, файла нет — отдавать под видом оригинала нечего."""
+    source = ingest_text(session, domain="personal", text="Пропавший текст")
+    session.flush()
+    Path(source.raw_path).unlink()
 
     with pytest.raises(DocumentUnavailable, match="нет исходного файла"):
         read_original(session, source.id)

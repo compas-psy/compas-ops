@@ -43,7 +43,8 @@ from .vault import scope_root
 from ..models import (
     KnowledgeAnswerRun, KnowledgeBatchItem, KnowledgeChannelIdentity, KnowledgeChunk,
     KnowledgeIngestBatch, KnowledgeIngestJob, KnowledgeInvite, KnowledgeMemory,
-    KnowledgeDomain, KnowledgePendingAttachment, KnowledgeRelation, KnowledgeSource, KnowledgeUser,
+    KnowledgeDomain, KnowledgePendingAttachment, KnowledgeRelation, KnowledgeSemanticJob,
+    KnowledgeSource, KnowledgeUser,
     KnowledgeUserStatus, KnowledgeUserUsage, PanelEnrollmentToken, PanelSession,
     WebauthnCredential,
 )
@@ -175,10 +176,14 @@ def export_user_vault(session: Session, knowledge_user_id: uuid.UUID, *,
 #: Порядок важен: сначала то, что ссылается, потом то, на что ссылаются.
 #: Каскадов в схеме нет намеренно — «удалить одну строку и потерять
 #: половину базы» не должно быть возможно случайно.
+#: Порядок — топологический: всё, что ссылается на источник, удаляется
+#: раньше него. `KnowledgeSemanticJob` добавлен 06.09.2026 вместе с
+#: общим жизненным циклом «Запомни»: у текстовых записей появились
+#: задания на семантику, и удаление аккаунта падало на внешнем ключе.
 _TENANT_CONTENT_TABLES = (
     KnowledgeAnswerRun, KnowledgeRelation, KnowledgeChunk, KnowledgeBatchItem,
     KnowledgeIngestJob, KnowledgeIngestBatch, KnowledgePendingAttachment,
-    KnowledgeMemory, KnowledgeSource,
+    KnowledgeSemanticJob, KnowledgeMemory, KnowledgeSource,
 )
 
 

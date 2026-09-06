@@ -43,6 +43,7 @@ from .memory import try_remember
 from .parsers import parse_file
 from .relations import note_id_for, store_relations
 from .tenancy import bind_knowledge_user
+from .vault import frontmatter
 from ..models import (
     KnowledgeBatchItem, KnowledgeIngestJob, KnowledgeIngestStatus,
     KnowledgePendingAttachment, KnowledgeSource, KnowledgeStatus, KnowledgeUser,
@@ -207,35 +208,8 @@ def process_voice_pending(session: Session, pending: KnowledgePendingAttachment)
                reference=reference, payload_reference={"text": notice})
 
 
-def _frontmatter(source: KnowledgeSource) -> str:
-    """§14.3 markdown contract — обязательный YAML-блок для каждой
-    normalized note. Собирается вручную, не через PyYAML: все значения —
-    UUID/enum-строки/ISO-таймстемпы/hex-хэш, никогда свободный текст
-    документа, экранирование не нужно, а зависимость не добавляется в
-    Dockerfile.worker ради тривиального формата.
-
-    `confidence`/`supersedes`/`contradicts` спека резервирует под derived/
-    L2 note (`KnowledgeNote`, ещё не реализован, P8.5.6+) — L1 SOURCE
-    (`type: source`) всегда `primary`/`extracted`, никогда `inferred`, и
-    ничего не supersedes; не заполняются пустыми значениями, а не пишутся
-    вовсе.
-    """
-    return "\n".join([
-        "---",
-        f"id: {source.id}",
-        "type: source",
-        f"domain: {source.domain}",
-        f"created_at: {source.created_at.isoformat()}",
-        f"updated_at: {source.updated_at.isoformat()}",
-        f'source_ids: ["{source.id}"]',
-        f'source_sha256: ["{source.sha256}"]',
-        f"sensitivity: {source.sensitivity}",
-        f"trust: {source.trust}",
-        f"status: {source.status}",
-        "---",
-        "",
-        "",
-    ])
+#: Один формат заметки на оба пути записи — см. vault.frontmatter().
+_frontmatter = frontmatter
 
 
 def process_job(session: Session, job: KnowledgeIngestJob) -> None:

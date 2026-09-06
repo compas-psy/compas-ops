@@ -937,6 +937,13 @@ class KnowledgeMemory(Base):
     #: Graphify не реализован (P8.5.6) — всегда NOT_APPLICABLE, как и у
     #: KnowledgeBatchItem.graph_status.
     graph_status: Mapped[str | None] = mapped_column(String(32))
+    #: Источник, в который то же содержание ушло общим жизненным циклом
+    #: (чанки, эмбеддинги, семантика, связи). Добавлено 06.09.2026:
+    #: «Запомни» перестал быть отдельным хранилищем. Nullable — записи,
+    #: сделанные ДО этой правки, источника не имеют, пока не пройдут
+    #: догоняющий проход; по этому же полю он и находит, что догонять.
+    source_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_sources.id"))
     tsv: Mapped[str | None] = mapped_column(TSVECTOR)
     created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow, nullable=False)

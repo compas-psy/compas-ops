@@ -37,8 +37,9 @@ from .chunking import store_chunks
 from .health_schema import health_schema_configured, is_health_domain, write_original_filename
 from .quotas import check_and_record_ingest, check_queue_depth, record_entry_formed
 from .relations import note_id_for, store_relations
+from .semantic_jobs import enqueue_semantic
 from .tenancy import bind_knowledge_user
-from .vault import scope_root
+from .vault import frontmatter, scope_root, write_file
 
 #: Корень Vault (§14.2). Параметр, а не только константа: тесты обязаны
 #: указывать свой временный каталог — писать в /opt/helm-knowledge при
@@ -65,7 +66,8 @@ def ingest_text(session: Session, *, domain: str, text: str,
                 original_filename: str | None = None,
                 sensitivity: str = "internal", trust: str = "extracted",
                 vault_root: str | None = None,
-                knowledge_user_id: uuid.UUID | None = None) -> KnowledgeSource:
+                knowledge_user_id: uuid.UUID | None = None,
+                count_entry: bool = True) -> KnowledgeSource:
     """Сохранить текст как source + лексически проиндексированные чанки.
 
     Повторный вызов с тем же текстом ОТ ТОГО ЖЕ knowledge_user_id
@@ -113,7 +115,35 @@ def ingest_text(session: Session, *, domain: str, text: str,
         domain=domain, original_filename=original_filename,
         source_id=source.id, knowledge_user_id=knowledge_user_id)
 
-    record_entry_formed(session, knowledge_user_id=knowledge_user_id, sources=1)
+    # `count_entry=False` — источник производный, а не отдельное
+    # действие владельца: «Запомни» уже посчитано как запись памяти, и
+    # считать то же сообщение дважды значило бы вдвое быстрее упирать
+    # владельца в его же квоту.
+    if count_entry:
+        record_entry_formed(session, knowledge_user_id=knowledge_user_id, sources=1)
+
+    # ИСХОДНИК НА ДИСК. До 06.09.2026 `ingest_text()` записывал в базу
+    # ПУТИ к файлам, которых не создавал: `raw_path` и `source_path`
+    # указывали в пустоту. Последствий было два, и оба видны в живой
+    # системе. Первое: `source_text()` возвращает None, семантический
+    # разбор такого источника падает с NoText — то есть текст в граф не
+    # попадал никогда (найдено прогоном 376). Второе: §14.15 «выдача
+    # оригинала» на такой источник честно отвечала «исходного файла
+    # нет».
+    #
+    # Пишется и сырой текст, и нормализованная заметка с фронтматтером
+    # — ровно то же, что делает воркер после разбора файла (worker.py),
+    # тем же `frontmatter()`. Сырой файл — байт-в-байт исходный текст:
+    # по совпадению его sha256 с записанным §14.15 решает, отдавать ли
+    # оригинал.
+    write_file(source.raw_path, text.encode("utf-8"))
+    write_file(source.source_path, (frontmatter(source) + text).encode("utf-8"))
+
+    # Семантика ставится заданием — так же, как после разбора файла
+    # (worker.py). Без этого текстовый путь оставался вторым сортом:
+    # чанки есть, узлов и связей нет, в графе содержания не существует.
+    enqueue_semantic(session, source_id=source.id, knowledge_user_id=knowledge_user_id,
+                     source_sha256=sha256)
 
     # P8.5.6 слой 1 (E13, решение владельца 31.08.2026): [[wikilink]] +
     # явный YAML relations: — детерминированно, до любого Graphify.
@@ -134,6 +164,12 @@ def ingest_text(session: Session, *, domain: str, text: str,
 
     store_chunks(session, source_id=source.id, knowledge_user_id=knowledge_user_id,
                  domain=domain, text=text)
+    # Флаш здесь, а не когда придётся: привязка тенанта транзакционна
+    # (`set_config(..., true)`), и отложенные вставки чанков ушли бы в
+    # базу уже под ДРУГИМ пользователем, если следующий вызов успел
+    # перепривязать сессию. RLS такую вставку отвергает — и правильно
+    # делает; но ловить это на автофлаше посреди чужого запроса нельзя.
+    session.flush()
     return source
 
 

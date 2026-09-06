@@ -44,7 +44,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .ingest import DEFAULT_VAULT_ROOT
-from .memory import _markdown_mirror_path, _write_markdown_mirror, compute_dedup_hash
+from .memory import (_markdown_mirror_path, _write_markdown_mirror,
+                     archive_memory_source, compute_dedup_hash, purge_memory_source,
+                     replace_memory_source, restore_memory_source)
 from .probe import MIN_RANK_SCORE
 from .recall import MAX_MEMORY_HITS, build_or_tsquery
 from .tenancy import bind_knowledge_user
@@ -163,6 +165,9 @@ def try_admin_command(session: Session, *, text: str,
     if command.kind == "forget":
         memory.status = KnowledgeMemoryStatus.DISABLED
         memory.updated_at = utcnow()
+        # Забытое перестаёт отвечать целиком, а не только строкой
+        # памяти: с 06.09.2026 у записи есть и источник с чанками.
+        archive_memory_source(session, memory)
         # §14.11: зеркало исключается, когда запись DISABLED/DELETED —
         # иначе Obsidian и Graphify продолжали бы показывать забытое.
         mirror.unlink(missing_ok=True)
@@ -174,6 +179,7 @@ def try_admin_command(session: Session, *, text: str,
     if command.kind == "restore":
         memory.status = KnowledgeMemoryStatus.ACTIVE
         memory.updated_at = utcnow()
+        restore_memory_source(session, memory)
         _write_markdown_mirror(memory, vault_root=vault_root)
         session.flush()
         return AdminOutcome(status="restored", memory=memory,
@@ -182,6 +188,7 @@ def try_admin_command(session: Session, *, text: str,
     if command.kind == "purge":
         forgotten_text = memory.canonical_text
         mirror.unlink(missing_ok=True)
+        purge_memory_source(session, memory)
         session.delete(memory)
         session.flush()
         return AdminOutcome(status="purged",
@@ -210,6 +217,12 @@ def try_admin_command(session: Session, *, text: str,
     memory.updated_at = utcnow()
     session.flush()
     session.refresh(memory)
+    # Исправленный текст обязан попасть и в общий слой: иначе поиск
+    # продолжал бы отвечать прежним значением, а владелец видел бы
+    # «исправил» и получал старое (сценарий приёмки владельца
+    # 06.09.2026: «исправление ранее сохранённого значения и получение
+    # актуального»).
+    replace_memory_source(session, memory, vault_root=vault_root)
     _write_markdown_mirror(memory, vault_root=vault_root)
     return AdminOutcome(status="corrected", memory=memory,
                         text=f"Исправил: {memory.canonical_text}")

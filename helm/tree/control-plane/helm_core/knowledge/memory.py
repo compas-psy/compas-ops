@@ -41,13 +41,14 @@ from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from .ingest import DEFAULT_VAULT_ROOT, ingest_text
 from .quotas import record_entry_formed
 from .tenancy import bind_knowledge_user
-from ..models import KnowledgeDomain, KnowledgeMemory, KnowledgeMemoryStatus, KnowledgeSource, KnowledgeUser
+from ..models import (KnowledgeChunk, KnowledgeDomain, KnowledgeMemory, KnowledgeMemoryStatus,
+                      KnowledgeSource, KnowledgeStatus, KnowledgeUser)
 from ..models.base import utcnow
 
 #: §14.10: "default starting point 8,000 chars" — за этим порогом текст
@@ -210,6 +211,18 @@ class RememberOutcome:
     text: str | None = None
 
 
+#: Сколько символов первой строки берётся в заголовок заметки. Имя
+#: источника видно владельцу в ответе («Источники: …»), поэтому это
+#: первая строка запомненного, а не «memory-<uuid>.md».
+_TITLE_MAX_CHARS = 60
+
+
+def _note_title(payload: str) -> str:
+    first_line = payload.strip().splitlines()[0].strip() if payload.strip() else ""
+    title = first_line[:_TITLE_MAX_CHARS].rstrip(" :,-—")
+    return title or "заметка"
+
+
 def _confirmation_text(memory: KnowledgeMemory) -> str:
     if memory.kind == "bookmark":
         return f"Запомнил ссылку: {memory.canonical_text}"
@@ -286,4 +299,169 @@ def try_remember(session: Session, *, channel: str, text: str,
     record_entry_formed(session, knowledge_user_id=knowledge_user_id, memories=1)
     _write_markdown_mirror(memory, vault_root=vault_root)
 
-    return RememberOutcome(status="stored", memory=memory, text=_confirmation_text(memory))
+    # ЗАПОМНЕННОЕ ИДЁТ ОБЩИМ ЖИЗНЕННЫМ ЦИКЛОМ, а не только в свою
+    # таблицу. Распоряжение владельца 06.09.2026: «Не оставляй
+    # отдельную „быструю память", которая сохраняет сплошную строку и
+    # не участвует в общей обработке. Быстрый поиск допустим как
+    # оптимизация поверх тех же знаний».
+    #
+    # Что это чинит, по замеру разведки (прогон 385) на живом сбое
+    # «Запомни ссылки на мои каналы» → «Дай ссылку на мой канал B17»:
+    # запись в `knowledge_memories` была, но искалась только своим
+    # лексическим поиском, а он на ней не сработал — ранг 0.000390 при
+    # пороге 0.003 (`ts_rank` делит на длину, а список из девяти
+    # площадок длинный) и лемма `b17.ru` из адреса не совпадает с
+    # леммой `b17` из вопроса. Чанков и узлов графа у этого текста не
+    # было вовсе: 0 чанков со словом b17 на весь корпус.
+    #
+    # Теперь тот же текст становится обычным источником: чанки,
+    # эмбеддинги, задание на семантику, wikilink-связи. Векторный поиск
+    # и синтез работают по нему, как по любому загруженному документу.
+    # Строка памяти остаётся — она нужна командам §14.16 («Забудь
+    # это») и даёт дословный ответ, — но перестаёт быть единственным
+    # местом, где это знание существует.
+    # ИСКЛЮЧЕНИЕ — записи со сроком. «Напомни до пятницы» это текущий
+    # контекст (§14.10), а не знание: после срока такой памяти не должно
+    # быть ни в ответах, ни в поиске. У источника поля срока нет, и
+    # исключать его из выдачи было бы нечем — поэтому срочная запись
+    # остаётся только быстрой записью, как и была.
+    source = None
+    if expires_at is None:
+        source = ingest_text(session, domain=_OVERFLOW_DOMAIN, text=payload,
+                             original_filename=_note_title(payload),
+                             knowledge_user_id=knowledge_user_id, vault_root=vault_root,
+                             count_entry=False)
+        memory.source_id = source.id
+    # Флаш под ТЕКУЩЕЙ привязкой тенанта: она транзакционна, и
+    # отложенный UPDATE ушёл бы в базу уже под другим пользователем —
+    # RLS такую строку не увидит, и SQLAlchemy сообщит «0 rows matched».
+    session.flush()
+
+    return RememberOutcome(status="stored", memory=memory, source=source,
+                           text=_confirmation_text(memory))
+
+
+def backfill_memory_sources(session: Session, *, limit: int | None = None,
+                            vault_root: str | None = None) -> tuple[int, int]:
+    """Догнать записи «Запомни», сделанные ДО общего жизненного цикла.
+
+    Возвращает «сколько догнали, сколько осталось». Идемпотентно: берутся
+    только записи с пустым `source_id`, и повтор прогона на догнанной
+    памяти не делает ничего.
+
+    Нужно ровно потому, что владелец сохранил ссылки на свои каналы
+    раньше этой правки: без догоняющего прохода его собственная запись
+    так и осталась бы вне поиска, а «починено» относилось бы только к
+    будущим сообщениям.
+
+    Коммитит каждую запись отдельно, как `backfill.run_backfill()`:
+    прогон, оборванный на середине, оставляет догнанное догнанным.
+
+    Идёт по ОДНОМУ тенанту — тому, к которому привязана сессия: RLS
+    чужих записей и не покажет, а обходить её ради догоняющего прохода
+    нельзя. Для второго пользователя проход запускается его сессией.
+    """
+    done = 0
+    while limit is None or done < limit:
+        # Привязка тенанта транзакционна и пропадает после каждого
+        # коммита ниже — восстанавливается на каждом витке, иначе
+        # следующий запрос ушёл бы без неё и RLS вернула бы пусто, а
+        # прогон выглядел бы законченным.
+        tenant = bind_knowledge_user(session, None)
+        memory = session.scalars(
+            select(KnowledgeMemory)
+            .where(KnowledgeMemory.knowledge_user_id == tenant,
+                   KnowledgeMemory.source_id.is_(None),
+                   KnowledgeMemory.status == KnowledgeMemoryStatus.ACTIVE)
+            .order_by(KnowledgeMemory.created_at)
+            .limit(1)).first()
+        if memory is None:
+            break
+        source = ingest_text(session, domain=_OVERFLOW_DOMAIN,
+                             text=memory.canonical_text,
+                             original_filename=_note_title(memory.canonical_text),
+                             knowledge_user_id=tenant, vault_root=vault_root,
+                             count_entry=False)
+        memory.source_id = source.id
+        session.flush()
+        session.commit()
+        done += 1
+    tenant = bind_knowledge_user(session, None)
+    remaining = session.scalar(
+        select(func.count()).select_from(KnowledgeMemory)
+        .where(KnowledgeMemory.knowledge_user_id == tenant,
+               KnowledgeMemory.source_id.is_(None),
+               KnowledgeMemory.status == KnowledgeMemoryStatus.ACTIVE)) or 0
+    return done, remaining
+
+
+def archive_memory_source(session: Session, memory: KnowledgeMemory) -> None:
+    """«Забудь это» — убрать связанный источник из обычных ответов.
+
+    Без этого забытое продолжало бы отвечать: строка памяти
+    исключается своим статусом, а чанки того же текста живут отдельно и
+    про запрет ничего не знают. Проверено тестом
+    `test_disabled_memory_never_returns_even_historically`, который на
+    первой же версии общего цикла и покраснел.
+
+    ARCHIVED, а не удаление: «Забудь» обратимо («Верни в память»), и
+    восстанавливать удалённые чанки было бы неоткуда.
+    """
+    if memory.source_id is None:
+        return
+    source = session.get(KnowledgeSource, memory.source_id)
+    if source is not None:
+        source.status = KnowledgeStatus.ARCHIVED
+
+
+def restore_memory_source(session: Session, memory: KnowledgeMemory) -> None:
+    """«Верни в память» — вернуть источник в обычные ответы."""
+    if memory.source_id is None:
+        return
+    source = session.get(KnowledgeSource, memory.source_id)
+    if source is not None:
+        source.status = KnowledgeStatus.ACTIVE
+
+
+def purge_memory_source(session: Session, memory: KnowledgeMemory) -> None:
+    """«Удали навсегда» — убрать содержание из поиска и с диска.
+
+    Удаляются чанки (поисковый слой) и файлы Vault; строка источника
+    остаётся ARCHIVED-надгробием, потому что на неё ссылаются прогоны
+    семантики и упоминания.
+
+    ЧЕГО ЭТО НЕ ДЕЛАЕТ: узлы семантического графа, если разбор успел
+    пройти, содержат тот же текст в `statement_text` и здесь не
+    трогаются. Обычные ответы их не показывают (структурный путь ходит
+    в граф только за врачами), но «навсегда» это делает неполным.
+    Названо вслух, а не умолчано; отдельная задача.
+    """
+    if memory.source_id is None:
+        return
+    source = session.get(KnowledgeSource, memory.source_id)
+    if source is None:
+        return
+    session.execute(delete(KnowledgeChunk).where(KnowledgeChunk.source_id == source.id))
+    for path in (source.raw_path, source.source_path):
+        if path:
+            Path(path).unlink(missing_ok=True)
+    source.status = KnowledgeStatus.ARCHIVED
+
+
+def replace_memory_source(session: Session, memory: KnowledgeMemory, *,
+                          vault_root: str | None = None) -> KnowledgeSource:
+    """«Исправь …» — прежний источник в архив, новый текст обычным путём.
+
+    Не правка источника на месте: sha256 источника — его удостоверение
+    (§14.1 RAW immutable, по нему же §14.15 решает, отдавать ли
+    оригинал), и переписать текст, оставив хэш, значило бы сломать
+    проверяемость. Прежняя версия остаётся ARCHIVED — «различение
+    актуальных и прежних сведений», а не потеря истории.
+    """
+    archive_memory_source(session, memory)
+    source = ingest_text(session, domain=_OVERFLOW_DOMAIN, text=memory.canonical_text,
+                         original_filename=_note_title(memory.canonical_text),
+                         knowledge_user_id=memory.knowledge_user_id, vault_root=vault_root,
+                         count_entry=False)
+    memory.source_id = source.id
+    return source

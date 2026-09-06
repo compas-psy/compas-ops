@@ -54,7 +54,8 @@ from .synthesis import synthesize_or_none
 from .tenancy import bind_knowledge_user
 from ..models import (
     HealthKnowledgeChunk, HealthKnowledgeSourcePrivate, KnowledgeAnswerMode, KnowledgeAnswerRun,
-    KnowledgeChunk, KnowledgeDomain, KnowledgeSource, KnowledgeStatus,
+    KnowledgeChunk, KnowledgeDomain, KnowledgeMemory, KnowledgeMemoryStatus,
+    KnowledgeSource, KnowledgeStatus,
 )
 from ..models.base import utcnow
 
@@ -239,6 +240,23 @@ def _apply_source_filter(stmt, chunk_model, source_ids: tuple[str, ...]):
     return stmt.where(chunk_model.source_id.in_([uuid.UUID(s) for s in source_ids]))
 
 
+def _exclude_forgotten(stmt):
+    """Источник, заведённый из записи памяти, отвечает ровно пока сама
+    запись активна.
+
+    Гарантия ставится в ПОИСКЕ, а не в обработчике «Забудь это»: статус
+    записи меняется не только командой (истечение срока, правка,
+    будущий код), и забытое не должно всплывать из-за того, что
+    кто-то поменял поле мимо одного конкретного места. Команда «Забудь»
+    вдобавок archive-ит источник — это про панель и выдачу оригинала,
+    здесь про ответы.
+    """
+    forgotten = (select(KnowledgeMemory.source_id)
+                 .where(KnowledgeMemory.source_id.is_not(None),
+                        KnowledgeMemory.status != KnowledgeMemoryStatus.ACTIVE))
+    return stmt.where(KnowledgeSource.id.notin_(forgotten))
+
+
 def _lexical_search(session: Session, *, query: str, domain: str | None,
                     knowledge_user_id: uuid.UUID,
                     source_ids: tuple[str, ...] = ()) -> list[Evidence]:
@@ -267,8 +285,8 @@ def _lexical_search(session: Session, *, query: str, domain: str | None,
         .order_by(rank.desc())
         .limit(MAX_EVIDENCE)
     )
-    stmt = _apply_source_filter(_apply_domain_filter(stmt, domain),
-                                KnowledgeChunk, source_ids)
+    stmt = _exclude_forgotten(_apply_source_filter(_apply_domain_filter(stmt, domain),
+                                                   KnowledgeChunk, source_ids))
 
     rows = session.execute(stmt).all()
     return [
@@ -295,8 +313,8 @@ def _vector_search(session: Session, *, query_embedding: list[float], domain: st
         .order_by(similarity.desc())
         .limit(MAX_EVIDENCE)
     )
-    stmt = _apply_source_filter(_apply_domain_filter(stmt, domain),
-                                KnowledgeChunk, source_ids)
+    stmt = _exclude_forgotten(_apply_source_filter(_apply_domain_filter(stmt, domain),
+                                                   KnowledgeChunk, source_ids))
 
     rows = session.execute(stmt).all()
     return [

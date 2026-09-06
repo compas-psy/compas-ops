@@ -77,7 +77,10 @@ def test_export_contains_own_memories_and_sources(session, secondary, tmp_path):
     result = export_user_vault(session, secondary.id, out_dir=tmp_path / "out",
                                vault_root=str(vault))
 
-    assert result.memories == 1 and result.sources == 1
+    # Источников два: документ и сам запомненный текст — с 06.09.2026
+    # «Запомни» идёт общим жизненным циклом и тоже становится
+    # источником (см. memory.try_remember).
+    assert result.memories == 1 and result.sources == 2
     with zipfile.ZipFile(result.archive_path) as archive:
         names = archive.namelist()
         manifest = json.loads(archive.read("manifest.json"))
@@ -117,7 +120,9 @@ def test_export_states_that_originals_are_not_included(session, secondary, tmp_p
     assert manifest["raw_originals_included"] is False
     assert manifest["raw_originals_note"]
     # Но перечень полный, с хэшами — по нему файл можно затребовать.
-    assert sources[0]["sha256"] and sources[0]["original_filename"] == "cat.md"
+    names = {item["original_filename"] for item in sources}
+    assert all(item["sha256"] for item in sources)
+    assert "cat.md" in names
 
 
 def test_export_discloses_backup_retention(session, secondary, tmp_path):

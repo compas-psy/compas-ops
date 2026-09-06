@@ -1,20 +1,22 @@
 """P8.5.12 Micro-Memory «Запомни» (v3.8 §14.10-14.11)."""
 
 from datetime import datetime, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import select
 
 from helm_core.knowledge.memory import (
-    FORBIDDEN_SECRET_NOTICE, MICRO_MEMORY_MAX_CHARS, classify_kind, compute_dedup_hash,
-    detect_remember_command, extract_url, is_forbidden_secret, parse_temporal_expiry,
-    try_remember,
+    FORBIDDEN_SECRET_NOTICE, MICRO_MEMORY_MAX_CHARS, backfill_memory_sources, classify_kind,
+    compute_dedup_hash, detect_remember_command, extract_url, is_forbidden_secret,
+    parse_temporal_expiry, try_remember,
 )
+from helm_core.knowledge.semantic_pilot import source_text
 from helm_core.knowledge.tenancy import bind_knowledge_user
 from helm_core.models import (
-    KnowledgeChunk, KnowledgeIngestJob, KnowledgeMemory, KnowledgeMemoryStatus, KnowledgeSource,
-    KnowledgeUser, KnowledgeUserRole,
+    KnowledgeChunk, KnowledgeIngestJob, KnowledgeMemory, KnowledgeMemoryStatus,
+    KnowledgeSemanticJob, KnowledgeSource, KnowledgeUser, KnowledgeUserRole,
 )
 
 from conftest import SYSTEM_OWNER_ID
@@ -163,12 +165,18 @@ def test_try_remember_stores_fact_with_confirmation(session, tmp_path):
     mirror = tmp_path / "users" / str(SYSTEM_OWNER_ID) / "memory" / f"{memory.id}.md"
     assert mirror.exists()
     assert "А123ВС77" in mirror.read_text(encoding="utf-8")
-    # §14.10 "normal Micro-Memory does not run document parser/chunker":
-    # обычная память — прямой FTS-юнит, а не документ. Ни источника, ни
-    # чанков, ни job'а разбора появиться не должно.
-    assert session.scalars(select(KnowledgeSource)).all() == []
-    assert session.scalars(select(KnowledgeChunk)).all() == []
-    assert session.scalars(select(KnowledgeIngestJob)).all() == []
+    # §14.10 говорил «normal Micro-Memory does not run document parser/
+    # chunker», и до 06.09.2026 здесь стояла проверка, что ни источника,
+    # ни чанков не появляется. Распоряжение владельца после живого сбоя
+    # «Запомни → B17» отменяет это прямо: «Не оставляй отдельную быструю
+    # память, которая сохраняет сплошную строку и не участвует в общей
+    # обработке». Парсер документов по-прежнему не запускается — файла
+    # нет, разбирать нечего, — но текст становится обычным источником с
+    # чанками.
+    assert len(session.scalars(select(KnowledgeSource)).all()) == 1
+    assert session.scalars(select(KnowledgeChunk)).all(), "текст не попал в поисковый слой"
+    assert session.scalars(select(KnowledgeIngestJob)).all() == [], (
+        "разбирать нечего: файла нет, job парсера появляться не должен")
     assert memory.origin_kind == "text"
 
 
@@ -230,3 +238,76 @@ def test_try_remember_does_not_dedup_or_leak_across_users(session, second_user, 
     session.expunge_all()
     assert session.get(KnowledgeMemory, owner_outcome.memory.id) is None
     assert session.get(KnowledgeMemory, other_outcome.memory.id) is not None
+
+
+# ── Общий жизненный цикл: «Запомни» — не отдельное хранилище ──────────────
+#
+# Распоряжение владельца 06.09.2026 после живого сбоя: «Запомни ссылки на
+# мои каналы» сохранилось, а «Дай ссылку на мой канал B17» ответило «в
+# ваших записях я такого не нашёл». Разведка (прогон 385) показала
+# почему: запись была только в `knowledge_memories`, чанков с этим
+# текстом на весь корпус было 0, а собственный лексический поиск памяти
+# дал ранг 0.000390 при пороге 0.003.
+
+def test_remembered_text_becomes_a_normal_source(session):
+    outcome = try_remember(session, channel="telegram",
+                           text="Запомни ссылки на мои каналы:\nB17.ru: https://example.test/eliah/")
+    session.flush()
+
+    assert outcome.status == "stored"
+    assert outcome.source is not None, "запомненное не стало источником общего цикла"
+    assert outcome.memory.source_id == outcome.source.id, "быстрая запись не связана с источником"
+
+
+def test_remembered_text_is_searchable_as_chunks(session):
+    """То самое, чего не было: поиск по чанкам видит запомненный текст."""
+    try_remember(session, channel="telegram",
+                 text="Запомни ссылки на мои каналы:\nB17.ru: https://example.test/eliah/")
+    session.flush()
+
+    chunks = session.scalars(
+        select(KnowledgeChunk).where(KnowledgeChunk.text.ilike("%b17%"))).all()
+    assert chunks, "запомненный текст не попал в поисковый слой"
+
+
+def test_remembered_text_is_written_to_disk_and_readable(session, tmp_path):
+    """`ingest_text()` записывал в базу пути к файлам, которых не
+    создавал: `source_text()` возвращал None, и семантический разбор
+    такого источника падал с NoText — то есть в граф текст не попадал
+    никогда."""
+    outcome = try_remember(session, channel="telegram", text="Запомни: код от домофона 1234",
+                           vault_root=str(tmp_path))
+    session.flush()
+
+    assert source_text(outcome.source) == "код от домофона 1234"
+    assert Path(outcome.source.raw_path).read_bytes() == "код от домофона 1234".encode()
+
+
+def test_remembered_text_is_queued_for_semantics(session):
+    outcome = try_remember(session, channel="telegram",
+                           text="Запомни: приём у кардиолога перенесён на четверг")
+    session.flush()
+
+    jobs = session.scalars(
+        select(KnowledgeSemanticJob).where(
+            KnowledgeSemanticJob.source_id == outcome.source.id)).all()
+    assert len(jobs) == 1, "текстовый путь не ставит семантику в очередь"
+
+
+def test_backfill_links_memories_saved_before_the_lifecycle(session):
+    """Запись владельца сделана ДО правки. Без догоняющего прохода
+    «починено» относилось бы только к будущим сообщениям."""
+    try_remember(session, channel="telegram", text="Запомни: код от ворот на даче — 4321")
+    session.flush()
+    memory = session.scalars(select(KnowledgeMemory)).one()
+    # Возврат к состоянию «до правки»: строка есть, источника нет.
+    memory.source_id = None
+    session.flush()
+
+    done, remaining = backfill_memory_sources(session)
+
+    assert (done, remaining) == (1, 0)
+    # Проход коммитит, а привязка тенанта транзакционна — читаем заново
+    # уже под восстановленной привязкой, а не через refresh() объекта.
+    bind_knowledge_user(session, None)
+    assert session.scalars(select(KnowledgeMemory)).one().source_id is not None
