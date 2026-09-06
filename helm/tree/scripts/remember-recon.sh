@@ -62,15 +62,18 @@ for m in b17:
     print(f"    совпадает={row[0]}  ранг(norm=2, длина делит)={row[1]:.6f}  "
           f"ранг(norm=0)={row[2]:.6f}   порог памяти=0.003")
     # Какие вообще леммы вопроса нашлись в записи — без этого «не
-    # совпало» ничего не объясняет.
-    lex = session.execute(text(
-        "select word from ts_stat($$select tsv from knowledge_memories "
-        "where id = :mid$$) limit 200").bindparams(mid=str(m.id))).all()
-    words = {w[0] for w in lex}
-    asked = session.execute(text(
-        "select lexeme from unnest(to_tsvector('russian', :q)) ")
-        .bindparams(q=QUESTION)).all()
-    asked = {a[0] for a in asked}
+    # совпало» ничего не объясняет. Лексемы берутся текстом самого
+    # tsvector: ts_stat здесь не годится, его аргумент — SQL-строка, и
+    # подстановка параметра внутрь неё ломает разбор запроса.
+    tsv_text = session.execute(text(
+        "select tsv::text from knowledge_memories where id = :mid"),
+        {"mid": str(m.id)}).scalar() or ""
+    words = {piece.split(":")[0].strip("'")
+             for piece in tsv_text.split() if piece.startswith("'")}
+    asked_text = session.execute(text(
+        "select to_tsvector('russian', :q)::text"), {"q": QUESTION}).scalar() or ""
+    asked = {piece.split(":")[0].strip("'")
+             for piece in asked_text.split() if piece.startswith("'")}
     print(f"    леммы вопроса: {sorted(asked)}")
     print(f"    из них есть в записи: {sorted(asked & words)}")
     print(f"    есть ли 'b17' в леммах записи: {'b17' in words}")
