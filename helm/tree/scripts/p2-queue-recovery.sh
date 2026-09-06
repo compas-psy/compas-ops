@@ -57,9 +57,20 @@ result = register_file_for_ingest(
     session, domain="general",
     raw_path=Path("/opt/helm-knowledge/acceptance/$MARKER.md"),
     original_filename="$MARKER.md", mime_type="text/markdown")
+# Значения снимаются ДО commit(): привязка тенанта транзакционно-локальна,
+# после коммита RLS прячет собственную же строку и обращение к source.id
+# падает ObjectDeletedError. Ровно это и случилось в прогоне 377 — на
+# результат не повлияло, но выглядело как поломка.
+source_id, job_id = result.source.id, (result.job.id if result.job else None)
 session.commit()
-print("источник:", result.source.id, "| задание L1:", result.job.id if result.job else "нет")
+print("источник:", source_id, "| задание L1:", job_id or "нет")
 PYEOF
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  echo "  ПРОВАЛ: регистрация файла упала (код $rc)"
+  echo "############ ПРОВАЛ ############"
+  exit "$rc"
+fi
 
 echo
 echo "############ 1b. L1 РАЗОБРАН, L2 ПОСТАВЛЕН САМ ############"
