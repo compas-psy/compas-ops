@@ -23,8 +23,8 @@ from helm_core.knowledge.probe import probe
 from helm_core.knowledge.semantic_pilot import source_text
 from helm_core.knowledge.temporal import find_date_anchors
 from helm_core.knowledge.tenancy import bind_knowledge_user
-from helm_core.models import KnowledgeSource
-from helm_core.models.health import HealthKnowledgeChunk, HealthKnowledgeSourcePrivate
+from helm_core.models import (HealthKnowledgeChunk, HealthKnowledgeSourcePrivate,
+                              KnowledgeSource)
 
 VALUE_RE = re.compile(r"холестерин[^\n]{0,120}", re.IGNORECASE)
 
