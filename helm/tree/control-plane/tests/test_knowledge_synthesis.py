@@ -6,7 +6,8 @@
 """
 
 from helm_core.knowledge.synthesis import (build_prompt, grounded_fragments,
-                                          parse_response, unbound_measurements,
+                                          parse_response, unbound_claims,
+                                          undefined_subjects,
                                           ungrounded_numbers)
 
 CHANNELS = ("ссылки на мои каналы:\n"
@@ -238,24 +239,24 @@ ERYTHROCYTES = ("07.10.2023  Гематологические исследова
 def test_value_belonging_to_another_measure_is_not_grounding():
     """Прогон 435 ответил «5.7 ммоль/л» на вопрос о холестерине. Число во
     фрагментах было — верхней границей нормы эритроцитов."""
-    assert unbound_measurements("Уровень холестерина 5.7 ммоль/л",
+    assert unbound_claims("Уровень холестерина 5.7 ммоль/л",
                                 [CHOLESTEROL, ERYTHROCYTES]) == {"5.7 ммоль/л"}
 
 
 def test_the_real_value_passes_the_binding_check():
-    assert unbound_measurements("Уровень холестерина 6.2 ммоль/л",
+    assert unbound_claims("Уровень холестерина 6.2 ммоль/л",
                                 [CHOLESTEROL, ERYTHROCYTES]) == set()
 
 
 def test_label_on_the_line_above_still_binds_the_value():
     """Лабораторный бланк из PDF часто разложен на две строки."""
-    assert unbound_measurements("Холестерин общий 6.2 ммоль/л",
+    assert unbound_claims("Холестерин общий 6.2 ммоль/л",
                                 ["Холестерин общий\n6.2 ммоль/л"]) == set()
 
 
 def test_a_value_does_not_borrow_the_label_of_a_neighbouring_table_row():
     fragment = "Холестерин общий: 6.2\nЭритроциты: 5.45"
-    assert unbound_measurements("Уровень холестерина 5.45 ммоль/л", [fragment]) \
+    assert unbound_claims("Уровень холестерина 5.45 ммоль/л", [fragment]) \
         == {"5.45 ммоль/л"}
 
 
@@ -277,3 +278,115 @@ def test_an_answer_built_from_two_documents_names_both():
     assert grounded_fragments("Безручко назначила эндокринолог осмотр",
                               ["Врач: Безручко Дарья", "Направление: эндокринолог"]) \
         == (1, 2)
+
+
+# ── утверждение проверяется целиком: объект, отношение, значение ──────
+#
+# Разбор владельца 07.09.2026: «Поездка: страховщик Бета» и «Квартира:
+# страховщик Альфа» давали подтверждённое «Страховщик поездки Альфа».
+# Прежняя проверка требовала совпадения ОДНОГО слова строки с ответом —
+# слова «страховщик» хватало, и строка про квартиру подтверждала
+# утверждение про поездку.
+
+INSURANCE = ["Поездка: страховщик Бета, полис до 12.12.2026",
+             "Квартира: страховщик Альфа, полис до 01.03.2027"]
+
+
+def test_a_named_value_of_another_object_is_not_grounding():
+    assert unbound_claims("Страховщик поездки Альфа", INSURANCE) == {"Альфа"}
+
+
+def test_the_named_value_of_the_right_object_passes():
+    assert unbound_claims("Страховщик поездки Бета", INSURANCE) == set()
+
+
+def test_the_other_object_keeps_its_own_value():
+    assert unbound_claims("Страховщик квартиры Альфа", INSURANCE) == set()
+    assert unbound_claims("Страховщик квартиры Бета", INSURANCE) == {"Бета"}
+
+
+def test_a_paraphrase_absent_from_the_source_does_not_reject_a_true_answer():
+    """Требуются только слова, которые в источниках вообще встречаются.
+
+    Иначе правило отвергало бы «Уровень холестерина 6.2 ммоль/л»: слова
+    «уровень» в лабораторном бланке нет, а значение своё.
+    """
+    assert unbound_claims("По страховке для путешествия — Бета", INSURANCE) == set()
+
+
+def test_one_shared_word_is_no_longer_enough_to_confirm():
+    """Сторож на сам механизм: одно общее слово подтверждать не должно."""
+    fragments = ["Договор с Альфа заключён на квартиру",
+                 "Договор на поездку заключён с Бета"]
+    assert unbound_claims("Договор на поездку заключён с Альфа", fragments) == {"Альфа"}
+
+
+# ── тип сведений: определение проверяется по определяемому ────────────
+#
+# Прогон 445: книга говорит, что сочетание задач достигается В РАМКАХ
+# ЭОТ; ответ пришёл как «ЭОТ — это сочетание задач осознания и
+# изменения». Описание работы внутри метода стало определением самого
+# метода. Слова все из источника, чисел нет, источник назван честно.
+
+LINDE = ["Работа в рамках ЭОТ — это сочетание задач осознания и изменения "
+         "эмоционального состояния клиента."]
+
+
+def test_a_definition_of_the_whole_is_not_taken_from_a_definition_of_a_part():
+    assert undefined_subjects("ЭОТ — это сочетание задач осознания и изменения",
+                              LINDE) == {"ЭОТ"}
+
+
+def test_the_definition_the_source_actually_gives_passes():
+    assert undefined_subjects(
+        "Работа в рамках ЭОТ — это сочетание задач осознания и изменения",
+        LINDE) == set()
+
+
+def test_a_narrower_answer_keeping_all_qualifiers_passes():
+    """Ответ может добавить слов, но не отбросить их."""
+    assert undefined_subjects(
+        "Основная работа в рамках ЭОТ — это сочетание задач осознания",
+        LINDE) == set()
+
+
+def test_a_definition_absent_from_the_source_is_rejected():
+    assert undefined_subjects("Перенос — это защитный механизм", LINDE) == {"Перенос"}
+
+
+def test_a_mention_without_a_definitional_turn_defines_nothing():
+    """«в рамках ЭОТ» без оборота не делает источник определяющим ЭОТ."""
+    mention = ["Такое сочетание задач достигается в рамках ЭОТ."]
+    assert undefined_subjects("ЭОТ — это сочетание задач", mention) == {"ЭОТ"}
+
+
+def test_an_answer_without_a_definitional_turn_is_not_checked_as_one():
+    assert undefined_subjects("В рамках ЭОТ решаются задачи осознания", LINDE) == set()
+
+
+# ── доказательство у каждого утверждения, а не у ответа целиком ───────
+#
+# Разбор владельца 07.09.2026: ответ берёт код проекта из первого
+# источника и бюджет из второго, а ссылка остаётся только на первый.
+# Вес считался на весь текст сразу, длинный код перевешивал короткое
+# число, и второй источник не добирал половины лучшего веса.
+
+TWO_SOURCES = ["Проект PRJ-2026-ALPHA, ответственный Петров, срок до декабря",
+               "Бюджет проекта утверждён: 450000 рублей на год"]
+
+
+def test_both_sources_of_a_two_source_answer_are_cited():
+    used = grounded_fragments("Проект PRJ-2026-ALPHA, бюджет 450000 рублей", TWO_SOURCES)
+    assert used == (1, 2), f"источник половины ответа потерян: {used}"
+
+
+def test_a_single_source_answer_still_cites_one():
+    assert grounded_fragments("Проект PRJ-2026-ALPHA", TWO_SOURCES) == (1,)
+    assert grounded_fragments("Бюджет 450000 рублей", TWO_SOURCES) == (2,)
+
+
+def test_a_stray_word_form_still_does_not_drag_in_a_foreign_fragment():
+    """Сторож прогона 388: порог веса заведён против этого и остаётся."""
+    fragments = ["ссылки на мои каналы: www.b17.ru/eliah",
+                 "ссылку на запись пришлю позже"]
+    assert grounded_fragments("Ссылка на канал: www.b17.ru/eliah", fragments) == (1,)

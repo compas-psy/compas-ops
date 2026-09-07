@@ -193,10 +193,12 @@ def _stems(text: str) -> set[str]:
     return {word.lower()[:_STEM_LEN] for word in _ANY_WORD_RE.findall(text)}
 
 
-def _name_like(answer: str) -> set[str]:
-    """Слова ответа, похожие на название: латиница или заглавная не в
-    начале предложения."""
-    names = set()
+def _name_matches(answer: str):
+    """Слова ответа, похожие на название, вместе с их положением.
+
+    Положение нужно `unbound_claims()`: чтобы спросить «чьё это
+    значение», надо знать, что стоит В ОТВЕТЕ ПЕРЕД ним.
+    """
     for match in _WORD_RE.finditer(answer):
         word = match.group(0)
         if len(word) < 4:
@@ -204,8 +206,13 @@ def _name_like(answer: str) -> set[str]:
         head = answer[:match.start()].rstrip()
         at_sentence_start = not head or head[-1] in _SENTENCE_END
         if _LATIN_RE.search(word) or (word[:1].isupper() and not at_sentence_start):
-            names.add(word.lower())
-    return names
+            yield word, match.start()
+
+
+def _name_like(answer: str) -> set[str]:
+    """Слова ответа, похожие на название: латиница или заглавная не в
+    начале предложения."""
+    return {word.lower() for word, _ in _name_matches(answer)}
 
 
 def ungrounded_words(answer: str, fragments: list[str]) -> set[str]:
@@ -254,41 +261,182 @@ def _labelled_lines(fragment: str) -> list[str]:
     return result
 
 
-def unbound_measurements(answer: str, fragments: list[str]) -> set[str]:
-    """Измеренные величины ответа, стоящие в источнике при ДРУГОМ названии.
+def _claim_values(answer: str):
+    """Значения, которые ответ УТВЕРЖДАЕТ, и их положение в тексте.
 
-    Разница с `ungrounded_numbers()` — вся суть проверки. Та спрашивает
-    «есть ли такое число во фрагментах», эта — «чьё оно». ИЗМЕРЕНО
-    07.09.2026 на живом корпусе: на «какой у меня был холестерин в
-    последний раз» пришло «5.7 ммоль/л». Число во фрагментах было —
-    строкой «(RBC) Эритроциты: 5.45 (4.3-5.7)», то есть верхней границей
-    нормы эритроцитов. Проверка чисел это пропустила, потому что цифры
-    совпали. Настоящее значение холестерина в корпусе одно:
-    «07.10.2023 Липидный профиль (ммоль/л) Холестерин общий: 6.2».
+    Два вида, и оба нуждаются в проверке принадлежности:
 
-    Правило: значение с единицей измерения обязано стоять в источнике на
-    одной строке хотя бы с одним содержательным словом из того же
-    предложения ответа. Не «где-то в документе» — на строке: в таблице
-    соседняя строка это другой показатель.
+      измеренная величина — число с единицей («6.2 ммоль/л»). Опознаётся
+      по единице: именно она отличает значение от номера строки, кода
+      услуги и года;
 
-    Чего правило НЕ делает: не проверяет числа без единицы измерения —
-    даты, счёт, коды. Для них единицы нет, и отличить значение от номера
-    нечем. Ограничение названное, не закрытое.
+      название — «Альфа», «Бета», латиница. Именно этот вид проверка
+      07.09.2026 не покрывала вовсе, и на нём владелец показал дефект:
+      «Поездка: страховщик Бета» и «Квартира: страховщик Альфа» давали
+      подтверждённое «Страховщик поездки Альфа».
     """
-    unbound = set()
-    lines = [line for fragment in fragments for line in _labelled_lines(fragment)]
     for match in _MEASUREMENT_RE.finditer(answer):
-        value = _numbers(match.group(1))
-        labels = {stem for stem in _stems(_sentence_head(answer, match.start()))
-                  if len(stem) >= 4}
-        if not labels:
+        yield " ".join(match.group(0).split()), match.start(), _numbers(match.group(1)), set()
+    for word, position in _name_matches(answer):
+        yield word, position, set(), {word.lower()[:_STEM_LEN]}
+
+
+def unbound_claims(answer: str, fragments: list[str]) -> set[str]:
+    """Значения ответа, стоящие в источнике при ДРУГОМ объекте.
+
+    Разница с `ungrounded_numbers()`/`ungrounded_words()` — вся суть.
+    Те спрашивают «есть ли это во фрагментах», эта — «чьё оно».
+
+    ДВА ИЗМЕРЕННЫХ ДЕФЕКТА, ОДИН МЕХАНИЗМ.
+
+    07.09.2026, живой корпус: на «какой у меня был холестерин в
+    последний раз» пришло «5.7 ммоль/л». Число во фрагментах было —
+    строкой «(RBC) Эритроциты: 5.45 (4.3-5.7)», верхней границей нормы
+    эритроцитов. Настоящее значение в корпусе одно: «Холестерин общий:
+    6.2».
+
+    07.09.2026, разбор владельца: «Поездка: страховщик Бета» и
+    «Квартира: страховщик Альфа» давали подтверждённое «Страховщик
+    поездки Альфа». Прежняя проверка требовала совпадения ОДНОГО слова
+    строки с ответом — слова «страховщик» хватало, и строка про квартиру
+    подтверждала утверждение про поездку.
+
+    ПРАВИЛО. Строка источника подтверждает значение, только если несёт
+    и само значение, и ВСЕ содержательные слова, стоящие в ответе перед
+    ним, — а не одно из них. Проверяется строка, а не документ: в
+    таблице соседняя строка это другой показатель.
+
+    ПОЧЕМУ «ВСЕ», НО НЕ БУКВАЛЬНО ВСЕ. Требуются только те слова,
+    которые в источниках вообще встречаются. Слово, которого во
+    фрагментах нет нигде, — это либо пересказ («уровень холестерина» при
+    источнике «Холестерин общий»), либо выдумка; выдумку ловит
+    `ungrounded_words()`, а пересказ не должен отбраковывать верный
+    ответ. Без этой оговорки правило отвергало бы и «Уровень
+    холестерина 6.2 ммоль/л», где значение своё.
+
+    ЧЕГО ПРАВИЛО НЕ ДЕЛАЕТ. Не проверяет числа без единицы измерения —
+    даты, счёт, коды: единицы нет, и отличить значение от номера нечем.
+    Не понимает отрицания и уступки («не Альфа, а Бета» на строке с
+    Альфой пройдёт). Ограничения названные, не закрытые.
+    """
+    lines = [line for fragment in fragments for line in _labelled_lines(fragment)]
+    indexed = [(_stems(line), _numbers(line)) for line in lines]
+    known = set()
+    for fragment in fragments:
+        known |= _stems(fragment)
+
+    unbound = set()
+    for value, position, numbers, stems in _claim_values(answer):
+        required = {stem for stem in _stems(_sentence_head(answer, position))
+                    if len(stem) >= 4 and stem in known and stem not in stems}
+        if not required:
             continue
-        carrying = [line for line in lines if _numbers(line) & value]
+        carrying = [line_stems for line_stems, line_numbers in indexed
+                    if (numbers and line_numbers & numbers)
+                    or (stems and stems <= line_stems)]
         if not carrying:
-            continue  # числа нет вовсе — это ловит ungrounded_numbers()
-        if not any(_stems(line) & labels for line in carrying):
-            unbound.add(" ".join(match.group(0).split()))
+            continue  # значения нет вовсе — это ловят проверки выше
+        if not any(required <= line_stems for line_stems in carrying):
+            unbound.add(value)
     return unbound
+
+
+#: Определительный оборот. Тот же список, что у `operations.py` — но
+#: применяется иначе: там он ОТБИРАЕТ фрагменты, здесь ПРОВЕРЯЕТ ответ.
+#: «это» засчитывается только после тире: без тире оно стоит в каждом
+#: втором предложении и определением не является.
+_DEFINITION_MARK_RE = re.compile(
+    r"[—–-]\s*это\b|\bназыва(?:ется|ются|ют)\b|\bименуется\b|"
+    r"\bпредставляет\s+собой\b|\bопределяется\s+как\b|\bпонима(?:ется|ют)\b",
+    re.IGNORECASE)
+
+
+def _definiendum(text: str, position: int) -> set[str]:
+    """Что именно определяют — слова перед оборотом в этом предложении."""
+    return {stem for stem in _stems(_sentence_head(text, position)) if len(stem) >= 3}
+
+
+def undefined_subjects(answer: str, fragments: list[str]) -> set[str]:
+    """Объекты, которым ответ даёт определение, а источник — не даёт.
+
+    ИЗМЕРЕННЫЙ ДЕФЕКТ (прогон 445, разбор владельца 07.09.2026). Книга
+    говорит, что некоторое сочетание задач достигается В РАМКАХ ЭОТ.
+    Ответ пришёл как «ЭОТ — это сочетание задач осознания и изменения»:
+    описание работы внутри метода превратилось в определение самого
+    метода. Слова все из источника, числа проверять нечего, источник
+    назван честно — и утверждение всё равно чужое.
+
+    ПРАВИЛО. Ответ, построенный как определение, засчитывается, только
+    если в источнике есть строка, где определительный оборот стоит при
+    ТОМ ЖЕ определяемом. Сравнивается левая часть: то, что источник
+    ставит перед оборотом, обязано целиком входить в то, что ставит
+    перед оборотом ответ.
+
+    Отсюда и берётся разбор дефекта. Источник определяет «работу в
+    рамках ЭОТ» — три слова; ответ определяет «ЭОТ» — одно. Слова
+    «работа» и «рамки» ответ ОТБРОСИЛ, то есть расширил утверждение с
+    частного случая на весь метод. Проверка это видит.
+
+    ЧЕГО ПРАВИЛО НЕ ДЕЛАЕТ. Не знает синонимов: если источник определяет
+    «ЭОТ», а ответ — «эмоционально-образную терапию», определение будет
+    отклонено, хотя оно верно. Отклонение честно называется отклонением
+    (`format_unverified`), а не превращается в «в документах ничего
+    нет» — это разные исходы. Ограничение названное, не закрытое.
+
+    Сравнение и пример этой проверкой не покрыты: форма для них
+    отбирается в `operations.py` и сообщается владельцу отдельной
+    строкой, но ОТКАЗА при её отсутствии пока нет.
+    """
+    source_definitions = []
+    for fragment in fragments:
+        for line in fragment.splitlines():
+            for mark in _DEFINITION_MARK_RE.finditer(line):
+                source_definitions.append(_definiendum(line, mark.start()))
+
+    undefined = set()
+    for mark in _DEFINITION_MARK_RE.finditer(answer):
+        subject = _definiendum(answer, mark.start())
+        if not subject:
+            continue
+        if not any(defined and defined <= subject for defined in source_definitions):
+            undefined.add(" ".join(_sentence_head(answer, mark.start()).split()))
+    return undefined
+
+
+def _value_owners(answer: str, fragments: list[str]) -> set[int]:
+    """Фрагменты, ЕДИНОЛИЧНО несущие какое-нибудь значение ответа.
+
+    ИЗМЕРЕННЫЙ ДЕФЕКТ (разбор владельца 07.09.2026). Ответ берёт код
+    проекта из первого источника и бюджет из второго, а ссылка остаётся
+    только на первый. Причина в том, что вес считался на весь текст
+    сразу: длинный код перевешивал короткое число, и второй источник не
+    добирал половины лучшего веса.
+
+    Доказательство обязано быть у КАЖДОГО утверждения, а не у ответа
+    целиком. Фрагмент, оказавшийся единственным носителем значения,
+    доказывает своё утверждение независимо от того, сколько весит
+    соседний фрагмент со своим.
+
+    Значением считается то же, что проверяет `unbound_claims()`, —
+    величина, название, — плюс голое число. Случайная словоформа
+    («ссылку») ни тем, ни другим не является и постороннего фрагмента
+    сюда не втащит: ровно эта беда была прогоном 388, и порог веса
+    заведён против неё.
+    """
+    owners: set[int] = set()
+
+    def sole(holders: list[int]) -> None:
+        if len(holders) == 1:
+            owners.add(holders[0])
+
+    for _value, _position, numbers, stems in _claim_values(answer):
+        sole([i for i, fragment in enumerate(fragments, start=1)
+              if (numbers and _numbers(fragment) & numbers)
+              or (stems and stems <= _stems(fragment))])
+    for number in _numbers(answer):
+        sole([i for i, fragment in enumerate(fragments, start=1)
+              if number in _numbers(fragment)])
+    return owners
 
 
 def grounded_fragments(answer: str, fragments: list[str]) -> tuple[int, ...]:
@@ -328,8 +476,12 @@ def grounded_fragments(answer: str, fragments: list[str]) -> tuple[int, ...]:
         # («www.b17.ru/eliah», вес 16) — 6 < 8, фрагмент отсеивается;
         # два документа, каждый со своим именем или значением, весят
         # сопоставимо и остаются оба.
-        return tuple(i for i, score in enumerate(scores, start=1)
-                     if score > 0 and score * 2 >= best)
+        # Порог веса — про то, какой фрагмент похож на ответ целиком.
+        # Единоличные носители значений добавляются к нему, а не
+        # проходят через него: у каждого утверждения своё доказательство.
+        heavy = {i for i, score in enumerate(scores, start=1)
+                 if score > 0 and score * 2 >= best}
+        return tuple(sorted(heavy | _value_owners(answer, fragments)))
     # Различающих слов нет — берутся фрагменты с наибольшим пересечением.
     overlaps = [len(tokens & answer_tokens) for tokens in per_fragment]
     best = max(overlaps, default=0)
@@ -489,12 +641,21 @@ def parse_response(raw: str, *, fragments: list[str],
         logger.warning("синтез отброшен: чисел нет в источниках: %s", sorted(invented))
         return _REJECTED
 
-    unbound = unbound_measurements(body, sources)
+    unbound = unbound_claims(body, sources)
     if unbound:
-        # Число во фрагментах есть, но принадлежит другому показателю.
-        # Худший вид выдумки: она проходит проверку цифр и приходит с
-        # честно названным источником.
-        logger.warning("синтез отброшен: значения при чужом названии: %s", sorted(unbound))
+        # Значение во фрагментах есть, но принадлежит другому объекту.
+        # Худший вид выдумки: она проходит проверку цифр и слов и
+        # приходит с честно названным источником.
+        logger.warning("синтез отброшен: значения при чужом объекте: %s", sorted(unbound))
+        return _REJECTED
+
+    invented_definitions = undefined_subjects(body, sources)
+    if invented_definitions:
+        # Слова из источника, источник назван честно — и всё равно чужое
+        # утверждение: описание частного случая выдано за определение
+        # целого (прогон 445).
+        logger.warning("синтез отброшен: определения нет в источниках: %s",
+                       sorted(invented_definitions))
         return _REJECTED
 
     unknown = ungrounded_words(body, sources)
