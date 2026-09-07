@@ -94,3 +94,70 @@ def test_a_compound_value_is_compared_whole():
 def test_a_year_may_be_named_even_if_the_document_writes_it_shortly():
     """«25.08.26» во фрагменте и «в 2026 году» в ответе — не выдумка."""
     assert ungrounded_numbers("Осмотр был в 2026 году", ["Дата: 25.08.26"]) == set()
+
+
+# ── Живой прогон 417: три канала выдумки, каждый с ценой ────────────────
+
+def test_our_own_date_signature_is_not_evidence_for_itself():
+    """probe подписывает фрагмент датой документа, чтобы модель могла
+    отвечать «в последний раз». Живой ответ 07.09.2026: на «до какого
+    числа действует загран» пришло «до 22.08.2026» с источником
+    «Эндоскопия.pdf» — модель взяла дату из НАШЕЙ приписки, а проверка
+    сверила ответ с ней же. Дата обязана проверяться по исходному тексту.
+    """
+    shown = ["(документ от 22.08.2026) Эзофагогастродуоденоскопия выполнена."]
+    sources = ["Эзофагогастродуоденоскопия выполнена."]
+
+    assert parse_response("Загранпаспорт действует до 22.08.2026.",
+                          fragments=shown, sources=sources) is None
+    # Без разделения тот же ответ проходил — вот цена смешения.
+    assert parse_response("Загранпаспорт действует до 22.08.2026.",
+                          fragments=shown) is not None
+
+
+def test_a_name_that_is_not_in_the_evidence_is_refused():
+    """«ибопрофен» во фрагменте, «ibuprofene» в ответе (живой ответ на
+    «сколько пунктов в аптечке»). Проверка чисел букв не смотрела."""
+    kit = ["я кладу ибопрофен, лаперамид, пластырь и антисептик"]
+
+    assert parse_response("В аптечке: ibuprofene, лаперамид, пластырь.",
+                          fragments=kit) is None
+    result = parse_response("В аптечке: ибопрофен, лаперамид, пластырь.", fragments=kit)
+    assert result is not None and result.answered
+
+
+def test_a_name_from_the_evidence_survives_declension():
+    """Заземление по корню, а не по точному совпадению: иначе любой падеж
+    считался бы выдумкой."""
+    booking = ["билеты я бронирую через Аэрофлот, а страховку в Ингосстрахе"]
+    result = parse_response("Билеты — в Аэрофлоте, страховка — Ингосстрах.",
+                            fragments=booking)
+
+    assert result is not None and result.answered
+
+
+def test_ordinary_words_are_not_required_to_be_in_the_evidence():
+    """Связки — не содержание: требовать их в источнике значило бы
+    запретить синтез как таковой."""
+    analysis = ["Холестерин общий 6,2 ммоль/л"]
+    result = parse_response("Уровень холестерина составляет 6.2 ммоль/л.",
+                            fragments=analysis)
+
+    assert result is not None and result.answered
+
+
+def test_the_citation_marker_is_cut_wherever_it_stands():
+    """Живой ответ: «…до 16:48 23.08.2026. ФРАГМЕНТЫ: 2» — маркер в конце
+    предложения уезжал в мессенджер как часть ответа."""
+    result = parse_response("Давление 120/80. ФРАГМЕНТЫ: 2", fragments=ANALYSIS)
+
+    assert result is not None
+    assert "ФРАГМЕНТЫ" not in result.text
+    assert result.text == "Давление 120/80"
+    assert result.used == (2,)
+
+
+def test_an_unparsed_marker_refuses_the_answer():
+    """Разметку, которую мы не узнали, показывать нельзя: неизвестно, что
+    ещё в тексте не ответ."""
+    assert parse_response("Давление 120/80. ФРАГМЕНТЫ: нет", fragments=ANALYSIS) is None

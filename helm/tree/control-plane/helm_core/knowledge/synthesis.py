@@ -88,8 +88,18 @@ _TOKEN_RE = re.compile(r"[0-9a-zа-яё][0-9a-zа-яё._/\-]{3,}", re.IGNORECASE
 #: измеренное значение — не проверялась ничем.
 _NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)?(?:\s*/\s*\d+(?:[.,]\d+)?)?")
 
-_CITATION_RE = re.compile(r"^[^\S\n]*ФРАГМЕНТЫ[^\S\n]*:[^\S\n]*([0-9][0-9,\s]*)[^\S\n]*$",
-                          re.IGNORECASE | re.MULTILINE)
+#: Маркер вырезается ГДЕ УГОДНО, не только отдельной строкой. Живой
+#: ответ владельцу 07.09.2026: «Регистрация должна быть проведена до
+#: 16:48 23.08.2026. ФРАГМЕНТЫ: 2» — модель дописала маркер в конец
+#: предложения, якорь `^…$` его не увидел, и служебная разметка ушла в
+#: мессенджер. `[ \t]`, а не `\s`: перевод строки не должен утягивать в
+#: маркер цифры следующего абзаца.
+_CITATION_RE = re.compile(r"[ \t]*ФРАГМЕНТЫ[ \t]*:[ \t]*([0-9](?:[0-9,]|[ \t])*)",
+                          re.IGNORECASE)
+#: Остаток маркера после вырезания — признак, что формат разобран не
+#: до конца. Показывать такой ответ нельзя: раз одну служебную строку
+#: мы не узнали, неизвестно, что ещё в тексте не ответ.
+_CITATION_LEFTOVER_RE = re.compile(r"ФРАГМЕНТ", re.IGNORECASE)
 _NO_ANSWER_RE = re.compile(r"НЕТ\s+ОТВЕТА", re.IGNORECASE)
 
 
@@ -129,6 +139,59 @@ def ungrounded_numbers(answer: str, fragments: list[str]) -> set[str]:
         known |= _numbers(fragment)
     return {value for value in _numbers(answer) - known
             if not (value.isdigit() and len(value) == 4)}
+
+
+#: Слово ответа, которое обязано быть в источнике: латиница в русском
+#: ответе или заглавная буква НЕ в начале предложения. И то, и другое —
+#: признак имени собственного, названия, термина, то есть содержания, а
+#: не связки. Найдено на живом ответе 07.09.2026: во фрагменте владельца
+#: стоял «ибопрофен», в ответе — «ibuprofene». Проверка чисел это
+#: пропускала: буквы никто не сверял.
+#:
+#: Чего правило НЕ делает: не проверяет обычные слова («находятся»,
+#: «составляет»). Требовать их в источнике значило бы запретить модели
+#: связывать фрагменты своими словами — а ради этого синтез и заводился.
+#: Ограничение названное, не закрытое.
+_LATIN_RE = re.compile(r"[a-z]", re.IGNORECASE)
+_WORD_RE = re.compile(r"[^\W\d_][\w\-]*", re.UNICODE)
+#: Пять символов — общий корень словоформы: «зарядку»/«зарядка»,
+#: «Аэрофлот»/«Аэрофлоте». Сверять целиком нельзя (падежи), сверять по
+#: трём — пропустить половину выдумок.
+_STEM_LEN = 5
+_SENTENCE_END = ".!?:;\n"
+
+
+#: Корни ИСТОЧНИКА берутся по отдельным словам, а не по `_TOKEN_RE`:
+#: тот склеивает адрес «www.b17.ru/eliah» в один токен, и «eliah» из
+#: ответа считался бы выдумкой, хотя стоит прямо во фрагменте.
+_ANY_WORD_RE = re.compile(r"[0-9a-zа-яё]+", re.IGNORECASE)
+
+
+def _stems(text: str) -> set[str]:
+    return {word.lower()[:_STEM_LEN] for word in _ANY_WORD_RE.findall(text)}
+
+
+def _name_like(answer: str) -> set[str]:
+    """Слова ответа, похожие на название: латиница или заглавная не в
+    начале предложения."""
+    names = set()
+    for match in _WORD_RE.finditer(answer):
+        word = match.group(0)
+        if len(word) < 4:
+            continue
+        head = answer[:match.start()].rstrip()
+        at_sentence_start = not head or head[-1] in _SENTENCE_END
+        if _LATIN_RE.search(word) or (word[:1].isupper() and not at_sentence_start):
+            names.add(word.lower())
+    return names
+
+
+def ungrounded_words(answer: str, fragments: list[str]) -> set[str]:
+    """Названия ответа, которых нет ни в одном показанном фрагменте."""
+    known = set()
+    for fragment in fragments:
+        known |= _stems(fragment)
+    return {word for word in _name_like(answer) if word[:_STEM_LEN] not in known}
 
 
 def grounded_fragments(answer: str, fragments: list[str]) -> tuple[int, ...]:
@@ -197,9 +260,24 @@ def build_prompt(question: str, fragments: list[str]) -> str:
     )
 
 
-def parse_response(raw: str, *, fragments: list[str]) -> Synthesis | None:
-    """Разобрать ответ модели. `None` — формат не выдержан, доверять нечему."""
+def parse_response(raw: str, *, fragments: list[str],
+                   sources: list[str] | None = None) -> Synthesis | None:
+    """Разобрать ответ модели. `None` — формат не выдержан, доверять нечему.
+
+    `fragments` — что видела модель, `sources` — по чему её проверяют.
+    Это РАЗНЫЕ вещи, и живой ответ 07.09.2026 показал, чем оборачивается
+    их смешение: `probe._dated_fragment()` подписывает каждый фрагмент
+    датой документа («(документ от 22.08.2026) …»), чтобы модель могла
+    отвечать «в последний раз». Проверка чисел сверяла ответ с этой же
+    подписью — и дата, дописанная нами, стала доказательством самой
+    себя. На «до какого числа действует загран» пришло «до 22.08.2026»
+    с источником «Эндоскопия.pdf», где такого срока нет вовсе.
+
+    По умолчанию `sources = fragments` — вызывающему, который ничего к
+    фрагментам не дописывал, разделять нечего.
+    """
     fragment_count = len(fragments)
+    sources = fragments if sources is None else sources
     text = (raw or "").strip()
     if not text:
         return None
@@ -214,24 +292,33 @@ def parse_response(raw: str, *, fragments: list[str]) -> Synthesis | None:
         for n in (int(part) for part in match.group(1).replace(" ", "").split(",") if part)
         if 1 <= n <= fragment_count
     }))
-    body = _CITATION_RE.sub("", text).strip()
+    body = _CITATION_RE.sub(" ", text)
+    body = re.sub(r"[ \t]{2,}", " ", body).strip(" \t\n.")
 
     if not body:
+        return None
+    if _CITATION_LEFTOVER_RE.search(body):
+        logger.warning("синтез отброшен: маркер цитирования не разобран")
         return None
     if _NO_ANSWER_RE.search(body) and not claimed:
         return Synthesis(answered=False)
 
-    invented = ungrounded_numbers(body, fragments)
+    invented = ungrounded_numbers(body, sources)
     if invented:
         # Не «показать с оговоркой»: число, которого нет в источнике, —
         # это и есть выдумка, а выдумка с источником хуже отказа.
         logger.warning("синтез отброшен: чисел нет в источниках: %s", sorted(invented))
         return None
 
+    unknown = ungrounded_words(body, sources)
+    if unknown:
+        logger.warning("синтез отброшен: названий нет в источниках: %s", sorted(unknown))
+        return None
+
     # Заземление по содержанию — главное, ссылки модели — уточнение.
     # Пересечение, если оно непусто: модель могла сослаться и на лишний
     # фрагмент, из которого в ответе ничего нет.
-    grounded = grounded_fragments(body, fragments)
+    grounded = grounded_fragments(body, sources)
     used = tuple(sorted(set(claimed) & set(grounded))) or grounded or claimed
     if not used:
         # Ответ не опирается ни на один показанный фрагмент. Проверить
@@ -240,8 +327,15 @@ def parse_response(raw: str, *, fragments: list[str]) -> Synthesis | None:
     return Synthesis(answered=True, text=body, used=used)
 
 
-def synthesize_or_none(question: str, fragments: list[str]) -> Synthesis | None:
-    """Fail-open обёртка для probe.py — см. докстринг модуля."""
+def synthesize_or_none(question: str, fragments: list[str],
+                       *, sources: list[str] | None = None) -> Synthesis | None:
+    """Fail-open обёртка для probe.py — см. докстринг модуля.
+
+    `sources` — исходный текст тех же фрагментов, без наших приписок;
+    по нему, а не по показанному, проверяется заземление ответа (см.
+    `parse_response()`). Обрезается тем же `MAX_FRAGMENT_CHARS`: за
+    пределами окна модель ничего не видела, и засчитывать это ей в
+    доказательства нельзя."""
     if not fragments:
         return None
     body = {
@@ -261,4 +355,5 @@ def synthesize_or_none(question: str, fragments: list[str]) -> Synthesis | None:
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         logger.warning("локальный синтез недоступен, откат на composer: %s", exc)
         return None
-    return parse_response(result.get("response") or "", fragments=fragments)
+    trimmed = None if sources is None else [t.strip()[:MAX_FRAGMENT_CHARS] for t in sources]
+    return parse_response(result.get("response") or "", fragments=fragments, sources=trimmed)

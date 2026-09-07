@@ -481,7 +481,7 @@ def test_answer_follows_the_content_of_the_fragments_not_their_rank(session, mon
 
     seen = {}
 
-    def fake_synthesis(question, fragments):
+    def fake_synthesis(question, fragments, **_):
         seen["fragments"] = fragments
         picked = next(i for i, f in enumerate(fragments, start=1) if "120/80" in f)
         return Synthesis(answered=True, text="Давление 120/80 мм рт. ст.", used=(picked,))
@@ -505,7 +505,7 @@ def test_the_answer_names_its_sources(session, monkeypatch):
                 original_filename="кардиолог.pdf")
     session.flush()
     monkeypatch.setattr(probe_module, "synthesize_or_none",
-                        lambda q, f: Synthesis(answered=True, text="Давление 120/80.", used=(1,)))
+                        lambda q, f, **_: Synthesis(answered=True, text="Давление 120/80.", used=(1,)))
 
     result = probe(session, query="какое у меня было давление")
 
@@ -520,7 +520,7 @@ def test_model_says_the_fragments_do_not_answer_and_that_is_free(session, monkey
                 original_filename="кардиолог.pdf")
     session.flush()
     monkeypatch.setattr(probe_module, "synthesize_or_none",
-                        lambda q, f: Synthesis(answered=False))
+                        lambda q, f, **_: Synthesis(answered=False))
 
     result = probe(session, query="какое у меня было давление")
 
@@ -541,7 +541,7 @@ def test_general_question_still_escalates_when_the_fragments_do_not_answer(sessi
                 original_filename="conventions.md")
     session.flush()
     monkeypatch.setattr(probe_module, "synthesize_or_none",
-                        lambda q, f: Synthesis(answered=False))
+                        lambda q, f, **_: Synthesis(answered=False))
 
     result = probe(session, query="переведи этот текст на английский")
 
@@ -552,7 +552,7 @@ def test_unavailable_model_degrades_to_a_quote_not_to_silence(session, monkeypat
     """Fail-open: недоступность локальной модели не отменяет ответ —
     уходит прежняя детерминированная цитата."""
     _health_and_vector_off(monkeypatch)
-    monkeypatch.setattr(probe_module, "synthesize_or_none", lambda q, f: None)
+    monkeypatch.setattr(probe_module, "synthesize_or_none", lambda q, f, **_: None)
     monkeypatch.setattr(probe_module, "rephrase_or_none", lambda *a, **kw: None)
     ingest_text(session, domain="engineering", text="Встречу перенесли на четверг.",
                 original_filename="meeting-notes.md")
@@ -579,7 +579,7 @@ def test_dialogue_context_confines_the_search_to_the_named_document(session, mon
 
     seen = {}
 
-    def fake_synthesis(question, fragments):
+    def fake_synthesis(question, fragments, **_):
         seen["fragments"] = fragments
         return Synthesis(answered=True, text="Препарат А три раза в день.", used=(1,))
 
@@ -613,7 +613,7 @@ def test_the_newest_document_comes_first_when_asked_for_the_latest(session, monk
 
     seen = {}
 
-    def fake_synthesis(question, fragments):
+    def fake_synthesis(question, fragments, **_):
         seen["fragments"] = fragments
         return Synthesis(answered=True, text="Холестерин 8,4 ммоль/л.", used=(1,))
 
@@ -633,7 +633,7 @@ def test_the_answer_names_the_date_of_its_source(session, monkeypatch):
                 original_filename="свежий.pdf")
     session.flush()
     monkeypatch.setattr(probe_module, "synthesize_or_none",
-                        lambda q, f: Synthesis(answered=True, text="Холестерин 8,4.", used=(1,)))
+                        lambda q, f, **_: Synthesis(answered=True, text="Холестерин 8,4.", used=(1,)))
 
     result = probe(session, query="какой у меня холестерин")
 
@@ -650,7 +650,7 @@ def test_a_document_without_a_date_is_not_dressed_up_as_dated(session, monkeypat
     session.flush()
     seen = {}
 
-    def fake_synthesis(question, fragments):
+    def fake_synthesis(question, fragments, **_):
         seen["fragments"] = fragments
         return Synthesis(answered=True, text="Холестерин 8,4.", used=(1,))
 
@@ -678,7 +678,7 @@ def test_a_consultation_quoting_an_older_analysis_is_not_the_latest(session, mon
 
     seen = {}
 
-    def fake_synthesis(question, fragments):
+    def fake_synthesis(question, fragments, **_):
         seen["fragments"] = fragments
         return Synthesis(answered=True, text="Холестерин 8,4 ммоль/л.", used=(1,))
 
@@ -700,7 +700,7 @@ def test_the_fragment_shows_both_dates_when_they_differ(session, monkeypatch):
     session.flush()
     seen = {}
 
-    def fake_synthesis(question, fragments):
+    def fake_synthesis(question, fragments, **_):
         seen["fragments"] = fragments
         return Synthesis(answered=True, text="Холестерин 6,2.", used=(1,))
 

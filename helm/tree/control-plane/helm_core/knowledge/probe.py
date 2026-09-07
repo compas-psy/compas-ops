@@ -728,7 +728,12 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     # (synthesis.py): ответ со ссылками на фрагменты, честное «здесь
     # ответа нет» и недоступность модели. Смешивать их нельзя: первый —
     # ответ, второй — тоже ответ, третий — незнание.
-    synthesis = synthesize_or_none(spec.question, [_dated_fragment(e) for e in evidence])
+    # Подпись с датой — НАША приписка, и доказательством быть не может:
+    # заземление проверяется по исходному тексту чанка (см.
+    # synthesis.parse_response()).
+    synthesis = synthesize_or_none(spec.question,
+                                   [_dated_fragment(e) for e in evidence],
+                                   sources=[e.chunk_text for e in evidence])
 
     if synthesis is not None and not synthesis.answered:
         # Найденное прочитано и ответа не содержит. Для общего вопроса
