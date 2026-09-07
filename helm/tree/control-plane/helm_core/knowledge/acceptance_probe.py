@@ -92,10 +92,15 @@ def rederive() -> None:
     if source is None:
         print("  корпус пуст, переразбирать нечего")
         return
+    # Имя читается ДО коммита: коммит сбрасывает привязку тенанта (она
+    # транзакционная), после чего перечитать строку под RLS уже нельзя —
+    # прогон 459 упал здесь на ObjectDeletedError уже ПОСЛЕ успешной
+    # постановки, то есть соврал об отказе при выполненной работе.
+    name = source.original_filename or source.raw_path
     done = request_rederivation(session, source_id=source.id,
                                 semantic_version=SEMANTIC_VERSION)
     session.commit()
-    print(f"  переразбор {source.original_filename or source.raw_path}: "
+    print(f"  переразбор {name}: "
           f"{'поставлен' if done else 'задания на эту версию нет'}")
 
 

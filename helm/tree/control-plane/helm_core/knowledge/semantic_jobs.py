@@ -325,6 +325,13 @@ def process_semantic_job(session: Session, job: KnowledgeSemanticJob) -> bool:
 
     if not result.finished:
         job.semantic_run_id = result.run_id
+        # Статус проставляется ЯВНО, а не наследуется от взятия. Прогон
+        # 459 показал задание в `pending` при живой аренде и идущей
+        # работе: отчёт по очереди говорил «ждёт», пока воркер разбирал
+        # порцию за порцией. Числа в отчёте, расходящиеся с делом, — тот
+        # же класс вранья, что и «развёрнут» про никогда не запускавшийся
+        # cleanup.sh, только дешевле в починке.
+        job.status = KnowledgeIngestStatus.RUNNING
         renew_lease_on_progress(session, job)
         logger.info("semantic job %s: порция готова, окон %s/%s",
                     job.id, result.windows_processed, result.windows_total)

@@ -281,3 +281,19 @@ def test_rederivation_returns_one_source_to_the_queue_with_a_named_reason(sessio
     assert closed.error_code == "REDERIVATION_REQUESTED", \
         "закрытая ревизия обязана называть причину, иначе это молчаливая правка"
     assert claim_next_semantic_job(session) is not None, "источник не вернулся в очередь"
+
+
+def test_an_unfinished_job_is_recorded_as_running_not_waiting(session, batched_job):
+    """Незаконченное задание обязано числиться идущим, а не ждущим.
+
+    Прогон 459 показал `pending` при живой аренде и идущей работе: отчёт
+    по очереди говорил «ждёт», пока воркер разбирал порцию за порцией.
+    Числа в отчёте, расходящиеся с делом, — тот же класс вранья, что и
+    «развёрнут» про никогда не запускавшийся cleanup.sh.
+    """
+    job, _ = batched_job
+    job.status = KnowledgeIngestStatus.PENDING
+    session.flush()
+
+    assert process_semantic_job(session, job) is False
+    assert job.status == KnowledgeIngestStatus.RUNNING
