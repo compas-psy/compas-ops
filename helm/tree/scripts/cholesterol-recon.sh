@@ -1,79 +1,63 @@
 #!/usr/bin/env bash
-# HELM · почему на «последний холестерин» пришёл не последний. Чтение.
-#
-# Владелец 07.09.2026: сдавал дважды за неделю, бот дважды выдал 8.1 из
-# первого анализа, а в липидном профиле было 8.4. Вопрос про ВРЕМЯ, и
-# проверяется здесь именно оно: есть ли в корпусе второе значение, знает
-# ли система даты своих документов и в каком порядке отдаёт кандидатов.
+# HELM · где в корпусе лежат оба замера холестерина и знает ли система их
+# даты. Чтение. Печатается компактно: длинный вывод не помещается в лог.
 set -uo pipefail
 cd /opt/helm/compose || exit 1
 
 echo "выкачено: $(sudo cat /opt/helm/DEPLOYED_SHA 2>/dev/null || echo unknown)"
 
 sudo docker compose exec -T helm-core python3 - <<'PYEOF'
-"""Холестерин в корпусе: значения, документы, даты, порядок выдачи."""
+"""Оба замера холестерина: документы, значения, даты."""
 import re
 
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from helm_core.config import get_settings
 from helm_core.knowledge.health_schema import health_schema_configured, health_session
-from helm_core.knowledge.probe import probe
 from helm_core.knowledge.semantic_pilot import source_text
-from helm_core.knowledge.temporal import find_date_anchors
+from helm_core.knowledge.temporal import ROLE_DOCUMENT, ROLE_EVENT, find_date_anchors
 from helm_core.knowledge.tenancy import bind_knowledge_user
 from helm_core.models import (HealthKnowledgeChunk, HealthKnowledgeSourcePrivate,
                               KnowledgeSource)
 
-VALUE_RE = re.compile(r"холестерин[^\n]{0,120}", re.IGNORECASE)
+#: Строка вида «Холестерин общий … 8.4» — имя показателя и число рядом.
+VALUE_RE = re.compile(r"(холестерин|липид)[^\n]{0,80}?(\d+[.,]\d+)", re.IGNORECASE)
 
 engine = create_engine(get_settings().database_url, pool_pre_ping=True)
 session = sessionmaker(bind=engine)()
 tenant = bind_knowledge_user(session, None)
 
-print("############ 1. ГДЕ В КОРПУСЕ ХОЛЕСТЕРИН ############")
-if health_schema_configured():
-    with health_session(tenant) as graph:
-        rows = graph.execute(
-            select(HealthKnowledgeChunk.id, HealthKnowledgeChunk.source_id,
-                   HealthKnowledgeChunk.text,
-                   HealthKnowledgeSourcePrivate.original_filename)
-            .outerjoin(HealthKnowledgeSourcePrivate,
-                       HealthKnowledgeChunk.source_id
-                       == HealthKnowledgeSourcePrivate.source_id)
-            .where(HealthKnowledgeChunk.text.ilike("%холестерин%"))).all()
-    print(f"  чанков со словом «холестерин»: {len(rows)}")
-    for chunk_id, source_id, text, filename in rows:
-        matches = VALUE_RE.findall(text)
-        print(f"\n  — {filename}")
-        print(f"    чанк {chunk_id}")
-        for line in matches[:4]:
-            print(f"    значение: {line.strip()[:110]}")
-        anchors = find_date_anchors(text)
-        print(f"    даты В ЧАНКЕ: {[(a.value, a.role) for a in anchors] or 'нет'}")
-        source = session.get(KnowledgeSource, source_id)
-        if source is not None:
-            whole = source_text(source)
-            doc_anchors = find_date_anchors(whole) if whole else []
-            print(f"    даты В ДОКУМЕНТЕ: "
-                  f"{[(a.value, a.role) for a in doc_anchors][:6] or 'нет'}")
-            print(f"    загружен: {source.created_at:%d.%m.%Y %H:%M}")
+with health_session(tenant) as graph:
+    rows = graph.execute(
+        select(HealthKnowledgeChunk.source_id, HealthKnowledgeChunk.text,
+               HealthKnowledgeSourcePrivate.original_filename)
+        .outerjoin(HealthKnowledgeSourcePrivate,
+                   HealthKnowledgeChunk.source_id
+                   == HealthKnowledgeSourcePrivate.source_id)
+        .where(HealthKnowledgeChunk.text.op("~*")("холестерин|липид"))).all()
 
-print("\n############ 2. ЧТО ОТДАЁТ ПОИСК ############")
-for question in ("Какой у меня холестерин был в последний раз?",
-                 "Уровень холестерина по липидному профилю?"):
-    tenant = bind_knowledge_user(session, None)
-    result = probe(session, query=question)
-    print(f"\n  вопрос: {question}")
-    print(f"  исход: {result.outcome}  режим: {result.mode}")
-    print(f"  ответ: {(result.answer_text or '')[:300]}")
-    for item in result.evidence:
-        print(f"    кандидат: {item.original_filename} · ранг {item.rank:.4f}")
-        print(f"      {item.chunk_text[:100]!r}")
-    session.rollback()
+print(f"############ ЧАНКОВ С «холестерин|липид»: {len(rows)} ############")
+by_source: dict = {}
+for source_id, text, filename in rows:
+    by_source.setdefault((source_id, filename), []).append(text)
 
-session.rollback()
+for (source_id, filename), texts in by_source.items():
+    source = session.get(KnowledgeSource, source_id)
+    whole = source_text(source) if source is not None else None
+    anchors = find_date_anchors(whole) if whole else []
+    dated = [(a.value, a.role) for a in anchors
+             if a.role in (ROLE_DOCUMENT, ROLE_EVENT)][:3]
+    values = []
+    for text in texts:
+        values += [f"{m.group(1)}…{m.group(2)}" for m in VALUE_RE.finditer(text)]
+    print(f"\n{filename}")
+    print(f"  чанков: {len(texts)}   даты документа: {dated or 'НЕТ'}")
+    print(f"  загружен: {source.created_at:%d.%m.%Y}" if source else "  источник не найден")
+    for value in values[:6]:
+        print(f"  значение: {value[:80]}")
+    if not values:
+        print("  значений рядом со словом не найдено")
 PYEOF
 rc=$?
 if [ "$rc" -ne 0 ]; then
