@@ -1,6 +1,7 @@
 from .base import (
     ApprovalStatus, Base, BATCH_ITEM_TERMINAL_STATUSES, BATCH_TERMINAL_STATUSES, Channel,
-    KnowledgeAnswerMode, KnowledgeBatchItemStatus, KnowledgeBatchStatus, KnowledgeDomain,
+    KnowledgeAnswerMode, KnowledgeBatchItemStatus, KnowledgeBatchStatus,
+    KnowledgeChatModeValue, KnowledgeDomain,
     KnowledgeIngestStatus, KnowledgeMemoryKind, KnowledgeMemoryStatus, KnowledgeSensitivity,
     KnowledgeStatus, KnowledgeTrust, KnowledgeUserRole, KnowledgeUserStatus,
     EntityIdentityMatch, EntityResolutionReason, EntityResolutionStatus,
@@ -11,7 +12,8 @@ from .base import (
 )
 from .tables import (
     ActionTrust, Approval, Artifact, BudgetDaily, ChannelEvent, Decision,
-    KnowledgeAnswerRun, KnowledgeBatchItem, KnowledgeChannelIdentity, KnowledgeChunk,
+    KnowledgeAnswerRun, KnowledgeBatchItem, KnowledgeChannelIdentity, KnowledgeChatMode,
+    KnowledgeChunk,
     KnowledgeCustomDomain, KnowledgeEdge, KnowledgeEntityAlias,
     KnowledgeEntityIdentity, KnowledgeEntityIdentityMember,
     KnowledgeEntityResolutionCandidate,
@@ -55,6 +57,7 @@ __all__ = [
     "KnowledgeSensitivity", "KnowledgeSource",
     "KnowledgeStatus",
     "KnowledgeTrust", "KnowledgeUser", "KnowledgeUserRole", "KnowledgeUserStatus",
+    "KnowledgeChatMode", "KnowledgeChatModeValue",
     "KnowledgeUserUsage", "MetricPoint", "ModelRun", "OutboxMessage",
     "PanelEnrollmentToken", "PanelSession", "PanelStepUpChallenge", "Routine",
     "EntityIdentityMatch", "EntityResolutionReason", "EntityResolutionStatus",

@@ -31,7 +31,8 @@ from pgvector.sqlalchemy import Vector
 
 from .base import (
     ApprovalStatus, Base, EntityIdentityMatch, EntityResolutionReason,
-    EntityResolutionStatus, KnowledgeBatchItemStatus, KnowledgeBatchStatus, KnowledgeIngestStatus,
+    EntityResolutionStatus, KnowledgeBatchItemStatus, KnowledgeBatchStatus,
+    KnowledgeChatModeValue, KnowledgeIngestStatus,
     KnowledgeMemoryStatus, KnowledgeStatus, KnowledgeUserStatus, NODE_KINDS_WITHOUT_RUN,
     SemanticDatePrecision, SemanticEvidenceType, SemanticNodeKind, SemanticNodeStatus,
     SemanticRelationType, SemanticRunStatus, SemanticWindowStatus, TaskStatus,
@@ -629,6 +630,47 @@ class KnowledgeSemanticJob(Base):
         UniqueConstraint("knowledge_user_id", "source_id", "source_sha256",
                          "semantic_version", name="uq_knowledge_semantic_jobs_work"),
         Index("ix_knowledge_semantic_jobs_status", "status", "created_at"),
+    )
+
+
+class KnowledgeChatMode(Base):
+    """Из чего этому чату разрешено отвечать. Переживает перезапуск.
+
+    Заведена 07.09.2026 по разбору владельца. `paid_allowed` приходил из
+    плагина как `not in_memory_conversation`, где `in_memory_conversation`
+    читался из ВНУТРИПРОЦЕССНОГО словаря `_last_turn`. Перезапуск шлюза
+    очищал словарь — и разговор, который весь состоял из вопросов к
+    собственным записям, после рестарта снова получал право уйти в
+    платную модель. Потерянный контекст становился разрешением.
+
+    Строка в базе, а не в памяти процесса, ровно поэтому: свойство
+    «этот чат отвечает только из моей памяти» обязано быть таким же
+    долгоживущим, как сама память.
+
+    Отсутствие строки означает `MEMORY`, а не «неизвестно»: незнание не
+    может быть разрешением тратить деньги (устав §6, CLAUDE.md §5.2).
+    """
+
+    __tablename__ = "knowledge_chat_modes"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    knowledge_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_users.id"))
+    #: telegram | max — тот же словарь, что у KnowledgeIngestJob.channel.
+    channel: Mapped[str] = mapped_column(String(32), nullable=False)
+    chat_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    mode: Mapped[str] = mapped_column(String(16),
+                                      default=KnowledgeChatModeValue.MEMORY,
+                                      nullable=False)
+    created_at: Mapped[datetime] = ts_column(default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow,
+                                             nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(f"mode IN ({sql_enum_values(KnowledgeChatModeValue)})",
+                        name="mode"),
+        UniqueConstraint("knowledge_user_id", "channel", "chat_id",
+                         name="uq_knowledge_chat_modes_chat"),
     )
 
 

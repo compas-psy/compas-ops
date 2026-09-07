@@ -546,7 +546,8 @@ def _mark_memory_conversation(source) -> None:
 
 
 def _probe_local_answer(text: str, context: dict | None = None, *,
-                        paid_allowed: bool = False) -> dict | None:
+                        channel: str | None = None,
+                        chat_id: str | None = None) -> dict | None:
     """Free-first Knowledge Probe (ТЗ §14.11, v3.4), ДО обращения к LLM.
 
     Три исхода, и путать их нельзя (правка 06.09.2026):
@@ -567,7 +568,13 @@ def _probe_local_answer(text: str, context: dict | None = None, *,
     доходит вовсе. Значит сюда попадает только сбой САМОГО probe, и
     честный отказ здесь не отнимает у владельца обычную переписку.
     """
-    payload: dict = {"query": text, "paid_allowed": paid_allowed}
+    payload: dict = {"query": text}
+    if channel and chat_id:
+        # Право платить приходит от РЕЖИМА ЧАТА, который знает Control
+        # Plane, а не от плагина. Плагин называет чат — и всё; открыть
+        # себе оплату он не может.
+        payload["channel"] = channel
+        payload["chat_id"] = chat_id
     if context:
         payload["context"] = context
     body = json.dumps(payload).encode("utf-8")
@@ -777,18 +784,22 @@ def _on_pre_gateway_dispatch(event, gateway):
         _task_ids[str(source.chat_id)] = result["task_id"]
 
     chat_key = str(source.chat_id) if source and source.chat_id is not None else None
-    # ПОЛИТИКА ОПЛАТЫ ПРИХОДИТ ОТСЮДА, СВЕРХУ, а не выводится внутри
-    # probe() из формулировки вопроса (распоряжение владельца
-    # 07.09.2026, п.5). Разговор, в котором владелец уже обращался к
-    # памяти — сохранял «Запомни», присылал файл, получал ответ из своих
-    # записей, — остаётся разговором о памяти: следующий вопрос в нём
-    # платный переход не открывает. Это состояние чата, а не свойство
-    # текста; словарь слов-признаков догнать живую речь не может, и
-    # владелец запретил его расширять.
+    # ПРАВО ПЛАТИТЬ БОЛЬШЕ НЕ ВЫЧИСЛЯЕТСЯ ЗДЕСЬ. Раньше стояло
+    # `paid_allowed=not in_memory_conversation`, где `in_memory_
+    # conversation` читался из `_last_turn` — словаря в памяти ЭТОГО
+    # процесса. Перезапуск шлюза стирал словарь, и разговор, целиком
+    # состоявший из вопросов к собственным записям, снова получал право
+    # уйти в платную модель: потерянный контекст становился разрешением
+    # (разбор владельца 07.09.2026).
+    #
+    # Теперь право определяет РЕЖИМ ЧАТА в базе (`chat_mode.py`): он
+    # переживает перезапуск, умолчание закрыто, включается явной
+    # командой. Плагин только называет чат. `_last_turn` остаётся тем,
+    # чем и был по существу, — контекстом следующего вопроса
+    # («а что он рекомендовал?»), и политику больше не решает.
     turn = _last_turn.get(chat_key) if chat_key else None
-    in_memory_conversation = bool(turn and turn.get("memory"))
     probe_result = _probe_local_answer(
-        event.text, turn, paid_allowed=not in_memory_conversation)
+        event.text, turn, channel=channel, chat_id=chat_key)
     outcome = (probe_result or {}).get("outcome")
     if chat_key and outcome and outcome != "LOCAL_UNAVAILABLE":
         # Ход запоминается ЛЮБОЙ, кроме собственного сбоя: продолжением

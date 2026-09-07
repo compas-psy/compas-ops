@@ -29,6 +29,9 @@ from ..knowledge.chat_intake import (
     resolve_outcome_text, resolve_pending_domain, stage_attachment, stage_outcome_text,
 )
 from ..knowledge.admin import try_admin_command
+from ..knowledge.chat_mode import (
+    MODE_SET_TEXT, detect_mode_command, paid_allowed_for, set_mode,
+)
 from ..knowledge.memory import try_remember
 from ..knowledge.onboarding import create_invite, reactivate_user, suspend_user
 from ..knowledge.probe import probe, query_hash
@@ -88,13 +91,19 @@ class KnowledgeProbeIn(BaseModel):
     query: str = Field(min_length=1)
     domain: str | None = None
     context: DialogueContextIn | None = None
-    #: Право на платный переход приходит ОТ ВЫЗЫВАЮЩЕГО, который один и
-    #: знает режим задачи (распоряжение владельца 07.09.2026, п.5).
-    #: Умолчание закрыто: вызывающий, который про политику не знает, не
-    #: может её и разрешить. Раньше право выводилось из формулировки
-    #: вопроса внутри probe() — и вопрос «что я беру с собой из
-    #: лекарств?» получал разрешение оплатить ответ о собственных
-    #: записях владельца (прогон 422).
+    #: Кто спрашивает. Названный чат имеет РЕЖИМ (`chat_mode.py`), и
+    #: режим решает, разрешён ли платный переход, — вместо `paid_allowed`
+    #: от вызывающего. Разбор владельца 07.09.2026: плагин вычислял право
+    #: платить из внутрипроцессного словаря последних ходов, и перезапуск
+    #: шлюза снова открывал оплату в разговоре о собственных записях.
+    #: Потерянный контекст не может быть разрешением, поэтому состояние
+    #: переехало в базу, а решение — на эту сторону.
+    channel: str | None = None
+    chat_id: str | None = None
+    #: Только для вызывающих БЕЗ чата — платных инженерных задач, у
+    #: которых режим задаёт их собственный маршрут. Когда чат назван,
+    #: это поле игнорируется: пользовательский вход не может открыть себе
+    #: оплату мимо режима.
     paid_allowed: bool = False
 
 
@@ -122,8 +131,23 @@ def knowledge_probe(body: KnowledgeProbeIn,
                                   source_ids=source_ids,
                                   filenames=tuple(body.context.filenames),
                                   memory=body.context.memory)
+    named_chat = bool(body.channel and body.chat_id)
+    if named_chat:
+        # Явное переключение режима — команда, а не вопрос. Обрабатывается
+        # здесь, а не в каждом входе: иначе Telegram и MAX разъедутся, а
+        # владелец получит команду, работающую в одном канале из двух.
+        requested = detect_mode_command(body.query)
+        if requested is not None:
+            set_mode(session, channel=body.channel, chat_id=body.chat_id, mode=requested)
+            session.commit()
+            return {"outcome": "LOCAL_ANSWER", "mode": None,
+                    "answer_text": MODE_SET_TEXT[requested],
+                    "sources": [], "answer_run_id": None}
+
+    paid_allowed = (paid_allowed_for(session, channel=body.channel, chat_id=body.chat_id)
+                    if named_chat else body.paid_allowed)
     result = probe(session, query=body.query, domain=body.domain, context=context,
-                   paid_allowed=body.paid_allowed)
+                   paid_allowed=paid_allowed)
     session.commit()
     # `sources` и `answer_run_id` добавлены 06.09.2026. До этого наружу
     # уходили только три поля, и вызывающий физически не мог ни показать

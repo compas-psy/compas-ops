@@ -48,6 +48,9 @@ from ..knowledge.chat_intake import (
 )
 from ..knowledge.admin import detect_admin_command, try_admin_command
 from ..knowledge.memory import detect_remember_command, try_remember
+from ..knowledge.chat_mode import (
+    MODE_SET_TEXT, detect_mode_command, paid_allowed_for, set_mode,
+)
 from ..knowledge.probe import probe, query_hash
 from ..knowledge.tenancy import bind_knowledge_user
 from ..models import (
@@ -198,6 +201,21 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
     # для условия входа ниже (Remember — не про attachment/pending
     # state), сам try_remember() определит команду заново внутри себя.
     remember_payload = detect_remember_command(inbound.text) if inbound.text else None
+
+    # Переключение режима оплаты — команда, а не задача и не вопрос.
+    # ВЫШЕ ветки вложений/pending-диалогов, а не внутри неё: команда
+    # приходит обычным текстом без всякого предшествующего состояния, и
+    # внутри той ветки её бы просто никто не увидел. Task под неё не
+    # заводится: это настройка чата, а не работа.
+    requested_mode = detect_mode_command(inbound.text) if inbound.text else None
+    if requested_mode is not None:
+        set_mode(session, channel="max", chat_id=str(inbound.chat_id),
+                 mode=requested_mode)
+        enqueue(session, channel="max", recipient=inbound.chat_id,
+                reference=f"chat-mode:{inbound.message_id}",
+                payload_reference={"text": MODE_SET_TEXT[requested_mode]})
+        session.commit()
+        return {"status": "chat_mode"}
 
     if inbound.attachments or has_pending or has_pending_batch or remember_payload is not None:
         if record_channel_event_once(session, channel="max",
@@ -351,13 +369,15 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
     # ту же память, и закрывать надо оба, иначе политика есть только на
     # словах.
     #
-    # `paid_allowed=True` здесь пока безусловный: у этого входа нет
-    # состояния разговора, по которому Telegram-плагин отличает
-    # обращение к памяти. Дыра не в оплате пустого поиска — probe
-    # закрывает платный переход сам, как только корпус что-то нашёл, —
-    # а в вопросе к памяти, на который не нашлось НИЧЕГО. Названо
-    # прямо, чинится вместе с состоянием разговора MAX.
-    probe_result = probe(session, query=result.text, paid_allowed=True)
+    # 07.09.2026 безусловный `paid_allowed=True` отсюда убран. Он стоял
+    # потому, что у этого входа не было состояния разговора; состояние
+    # теперь есть и лежит в базе (`chat_mode.py`), одно на оба входа.
+    # Умолчание закрыто: нет явно включённого платного режима — платного
+    # перехода нет.
+    probe_result = probe(
+        session, query=result.text,
+        paid_allowed=paid_allowed_for(session, channel="max",
+                                      chat_id=str(inbound.chat_id)))
     if probe_result.outcome == "LOCAL_ANSWER":
         enqueue(session, channel="max", recipient=inbound.chat_id,
                 reference=f"knowledge-probe:{task_id}",

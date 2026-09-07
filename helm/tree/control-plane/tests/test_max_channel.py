@@ -129,6 +129,26 @@ def _update(text: str = "собери отчёт", *, mid: str = "mid.1",
     }
 
 
+def _allow_paid(app, client) -> None:
+    """Включить платный режим этого чата явной командой.
+
+    Нужен тестам, которые проверяют НЕ политику оплаты, а машинерию
+    вокруг неё — регистрацию задачи, дедуп доставки, поведение при
+    лежащем Hermes. С 07.09.2026 умолчание чата закрыто (`chat_mode.py`,
+    разбор владельца: «Отсутствие контекста не является разрешением»), и
+    без явного включения chief не вызывается вовсе.
+    """
+    reply = post_hook(client, _update(text="можно платно", mid="mid.mode"))
+    assert reply.json().get("status") == "chat_mode", reply.text
+    # Подтверждение режима — обычное исходящее сообщение. Тесты вокруг
+    # проверяют СВОЁ единственное сообщение в outbox, поэтому служебное
+    # убирается здесь же, а не размазывается условиями по всем ним.
+    with app.state.session_factory() as session:
+        for message in session.scalars(select(OutboxMessage)).all():
+            session.delete(message)
+        session.commit()
+
+
 def test_parse_message_created_coerces_ids_to_str():
     parsed = parse_message_created(_update())
     assert parsed == InboundMax(text="собери отчёт", sender_id=MAX_OWNER_ID,
@@ -357,6 +377,7 @@ def test_webhook_rejects_missing_secret_header(app, client):
 
 
 def test_webhook_registers_task_and_calls_chief(app, client):
+    _allow_paid(app, client)
     response = post_hook(client, _update())
 
     assert response.status_code == 202, response.text
@@ -393,6 +414,7 @@ def test_webhook_fails_closed_without_configured_max_owner(app, client):
 
 
 def test_webhook_registers_task_under_canonical_owner_identity(app, client):
+    _allow_paid(app, client)
     """§10.4 работает только если задача из MAX заведена под тем же owner_id.
 
     Иначе normalized_hash одного и того же вопроса из Telegram и MAX
@@ -435,6 +457,7 @@ def test_webhook_collapses_cross_channel_duplicate_silently(app, client):
 
 
 def test_webhook_does_not_call_chief_twice_on_redelivery(app, client):
+    _allow_paid(app, client)
     assert post_hook(client, _update()).status_code == 202
     second = post_hook(client, _update())
 
@@ -724,8 +747,31 @@ def test_webhook_answers_locally_without_calling_chief_when_probe_finds_answer(a
         assert "Postgres" in message.payload_reference["text"]
 
 
-def test_webhook_calls_chief_when_probe_finds_nothing(app, client):
-    """Пустой корпус — NEEDS_REASONING, обычный путь через Hermes не меняется."""
+def test_webhook_does_not_call_chief_until_paid_is_allowed_explicitly(app, client):
+    """Пустой корпус сам по себе не даёт права оплатить ответ.
+
+    ИЗМЕНЕНО 07.09.2026 по разбору владельца. Раньше здесь стояло
+    обратное утверждение: пустой поиск на входе MAX уходил к платной
+    модели, потому что `paid_allowed=True` был безусловным — «у этого
+    входа нет состояния разговора». Состояние появилось
+    (`chat_mode.py`), и умолчание закрыто: «Отсутствие контекста не
+    является разрешением».
+    """
+    response = post_hook(client, _update(text="собери отчёт"))
+
+    assert response.status_code == 200
+    assert app.state.hermes_bridge.calls == [], (
+        "платный переход открылся сам, без явно разрешённого режима")
+
+
+def test_webhook_calls_chief_once_paid_mode_is_turned_on(app, client):
+    """Явно разрешённый режим возвращает обычный путь через Hermes.
+
+    Вторая половина той же политики: запрет по умолчанию не должен
+    означать, что платные задачи стали невозможны.
+    """
+    _allow_paid(app, client)
+
     response = post_hook(client, _update(text="собери отчёт"))
 
     assert response.status_code == 202
@@ -746,6 +792,7 @@ def test_webhook_queues_transport_notice_when_chief_is_down(app, client, caplog)
     успех/недоступность видно только по результату в outbox, не в ответе
     на сам вебхук.
     """
+    _allow_paid(app, client)
     app.state.hermes_bridge = FakeBridge(available=False)
 
     with caplog.at_level("WARNING"):
