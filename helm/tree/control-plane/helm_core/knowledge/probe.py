@@ -146,8 +146,18 @@ CHUNK_RANK_NORMALIZATION = 0
 #: как Z0/Z1-цитата независимо от ранга.
 MIN_LEXICAL_CHUNK_CHARS = 20
 
-#: Верхних чанков берём — и для Z1-перечисления, и (в будущем) для
-#: evidence pack, уходящего в Hermes при NEEDS_REASONING.
+#: СКОЛЬКО ФРАГМЕНТОВ ВИДИТ МОДЕЛЬ — бюджет её контекста, и только он.
+#:
+#: Это НЕ мера того, сколько знаний у системы есть (распоряжение
+#: владельца 07.09.2026, п.2: «MAX_EVIDENCE=5 не может определять
+#: полноту знаний, доступных исполнителю»). Пять — предел, при котором
+#: gemma2:2b на CPU ещё отвечает за отведённые 45 секунд, то есть
+#: свойство железа и модели, а не корпуса.
+#:
+#: Полный набор найденного живёт рядом (`ProbeResult.candidates`) и
+#: нужен операциям, которым пятёрки мало по существу: «сколько»
+#: считает по всему подходящему набору, «все» обязано его обойти
+#: целиком либо честно сказать, что показало не всё.
 MAX_EVIDENCE = 5
 
 #: Сколько кандидатов ЗАПРАШИВАЕТСЯ у поиска до отбора. Больше, чем
@@ -195,6 +205,12 @@ class ProbeResult:
     mode: str | None = None
     answer_text: str | None = None
     evidence: list[Evidence] = field(default_factory=list)
+    #: ВЕСЬ найденный и пригодный набор, а не только показанное модели.
+    #: Разделено 07.09.2026 по п.2 распоряжения: бюджет контекста и
+    #: полнота знаний — разные величины, и складывать их в одну значило
+    #: бы объявлять «система знает пять фрагментов». Операции подсчёта и
+    #: перечисления (п.3) считают по нему.
+    candidates: list["Evidence"] = field(default_factory=list)
     #: Заполнено вместо `evidence`, когда ответ пришёл из Micro-Memory —
     #: память и документные чанки не смешиваются в одном ответе.
     memory: list[MemoryHit] = field(default_factory=list)
@@ -329,18 +345,23 @@ def _vector_search(session: Session, *, query_embedding: list[float], domain: st
         .where(KnowledgeChunk.embedding.isnot(None))
         .where(KnowledgeSource.status != KnowledgeStatus.ARCHIVED)
         .where(KnowledgeSource.knowledge_user_id == knowledge_user_id)
+        # ОТСЕВ ДО LIMIT, А НЕ ПОСЛЕ. Порог близости и уже найденное
+        # лексикой раньше проверялись в Python, то есть по строкам,
+        # которые SQL уже отобрал и обрезал. Пять мест уходили на
+        # кандидатов, часть которых тут же выбрасывалась, и место
+        # оставалось пустым — дозаполнить его было уже нечем.
+        .where(similarity >= MIN_COSINE_SIMILARITY)
+        .where(KnowledgeChunk.id.notin_([uuid.UUID(cid) for cid in exclude_chunk_ids]))
         .order_by(similarity.desc())
-        .limit(MAX_EVIDENCE)
+        .limit(CANDIDATE_LIMIT)
     )
     stmt = _exclude_forgotten(_apply_source_filter(_apply_domain_filter(stmt, domain),
                                                    KnowledgeChunk, source_ids))
 
-    rows = session.execute(stmt).all()
     return [
         Evidence(chunk_id=str(chunk.id), source_id=str(src.id), chunk_text=chunk.text,
                 original_filename=src.original_filename, rank=float(sim))
-        for chunk, src, sim in rows
-        if str(chunk.id) not in exclude_chunk_ids and float(sim) >= MIN_COSINE_SIMILARITY
+        for chunk, src, sim in session.execute(stmt).all()
     ]
 
 
@@ -386,16 +407,18 @@ def _health_vector_search(*, query_embedding: list[float], knowledge_user_id: uu
                       HealthKnowledgeChunk.source_id == HealthKnowledgeSourcePrivate.source_id)
             .where(HealthKnowledgeChunk.embedding.isnot(None))
             .where(HealthKnowledgeChunk.knowledge_user_id == knowledge_user_id)
+            # Тот же отсев до LIMIT, что в `_vector_search()`.
+            .where(similarity >= MIN_COSINE_SIMILARITY)
+            .where(HealthKnowledgeChunk.id.notin_(
+                [uuid.UUID(cid) for cid in exclude_chunk_ids]))
             .order_by(similarity.desc())
-            .limit(MAX_EVIDENCE)
+            .limit(CANDIDATE_LIMIT)
         )
         stmt = _apply_source_filter(stmt, HealthKnowledgeChunk, source_ids)
-        rows = session.execute(stmt).all()
         return [
             Evidence(chunk_id=str(chunk.id), source_id=str(chunk.source_id), chunk_text=chunk.text,
                     original_filename=filename, rank=float(sim))
-            for chunk, filename, sim in rows
-            if str(chunk.id) not in exclude_chunk_ids and float(sim) >= MIN_COSINE_SIMILARITY
+            for chunk, filename, sim in session.execute(stmt).all()
         ]
 
 
@@ -641,6 +664,23 @@ def probe(session: Session, *, query: str, domain: str | None = None,
             include_historical=is_historical_query(query))
         if hit.rank >= MIN_RANK_SCORE
     ]
+    # РАННИЙ ВОЗВРАТ ЗАМЕТКИ ПОКА ОСТАЁТСЯ, И ЭТО НЕ НЕДОСМОТР.
+    #
+    # Распоряжение владельца 07.09.2026, п.2 требует его убрать: находка
+    # в памяти должна участвовать в общем ответе «с учётом запрошенной
+    # детализации». Первая половина требования выполнима сегодня —
+    # добавить заметку в общий набор кандидатов, — вторая нет: чтобы
+    # отдать из списка ОДИН пункт, ЧИСЛО пунктов или весь список,
+    # исполнителю нужны операции (п.3), которых ещё нет.
+    #
+    # Половина этого требования, взятая отдельно, ломает уже принятое
+    # владельцем поведение: дословную выдачу сохранённого значения
+    # («Ссылка на ваш канал B17: …»). Без операций ответ по заметке
+    # начинает собирать модель, и байтовая точность перестаёт быть
+    # гарантией — проверено, шесть тестов памяти краснеют ровно на этом.
+    #
+    # Поэтому снятие раннего возврата идёт вместе с операциями, а не
+    # раньше их. Названо здесь, чтобы не выглядело забытым.
     if memory_hits:
         answer_text, mode = compose_memory_answer(memory_hits)
         run_id = uuid.uuid4()
@@ -781,7 +821,9 @@ def probe(session: Session, *, query: str, domain: str | None = None,
         vector_hits = [e for e in vector_hits if is_quotable(e.chunk_text)]
         vector_hits.sort(key=lambda item: item.rank, reverse=True)
 
-    evidence = _merge_branches(quotable, vector_hits)[:MAX_EVIDENCE]
+    # Полный набор — и отдельно от него пятёрка, которая уйдёт в модель.
+    candidates = _merge_branches(quotable, vector_hits)
+    evidence = candidates[:MAX_EVIDENCE]
 
     # ДАТЫ КАНДИДАТОВ. Одним запросом на всех, а не по одному на чанк:
     # дата нужна и чтобы ответить «в последний раз», и чтобы подписать
@@ -872,7 +914,7 @@ def probe(session: Session, *, query: str, domain: str | None = None,
         return ProbeResult(
             outcome="LOCAL_NOT_FOUND", mode=KnowledgeAnswerMode.N0,
             answer_text=format_nothing_answered([_source_label(e) for e in evidence]),
-            answer_run_id=str(run_id),
+            answer_run_id=str(run_id), candidates=candidates,
             sources=[{"kind": "chunk", "source_id": item.source_id,
                       "chunk_id": item.chunk_id,
                       "original_filename": item.original_filename}
@@ -913,7 +955,7 @@ def probe(session: Session, *, query: str, domain: str | None = None,
         paid_ai_used=False, evidence_count=len(evidence),
     ))
     return ProbeResult(outcome="LOCAL_ANSWER", mode=mode, answer_text=answer_text,
-                       evidence=evidence, answer_run_id=str(run_id),
+                       evidence=evidence, candidates=candidates, answer_run_id=str(run_id),
                        sources=[{"kind": "chunk", "source_id": item.source_id,
                                  "chunk_id": item.chunk_id,
                                  "original_filename": item.original_filename}

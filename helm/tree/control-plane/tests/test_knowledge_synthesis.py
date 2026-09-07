@@ -179,3 +179,37 @@ def test_a_rejected_answer_is_not_the_same_as_no_model():
     assert rejected is not None, "не None — иначе probe уйдёт в откат на цитату"
     assert not rejected.answered
     assert rejected.text == ""
+
+
+# ── Окно фрагмента вокруг вопроса (распоряжение 07.09.2026, п.2) ────────
+
+def test_the_window_follows_the_question_not_the_first_characters():
+    """Механическая обрезка отбрасывала ровно то, что искали: в
+    лабораторном бланке первые сотни символов — шапка учреждения и номер
+    заказа, а значение с единицей стоит ниже."""
+    from helm_core.knowledge.synthesis import relevant_window
+
+    blank = ("АО «Медси»\nНомер заказа 1011794275\n"
+             + "строка шапки бланка\n" * 40
+             + "Холестерин общий 8.4 ммоль/л\n")
+
+    window = relevant_window("какой у меня холестерин", blank, width=200)
+
+    assert "Холестерин общий 8.4 ммоль/л" in window
+    assert "Номер заказа" not in window
+
+
+def test_a_short_fragment_is_not_touched():
+    from helm_core.knowledge.synthesis import relevant_window
+
+    assert relevant_window("что угодно", " Холестерин 6.2 ") == "Холестерин 6.2"
+
+
+def test_a_fragment_without_question_words_keeps_its_beginning():
+    """Ни одно слово вопроса не встретилось — обрезка остаётся прежней,
+    выдумывать «релевантное» место не из чего."""
+    from helm_core.knowledge.synthesis import relevant_window
+
+    text = "первая строка\n" + "прочее содержание\n" * 40
+
+    assert relevant_window("совсем другая тема", text, width=50).startswith("первая строка")

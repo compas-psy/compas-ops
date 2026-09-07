@@ -771,3 +771,24 @@ def test_an_undated_note_does_not_lose_a_rank_tie(session):
     order = sorted([pdf, note], key=_tiebreak_freshness, reverse=True)
 
     assert order[0] is note, "недатированная запись не может считаться самой старой"
+
+
+def test_the_executor_sees_more_than_the_model_does(session, monkeypatch):
+    """Распоряжение владельца 07.09.2026, п.2: «MAX_EVIDENCE=5 не может
+    определять полноту знаний, доступных исполнителю». Бюджет контекста
+    модели и найденный набор — разные величины: операциям «сколько» и
+    «все» пятёрки мало по существу."""
+    from helm_core.knowledge.probe import MAX_EVIDENCE
+
+    _health_and_vector_off(monkeypatch)
+    for i in range(MAX_EVIDENCE + 3):
+        ingest_text(session, domain="engineering",
+                    text=f"Пункт {i}: в дорожную аптечку кладём средство номер {i}.")
+    session.flush()
+    monkeypatch.setattr(probe_module, "synthesize_or_none", lambda q, f, **_: None)
+
+    result = probe(session, query="что кладём в дорожную аптечку")
+
+    assert len(result.evidence) <= MAX_EVIDENCE, "модель видит свой бюджет"
+    assert len(result.candidates) > MAX_EVIDENCE, (
+        "исполнителю доступно только показанное модели — «сколько» и «все» неисполнимы")

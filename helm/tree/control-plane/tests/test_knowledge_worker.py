@@ -503,3 +503,52 @@ def test_process_voice_pending_without_recipient_does_not_notify(session, tmp_pa
     session.flush()
 
     assert session.scalars(select(OutboxMessage)).all() == []
+
+
+def test_a_spoken_question_is_answered_not_offered_for_saving(
+    session, tmp_path, monkeypatch
+):
+    """Владелец 07.09.2026: восьмой вопрос теста он задал голосом, и бот
+    предложил сохранить то, что он спросил. У голоса была одна ветка —
+    «сохранить документом», — тогда как у набранного текста ступеней три:
+    «Запомни» → команда → вопрос к памяти."""
+    from helm_core.knowledge.ingest import ingest_text
+
+    ingest_text(session, domain="personal",
+                text="Сначала я меняю деньги, потом покупаю симку, потом еду в отель.")
+    _make_voice_pending(session, tmp_path, recipient="777")
+    session.commit()
+    pending = claim_next_voice_pending(session)
+    pending_id, spool_path = pending.id, Path(pending.spool_path)
+
+    monkeypatch.setattr(worker_module, "transcribe_audio",
+                        lambda path: "[0s] в каком порядке я меняю деньги и покупаю симку")
+
+    process_voice_pending(session, pending)
+    session.flush()
+
+    message = session.scalars(select(OutboxMessage)).one()
+    text = message.payload_reference["text"]
+    assert "домен" not in text.lower(), f"снова предложил сохранить вопрос: {text!r}"
+    assert "симку" in text
+    assert session.get(KnowledgePendingAttachment, pending_id) is None
+    assert not spool_path.exists()
+
+
+def test_a_spoken_note_without_an_answer_is_still_offered_for_saving(
+    session, tmp_path, monkeypatch
+):
+    """Обратная сторона того же правила: на что ответа не нашлось —
+    предлагается сохранить, как и раньше."""
+    _make_voice_pending(session, tmp_path, recipient="777")
+    session.commit()
+    pending = claim_next_voice_pending(session)
+
+    monkeypatch.setattr(worker_module, "transcribe_audio",
+                        lambda path: "[0s] завтра надо купить бумагу для принтера")
+
+    process_voice_pending(session, pending)
+    session.flush()
+
+    text = session.scalars(select(OutboxMessage)).one().payload_reference["text"]
+    assert "1. personal" in text

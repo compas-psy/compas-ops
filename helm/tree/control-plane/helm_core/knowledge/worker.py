@@ -40,6 +40,7 @@ from .health_schema import (
     health_schema_configured, is_health_domain, read_original_filename, record_parse_error,
 )
 from .memory import try_remember
+from .probe import probe
 from .parsers import parse_file
 from .relations import note_id_for, store_relations
 from .temporal import content_date
@@ -216,9 +217,37 @@ def process_voice_pending(session: Session, pending: KnowledgePendingAttachment)
                 reference = f"voice-remember-{outcome.status}:{pending_id}"
                 session.delete(pending)
             else:
-                pending.transcript = transcript
-                notice = voice_ready_menu_text(session, pending)
-                reference = f"voice-transcribed:{pending_id}"
+                # ГОЛОСОВОЕ ИДЁТ ТЕМ ЖЕ ПУТЁМ, ЧТО И НАБРАННОЕ.
+                #
+                # Владелец 07.09.2026: восьмой вопрос теста он сначала
+                # задал голосом — «бот предложил сохранить то, что я
+                # спросил, а не распознал сам вопрос». Так и было: после
+                # расшифровки существовала ровно одна ветка, «сохранить
+                # документом», и вопрос в ней не рассматривался вообще.
+                # Текстовое сообщение при этом уже проходило проверку
+                # «Запомни» → команда → вопрос к памяти; у голоса была
+                # только первая ступень.
+                #
+                # Теперь ступени те же: не команда — значит вопрос, и
+                # ответ ищется до того, как предлагать сохранение.
+                # Сохранить остаётся тем, на что ответа не нашлось.
+                #
+                # Платный переход закрыт по построению: голосовое — это
+                # обращение к памяти, `paid_allowed` остаётся ложью (см.
+                # probe(), распоряжение п.5).
+                answer = probe(session, query=stripped, knowledge_user_id=tenant_id)
+                if answer.outcome in ("LOCAL_ANSWER", "NEEDS_CLARIFICATION"):
+                    # Вопрос не сохраняется — ни голосом, ни текстом:
+                    # висящий pending перехватил бы следующее сообщение
+                    # как выбор домена (живой сбой того же дня).
+                    spool_path.unlink(missing_ok=True)
+                    session.delete(pending)
+                    notice = answer.answer_text
+                    reference = f"voice-answered:{pending_id}"
+                else:
+                    pending.transcript = transcript
+                    notice = voice_ready_menu_text(session, pending)
+                    reference = f"voice-transcribed:{pending_id}"
         except Exception as exc:
             # ОТКАТ, а не «оставить как есть»: `try_remember()` успевает
             # добавить строку памяти и увеличить счётчик записей до

@@ -262,9 +262,56 @@ class Synthesis:
 _REJECTED = Synthesis(answered=False)
 
 
+def relevant_window(question: str, fragment: str,
+                    width: int = MAX_FRAGMENT_CHARS) -> str:
+    """Окно фрагмента ВОКРУГ слов вопроса, а не первые N символов.
+
+    Распоряжение владельца 07.09.2026, п.2: «Не обрезай каждый фрагмент
+    механически первыми 900 символами». Механическая обрезка отбрасывала
+    ровно то, что искали: в лабораторном бланке первые сотни символов —
+    шапка учреждения и номер заказа, а значение с единицей стоит ниже.
+
+    Окно двигается по границам строк, а не по символам: строка таблицы
+    не разрывается посередине. Если фрагмент и так короче ширины —
+    возвращается целиком, и это самый частый случай.
+    """
+    text = fragment.strip()
+    if len(text) <= width:
+        return text
+    wanted = {word[:_STEM_LEN] for word in _ANY_WORD_RE.findall(question.lower())
+              if len(word) >= 4}
+    if not wanted:
+        return text[:width]
+
+    lines = text.splitlines(keepends=True)
+    scores = [sum(1 for w in _ANY_WORD_RE.findall(line.lower()) if w[:_STEM_LEN] in wanted)
+              for line in lines]
+    if not any(scores):
+        return text[:width]
+
+    # Лучшее окно подряд идущих строк, укладывающееся в ширину.
+    best_start, best_score, start = 0, -1, 0
+    size = 0
+    score = 0
+    for end, line in enumerate(lines):
+        size += len(line)
+        score += scores[end]
+        while size > width and start < end:
+            size -= len(lines[start])
+            score -= scores[start]
+            start += 1
+        if score > best_score:
+            best_start, best_score = start, score
+            best_end = end
+    window = "".join(lines[best_start:best_end + 1])[:width]
+    prefix = "…" if best_start else ""
+    suffix = "…" if best_end < len(lines) - 1 else ""
+    return f"{prefix}{window.strip()}{suffix}"
+
+
 def build_prompt(question: str, fragments: list[str]) -> str:
     numbered = "\n\n".join(
-        f"[{i}] {text.strip()[:MAX_FRAGMENT_CHARS]}"
+        f"[{i}] {relevant_window(question, text)}"
         for i, text in enumerate(fragments, start=1)
     )
     return (
@@ -374,5 +421,8 @@ def synthesize_or_none(question: str, fragments: list[str],
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         logger.warning("локальный синтез недоступен, откат на composer: %s", exc)
         return None
-    trimmed = None if sources is None else [t.strip()[:MAX_FRAGMENT_CHARS] for t in sources]
+    # Заземление сверяется по ТОМУ ЖЕ окну, которое видела модель:
+    # доказательством не может быть текст за его пределами.
+    trimmed = (None if sources is None
+               else [relevant_window(question, t) for t in sources])
     return parse_response(result.get("response") or "", fragments=fragments, sources=trimmed)
