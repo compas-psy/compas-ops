@@ -47,6 +47,10 @@ def second_user(session):
     ("Запомни чтобы позвонить маме", "позвонить маме"),
     # …но «что-то» — уже сам факт, а не служебное слово.
     ("Запомни что-то важное", "что-то важное"),
+    # Разгонная фраза перед командой — так человек и диктует вслух.
+    ("Это тестовое сообщение. Запомни, что меня зовут Илья Мартынов",
+     "меня зовут Илья Мартынов"),
+    ("Ну ладно. Не забудь: завтра приём у кардиолога", "завтра приём у кардиолога"),
 ])
 def test_detect_remember_command_strips_known_prefixes(text, expected):
     assert detect_remember_command(text) == expected
@@ -56,6 +60,10 @@ def test_detect_remember_command_strips_known_prefixes(text, expected):
     "какое решение приняли по проекту",
     "собери отчёт",
     "",
+    # Триггер ВНУТРИ предложения — не команда: вопрос должен остаться
+    # вопросом, а не превратиться в запись.
+    "А ты запомни, что я говорил?",
+    "Я хотел, чтобы ты запомнил мою фамилию",
 ])
 def test_detect_remember_command_returns_none_for_non_commands(text):
     assert detect_remember_command(text) is None
