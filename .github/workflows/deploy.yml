@@ -285,10 +285,11 @@ jobs:
           cp compose/docker-compose.yml "$stage/docker-compose.yml"
           cp config/Caddyfile "$stage/Caddyfile"
           cp scripts/backup.sh scripts/restore_test.sh "$stage/"
+          cp guardian/cleanup.sh "$stage/cleanup.sh"
           cp hermes/plugins/helm-control/__init__.py "$stage/helm-control-init.py"
           tar -czf - -C "$stage" \
               helm_core migrations panel-dist docker-compose.yml Caddyfile \
-              backup.sh restore_test.sh helm-control-init.py \
+              backup.sh restore_test.sh cleanup.sh helm-control-init.py \
             | ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" 'tar -xzf - -C /tmp'
           rm -rf "$stage"
 
@@ -304,11 +305,18 @@ jobs:
             sudo mv /tmp/Caddyfile /opt/helm/config/Caddyfile
             sudo mv /tmp/backup.sh /opt/helm/scripts/backup.sh
             sudo mv /tmp/restore_test.sh /opt/helm/scripts/restore_test.sh
+            # Уборку §25.6 запускает systemd от root по расписанию
+            # (helm-cleanup.timer). До 07.09.2026 cleanup.sh выкатом не
+            # доставлялся вовсе: на сервере лежала копия от 29.08, и
+            # исправления в репозитории до неё не доходили.
+            sudo mv /tmp/cleanup.sh /opt/helm/guardian/cleanup.sh
             sudo chown -R root:root /opt/helm/control-plane/helm_core /opt/helm/control-plane/migrations \
               /opt/helm/compose/docker-compose.yml /opt/helm/config/Caddyfile \
-              /opt/helm/scripts/backup.sh /opt/helm/scripts/restore_test.sh
+              /opt/helm/scripts/backup.sh /opt/helm/scripts/restore_test.sh \
+              /opt/helm/guardian/cleanup.sh
             sudo chmod -R go-w /opt/helm/control-plane/helm_core /opt/helm/control-plane/migrations
-            sudo chmod 755 /opt/helm/scripts/backup.sh /opt/helm/scripts/restore_test.sh
+            sudo chmod 755 /opt/helm/scripts/backup.sh /opt/helm/scripts/restore_test.sh \
+              /opt/helm/guardian/cleanup.sh
 
             # Содержимое каталога панели заменяется, сам каталог остаётся:
             # Caddy держит его примонтированным, и пересоздание каталога

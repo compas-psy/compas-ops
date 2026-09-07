@@ -1,0 +1,22 @@
+[Unit]
+Description=HELM · служба заботы: автоочистка по ТЗ §25.6
+Documentation=file:///opt/helm/docs/OPERATIONS.md
+# Уборке нужен живой docker — в отличие от Guardian, который намеренно
+# работает и тогда, когда docker мёртв (§30.10). Это одна из причин,
+# почему уборка — отдельный юнит, а не ещё одна проверка внутри
+# guardian.py: у Guardian ProtectSystem=strict, и сокет docker ему
+# недоступен на запись; Guardian ходит раз в пять минут, а уборке этого
+# не нужно; и watchdog, который сам меняет состояние, перестаёт быть
+# наблюдателем.
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/helm/guardian/cleanup.sh --apply
+User=root
+Group=root
+TimeoutStartSec=900
+
+StandardOutput=journal
+StandardError=journal

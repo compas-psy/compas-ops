@@ -155,3 +155,52 @@ def test_cleanup_defaults_to_dry_run():
     out = subprocess.run(["bash", str(CLEANUP)], capture_output=True, text=True, timeout=60)
     assert out.returncode == 0
     assert "DRY-RUN" in out.stdout or "docker не установлен" in out.stdout
+
+
+def test_cleanup_reports_failure_and_does_not_stop_on_it(tmp_path):
+    """Провал шага обязан быть виден и не обрывать уборку целиком.
+
+    ИЗМЕРЕНО (прогон 452): на сервере docker 29.7.2, где флага
+    `--keep-storage` уже нет. При `set -euo pipefail` без обёртки первая
+    же такая ошибка убивала скрипт на втором шаге из пяти — остальные не
+    выполнялись, кода возврата никто не смотрел, и уборка молча не
+    работала. Молчаливый полупровал хуже отсутствия уборки: диск дорос
+    до 84% и никто не узнал.
+    """
+    import os
+    import subprocess
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text("#!/bin/sh\necho 'unknown flag' >&2\nexit 1\n", encoding="utf-8")
+    fake_docker.chmod(0o755)
+
+    env = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}")
+    out = subprocess.run(["bash", str(CLEANUP), "--apply"],
+                         capture_output=True, text=True, timeout=60, env=env)
+
+    assert out.returncode != 0, "провал шага обязан давать ненулевой код возврата"
+    assert "ОШИБКА" in out.stdout, "провал шага обязан быть виден в журнале"
+    assert out.stdout.count("ОШИБКА:") == 4, \
+        "все четыре шага docker обязаны быть испробованы, а не только первый"
+    assert "готово" in out.stdout, "скрипт обязан дойти до конца, а не оборваться"
+
+
+# ── §25.6: юниты уборки и их копия в установочном скрипте ───────────────────
+
+INSTALL = CLEANUP.parents[1] / "scripts" / "care-service-install.sh"
+
+
+@pytest.mark.parametrize("unit", ["helm-cleanup.service", "helm-cleanup.timer"])
+def test_install_script_carries_the_unit_verbatim(unit):
+    """Установочный скрипт обязан нести юнит дословно.
+
+    Установщик доставляет юниты heredoc'ом — иначе их нечем положить на
+    сервер. Значит копий две, и расхождение между ними — ровно тот
+    дефект, из-за которого cleanup.sh пролежал на сервере десять дней
+    без таймера: в репозитории одно, на сервере другое.
+    """
+    expected = (CLEANUP.parent / unit).read_text(encoding="utf-8")
+    assert expected in INSTALL.read_text(encoding="utf-8"), \
+        f"{unit} в care-service-install.sh разошёлся с guardian/{unit}"
