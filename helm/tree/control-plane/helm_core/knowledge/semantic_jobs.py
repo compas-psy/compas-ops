@@ -203,6 +203,74 @@ def renew_lease_on_progress(session: Session, job: KnowledgeSemanticJob) -> None
     job.attempts = 0
 
 
+def pause_semantic_job(session: Session, *, job_id: uuid.UUID, reason: str) -> bool:
+    """Остановить ОДНО задание по его идентификатору.
+
+    ПОЧЕМУ ПО ID, А НЕ ПО ПРИЗНАКУ. `semantic-pause-oversized.sh`
+    останавливал разом все незавершённые задания источников с
+    расширением fb2 — чтобы снять одну книгу. Такая выборка попадает и в
+    те задания, о которых оператор не думал, и в те, которых ещё нет:
+    следующая загруженная fb2 попала бы под тот же признак. Остановка
+    одного задания обязана называть это одно задание.
+
+    Задание закрывается явной причиной, а не удаляется: оно должно
+    остаться видимым в очереди как незакрытый долг. L1 при этом не
+    трогается — источник остаётся доступен поиску (§14.19, §14.25).
+    """
+    job = session.get(KnowledgeSemanticJob, job_id)
+    if job is None or job.status == KnowledgeIngestStatus.DONE:
+        return False
+    job.status = KnowledgeIngestStatus.FAILED
+    job.error = reason[:128]
+    job.lease_expires_at = None
+    session.flush()
+    logger.warning("semantic job %s остановлен вручную: %s", job_id, job.error)
+    return True
+
+
+def request_rederivation(session: Session, *, source_id: uuid.UUID,
+                         semantic_version: int = SEMANTIC_VERSION) -> bool:
+    """Разобрать ОДИН источник заново на той же версии.
+
+    ЭТО ИСКЛЮЧЕНИЕ, А НЕ ШТАТНЫЙ ПУТЬ. Штатный переразбор — подъём
+    `SEMANTIC_VERSION`: он меняет ключ работы, и вся прежняя работа сама
+    становится невыполненной, для всего корпуса разом. Забыть его
+    поднять не даёт отпечаток кода разбора (`derivation.py`).
+
+    Здесь — точечный случай: оператор хочет пересобрать один источник, не
+    трогая остальные. Незаконченная ревизия закрывается ЯВНО (в отличие
+    от прежнего автоматического закрытия при возврате брошенного
+    задания, которое молча уничтожало прогресс порций), и разбор
+    начинается с первого окна.
+
+    Существует ради того, чтобы переразбор перестал быть правкой
+    статусов руками: у действия есть имя, причина и тест.
+    """
+    from ..models import KnowledgeSemanticRun  # локально: цикл импортов
+
+    job = session.scalar(
+        select(KnowledgeSemanticJob)
+        .where(KnowledgeSemanticJob.source_id == source_id,
+               KnowledgeSemanticJob.semantic_version == semantic_version))
+    if job is None:
+        return False
+    for run in session.scalars(
+            select(KnowledgeSemanticRun)
+            .where(KnowledgeSemanticRun.source_id == source_id,
+                   KnowledgeSemanticRun.semantic_version == semantic_version,
+                   KnowledgeSemanticRun.status == SemanticRunStatus.RUNNING)).all():
+        run.status = SemanticRunStatus.FAILED
+        run.error_code = "REDERIVATION_REQUESTED"
+    job.status = KnowledgeIngestStatus.PENDING
+    job.attempts = 0
+    job.error = None
+    job.lease_expires_at = None
+    job.semantic_run_id = None
+    session.flush()
+    logger.info("переразбор источника %s запрошен, версия %s", source_id, semantic_version)
+    return True
+
+
 def process_semantic_job(session: Session, job: KnowledgeSemanticJob) -> bool:
     """Разобрать ОДНУ порцию источника. Вернуть, закончен ли источник.
 

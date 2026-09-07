@@ -230,3 +230,54 @@ def test_the_last_batch_closes_the_job_and_releases_the_lease(session, batched_j
     assert finished is True
     assert job.status == KnowledgeIngestStatus.DONE
     assert job.lease_expires_at is None
+
+
+# ── остановка и переразбор без правки статусов руками ─────────────────
+
+def test_pause_stops_exactly_one_job_and_leaves_a_reason(session, batched_job):
+    """Останавливается названное задание, а не всё похожее на него.
+
+    `semantic-pause-oversized.sh` закрывал разом все незавершённые
+    задания источников с расширением fb2 — чтобы снять одну книгу. Такая
+    выборка попадает и в задания, о которых оператор не думал, и в те,
+    которых ещё нет.
+    """
+    job, _ = batched_job
+    assert semantic_jobs.pause_semantic_job(
+        session, job_id=job.id, reason="SourceTooLargeForLease: проверка") is True
+
+    session.refresh(job)
+    assert job.status == KnowledgeIngestStatus.FAILED
+    assert "SourceTooLargeForLease" in job.error
+    assert job.lease_expires_at is None, "остановленное задание не должно держать аренду"
+    assert claim_next_semantic_job(session) is None, "остановленное задание снова взято"
+
+
+def test_pause_does_not_touch_a_finished_job(session, batched_job):
+    job, total = batched_job
+    for _ in range(total):
+        process_semantic_job(session, job)
+    assert job.status == KnowledgeIngestStatus.DONE
+    assert semantic_jobs.pause_semantic_job(
+        session, job_id=job.id, reason="поздно") is False
+    assert job.status == KnowledgeIngestStatus.DONE
+
+
+def test_rederivation_returns_one_source_to_the_queue_with_a_named_reason(session, batched_job):
+    """Переразбор одного источника — вызов с именем, а не UPDATE руками."""
+    job, _ = batched_job
+    process_semantic_job(session, job)
+    stale_run = job.semantic_run_id
+
+    assert semantic_jobs.request_rederivation(
+        session, source_id=job.source_id, semantic_version=SEMANTIC_VERSION) is True
+
+    session.refresh(job)
+    assert job.status == KnowledgeIngestStatus.PENDING
+    assert job.attempts == 0
+    assert job.semantic_run_id is None
+    closed = session.get(KnowledgeSemanticRun, stale_run)
+    assert closed.status == SemanticRunStatus.FAILED
+    assert closed.error_code == "REDERIVATION_REQUESTED", \
+        "закрытая ревизия обязана называть причину, иначе это молчаливая правка"
+    assert claim_next_semantic_job(session) is not None, "источник не вернулся в очередь"
