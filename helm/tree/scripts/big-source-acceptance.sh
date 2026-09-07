@@ -36,7 +36,7 @@ print(json.dumps({"update_type": "message_created", "message": {
   sudo docker compose exec -T helm-core python3 - "$payload" "$secret" <<'PYEOF'
 import json, sys, urllib.request
 payload, secret = sys.argv[1], sys.argv[2]
-req = urllib.request.Request("http://127.0.0.1:8000/hooks/max",
+req = urllib.request.Request("http://127.0.0.1:8080/hooks/max",
                              data=payload.encode(), method="POST",
                              headers={"Content-Type": "application/json",
                                       "X-Max-Bot-Api-Secret": secret})
@@ -57,8 +57,11 @@ echo "############ 2. ПОСТАВИТЬ КНИГУ НА РАЗБОР ##########
 sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.acceptance_probe rederive
 
 echo
-echo "############ 3. ПРОГРЕСС ЧЕРЕЗ МИНУТУ ############"
-sleep 60
+echo "############ 3. ПРОГРЕСС ЧЕРЕЗ ПЯТЬ МИНУТ ############"
+# Пять, а не одна: ревизия и её окна коммитятся ПОРЦИЕЙ, а порция — это
+# до пяти окон по минуте каждое. Через минуту «ревизии нет» означало бы
+# не отсутствие работы, а незаконченную первую порцию.
+sleep 300
 sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.acceptance_probe state
 
 echo
@@ -82,7 +85,10 @@ echo "— и сразу вопрос по ней:"
 post_max "какой код от велозамка?" "acc.recall.$(date +%s)"
 
 echo
-echo "############ 6. ПРОГРЕСС КНИГИ ПОСЛЕ ВОПРОСОВ ############"
+echo "############ 6. ПРОГРЕСС КНИГИ ЧЕРЕЗ ЕЩЁ ПЯТЬ МИНУТ ############"
+# Главное число прогона: окон верхнего уровня стало БОЛЬШЕ, чем в п.3,
+# и это при том, что между замерами владелец задавал вопросы.
+sleep 300
 sudo docker compose exec -T helm-core python3 -m helm_core.knowledge.acceptance_probe state
 
 echo
