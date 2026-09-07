@@ -219,7 +219,8 @@ def _cite_list(filenames: list[str]) -> str:
 
 
 def format_with_sources(answer: str, filenames: list[str], *,
-                        unsupported_period: str | None = None) -> str:
+                        unsupported_period: str | None = None,
+                        form_note: str | None = None) -> str:
     """Ответ + то, по чему он собран, + честно названное неприменённое
     условие. Источники печатаются всегда, когда они есть: без них ответ
     локальной модели нечем проверить (см. synthesis.py).
@@ -230,6 +231,12 @@ def format_with_sources(answer: str, filenames: list[str], *,
     вариантов, потому что ответ выглядит ответом на заданный вопрос.
     """
     parts = [answer.strip()]
+    if form_note:
+        # Требуемая форма ответа не нашлась (определение, пример). Это
+        # НЕ «ничего не нашёл»: фрагменты есть, формы в них нет, и
+        # молчать об этом — то же самое, что молчать о неприменённом
+        # периоде.
+        parts.append(form_note)
     if unsupported_period:
         parts.append(f"Период «{unsupported_period}» я применить не умею — "
                      f"смотрел по всем записям.")

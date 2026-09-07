@@ -872,3 +872,49 @@ def test_a_mentioned_author_does_not_make_the_document_theirs(session, monkeypat
 
     assert result.outcome == "LOCAL_NOT_FOUND"
     assert "Фрейда" in result.answer_text
+
+
+def test_a_definition_question_puts_the_defining_fragment_in_front(session, monkeypatch):
+    """Сквозная проверка того же: тип ответа доходит до исполнителя и
+    решает, какой фрагмент увидит модель."""
+    _health_and_vector_off(monkeypatch)
+    ingest_text(session, domain="work",
+                text="Рекомендуемая литература по теме: Линде Н. Д. Эмоционально-образная "
+                     "терапия. Москва, издательство, две тысячи одиннадцатый год выпуска.",
+                original_filename="литература.md")
+    ingest_text(session, domain="work",
+                text="Эмоционально-образная терапия — это метод работы с образом чувства, "
+                     "при котором клиент встречается с собственным переживанием напрямую.",
+                original_filename="определение.md")
+    session.flush()
+
+    seen = {}
+
+    def fake_synthesis(question, fragments, **_):
+        seen["fragments"] = fragments
+        return Synthesis(answered=True, text="Метод работы с образом чувства.", used=(1,))
+
+    monkeypatch.setattr(probe_module, "synthesize_or_none", fake_synthesis)
+    probe(session, query="Что такое эмоционально-образная терапия?")
+
+    assert seen.get("fragments"), "поиск не дошёл до синтеза"
+    assert "образом чувства" in seen["fragments"][0], \
+        "первым модель увидела упоминание, а не определение"
+
+
+def test_a_missing_definition_is_named_not_hidden(session, monkeypatch):
+    """Фрагменты есть, определения в них нет — это не «ничего не нашёл»."""
+    _health_and_vector_off(monkeypatch)
+    ingest_text(session, domain="work",
+                text="Ферритин сдавали в мае, потом ещё раз осенью того же года, "
+                     "результаты лежат в папке с анализами и никак не расшифрованы.",
+                original_filename="заметка.md")
+    session.flush()
+
+    monkeypatch.setattr(probe_module, "synthesize_or_none",
+                        lambda q, f, **_: Synthesis(answered=True, text="Сдавали в мае.",
+                                                    used=(1,)))
+    result = probe(session, query="Что такое ферритин?")
+
+    assert result.outcome == "LOCAL_ANSWER"
+    assert "Определения в ваших записях я не нашёл" in result.answer_text

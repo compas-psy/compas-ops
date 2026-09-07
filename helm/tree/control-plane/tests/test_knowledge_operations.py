@@ -11,8 +11,8 @@ from sqlalchemy import select
 from helm_core.knowledge import probe as probe_module
 from helm_core.knowledge.ingest import ingest_text
 from helm_core.knowledge.operations import (
-    OP_COUNT, OP_ENUMERATE, OP_VALUE, detect_operation, find_enumeration,
-    run_count, run_enumerate,
+    OP_COUNT, OP_DEFINE, OP_ENUMERATE, OP_EXAMPLE, OP_VALUE, detect_operation,
+    find_enumeration, run_count, run_enumerate, select_for_operation,
 )
 from helm_core.knowledge.probe import probe
 from helm_core.models import KnowledgeAnswerRun
@@ -179,3 +179,64 @@ def test_a_colon_inside_a_sentence_does_not_start_a_column_list():
              "остались проблемы, но я вспоминаю, какой я была, это просто ужас!»")
 
     assert run_count("Сколько у меня каналов?", [quote]) is None
+
+
+# ── форма ответа решает, что попадёт в доказательства (прогон 443) ───────
+
+def test_the_question_asks_for_a_definition_not_just_a_value():
+    assert detect_operation("По книге Линде что такое эмоционально-образная терапия") \
+        == OP_DEFINE
+    assert detect_operation("Кто такой Линде?") == OP_DEFINE
+    assert detect_operation("дай примеры того, как бороться с неуверенностью") == OP_EXAMPLE
+    assert detect_operation("Какой у меня был холестерин?") == OP_VALUE
+
+
+def test_a_form_word_does_not_override_counting():
+    """«Сколько примеров» — это счёт, а не просьба о примерах."""
+    assert detect_operation("Сколько примеров в главе?") == OP_COUNT
+
+
+def test_a_defining_fragment_goes_before_a_mention():
+    """Прогон 443: в доказательства попал раздел «Рекомендуемая
+    литература» — там термин упомянут и не определён."""
+    texts = [
+        "#### Рекомендуемая литература\n1. Линде Н.Д. Эмоционально-образная терапия. М., 2011.",
+        "Эмоционально-образная терапия — это метод работы с образом чувства.",
+        "Глава про зависть, где терапия не упоминается вовсе.",
+    ]
+
+    selection = select_for_operation(OP_DEFINE, "что такое эмоционально-образная терапия", texts)
+
+    assert selection.order[0] == 1
+    assert selection.found is True
+
+
+def test_nothing_is_thrown_away_when_the_form_is_absent():
+    """Отбор, а не фильтр: определение могло стоять не там, где его ждёт
+    правило, и терять из-за этого весь ответ нельзя."""
+    texts = ["Упоминание ферритина без определения.", "Совсем другой текст."]
+
+    selection = select_for_operation(OP_DEFINE, "что такое ферритин", texts)
+
+    assert sorted(selection.order) == [0, 1]
+    assert selection.found is False
+
+
+def test_a_definition_of_something_else_is_not_the_answer():
+    """Совпадение с вопросом обязательно — по той же причине, что в
+    `find_enumeration()`: чужое определение определением к вопросу не
+    становится."""
+    texts = ["Ферритин — это белок, депонирующий железо."]
+
+    selection = select_for_operation(OP_DEFINE, "что такое эмоционально-образная терапия", texts)
+
+    assert selection.found is False
+
+
+def test_operations_without_a_required_form_keep_the_search_order():
+    texts = ["первый", "второй", "третий"]
+
+    for operation in (OP_VALUE, OP_COUNT, OP_ENUMERATE):
+        selection = select_for_operation(operation, "любой вопрос", texts)
+        assert selection.order == (0, 1, 2)
+        assert selection.found is True

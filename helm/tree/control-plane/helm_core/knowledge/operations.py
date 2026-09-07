@@ -37,11 +37,50 @@ from dataclasses import dataclass
 OP_VALUE = "value"
 OP_COUNT = "count"
 OP_ENUMERATE = "enumerate"
+#: Требуемая ФОРМА ответа. Отличается от `count`/`enumerate` тем, что
+#: не считает и не обходит набор, а решает, КАКОЙ из найденных
+#: фрагментов вообще годится в ответ: на «что такое X» годится тот, где
+#: X определяют, а не тот, где X упомянут.
+OP_DEFINE = "define"
+OP_EXAMPLE = "example"
 
 _COUNT_RE = re.compile(r"\bсколько\b|\bколичество\b|\bкол-во\b", re.IGNORECASE)
 _ENUMERATE_RE = re.compile(
     r"\bвсе\b|\bвсех\b|\bвсё\b|\bперечисли(?:те)?\b|\bсписок\b|\bкаждый\b",
     re.IGNORECASE)
+_DEFINE_RE = re.compile(
+    r"\bчто\s+так(?:ое|ой|ая)\b|\bкто\s+так(?:ой|ая|ие)\b|"
+    r"\bчто\s+знач(?:ит|ат)\b|\bопределени\w*\b",
+    re.IGNORECASE)
+_EXAMPLE_Q_RE = re.compile(r"\bпример(?:ы|ов|а|ами)?\b|\bнапример\b", re.IGNORECASE)
+
+#: ПРИЗНАКИ ФОРМЫ В ТЕКСТЕ — грамматические конструкции, а не слова
+#: предмета. «X — это Y», «X называется Y», «под X понимают Y» — так
+#: выглядит определение в русском тексте независимо от того, что такое
+#: X. Тот же класс, что «сколько» и «все» у операций.
+#:
+#: «это» засчитывается только после тире: без него оно стоит в каждом
+#: втором предложении и определением не является.
+_DEFINITION_MARK_RE = re.compile(
+    r"[—–-]\s*это\b|\bназыва(?:ется|ются|ют)\b|\bименуется\b|"
+    r"\bпредставляет\s+собой\b|\bопределяется\s+как\b|\bпонима(?:ется|ют)\b",
+    re.IGNORECASE)
+_EXAMPLE_MARK_RE = re.compile(
+    r"\bнапример\b|\bк\s+примеру\b|\bпример(?:ы|ов|а|ом|е)?\b|"
+    r"\bслучай\s+из\b|\bрассмотрим\b|\bпривед(?:ём|ем)\b",
+    re.IGNORECASE)
+
+#: Какая конструкция обязана стоять во фрагменте, чтобы он годился под
+#: требуемую форму ответа. Операции, которых здесь нет, форму не
+#: требуют и порядок фрагментов не меняют.
+_FORM_MARKS = {OP_DEFINE: _DEFINITION_MARK_RE, OP_EXAMPLE: _EXAMPLE_MARK_RE}
+
+#: Как назвать владельцу отсутствие требуемой формы. Не «ничего не
+#: нашёл»: фрагменты есть, в них нет определения — это разные вещи.
+FORM_MISSING_NOTICE = {
+    OP_DEFINE: "Определения в ваших записях я не нашёл — показываю ближайшее упоминание.",
+    OP_EXAMPLE: "Примеров в ваших записях я не нашёл — показываю ближайшее упоминание.",
+}
 
 #: Разделители перечисления. Точка с запятой и «и» перед последним
 #: элементом — то же перечисление, что запятая.
@@ -76,6 +115,12 @@ def detect_operation(question: str) -> str:
     слово перечисления."""
     if _COUNT_RE.search(question):
         return OP_COUNT
+    # Форма ответа проверяется РАНЬШЕ перечисления: «дай все примеры» —
+    # это просьба о примерах, и слово «все» её не переопределяет.
+    if _DEFINE_RE.search(question):
+        return OP_DEFINE
+    if _EXAMPLE_Q_RE.search(question):
+        return OP_EXAMPLE
     if _ENUMERATE_RE.search(question):
         return OP_ENUMERATE
     return OP_VALUE
@@ -198,6 +243,48 @@ def find_enumeration(question: str, text: str) -> Enumeration | None:
     if column is not None and len(_stems(column.sentence) & wanted) > best_score:
         best = column
     return best
+
+
+@dataclass(frozen=True)
+class FormSelection:
+    """Порядок фрагментов под требуемую форму ответа."""
+
+    #: Индексы исходного списка: сначала подходящие по форме.
+    order: tuple[int, ...]
+    #: Нашёлся ли хоть один фрагмент требуемой формы. `False` — ответ
+    #: собирается из упоминаний, и сказать об этом обязательно.
+    found: bool
+
+
+def select_for_operation(operation: str, question: str,
+                         texts: list[str]) -> FormSelection:
+    """Поставить вперёд фрагменты той формы, которую требует вопрос.
+
+    Распоряжение владельца 07.09.2026, п.3. Живой прогон 443: на «по
+    книге Линде что такое эмоционально-образная терапия» поиск нашёл
+    нужную книгу, но в доказательства попал раздел «Рекомендуемая
+    литература» — фрагмент, где термин упомянут и не определён. Тип
+    ответа не участвовал в отборе вовсе, фрагменты шли по рангу поиска.
+
+    Отбор, а не фильтр: неподходящие по форме не выбрасываются, а
+    уходят вниз. Определение может стоять не там, где его ждёт правило,
+    и терять из-за этого весь ответ нельзя.
+
+    Совпадение с вопросом обязательно — по той же причине и тем же
+    способом, что в `find_enumeration()`: «например» в чужом абзаце
+    примером к вопросу не становится.
+    """
+    mark = _FORM_MARKS.get(operation)
+    if mark is None:
+        return FormSelection(tuple(range(len(texts))), True)
+
+    wanted = {stem for stem in _stems(question)
+              if len(stem) >= 4 and stem not in _FUNCTION_STEMS}
+    fitting, rest = [], []
+    for index, text in enumerate(texts):
+        matched = mark.search(text) and (not wanted or _stems(text) & wanted)
+        (fitting if matched else rest).append(index)
+    return FormSelection(tuple(fitting + rest), bool(fitting))
 
 
 @dataclass(frozen=True)

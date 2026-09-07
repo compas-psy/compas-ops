@@ -46,8 +46,8 @@ from .answer_format import (PERSONAL_NOT_FOUND, format_doctors, format_nearest_q
                             format_unverified, format_with_sources, is_quotable)
 from .embeddings import embed_texts_or_none
 from .health_schema import health_schema_configured, health_session
-from .operations import (OP_COUNT, OP_ENUMERATE, OP_VALUE, run_count,
-                         run_enumerate)
+from .operations import (FORM_MISSING_NOTICE, OP_COUNT, OP_ENUMERATE, OP_VALUE,
+                         run_count, run_enumerate, select_for_operation)
 from .query_router import QuestionIntent, answer_doctors_visited, detect_intent
 from .query_spec import MODE_GENERAL, DialogueContext, build_query_spec
 from .recall import (
@@ -910,6 +910,21 @@ def probe(session: Session, *, query: str, domain: str | None = None,
 
     # Полный набор — и отдельно от него пятёрка, которая уйдёт в модель.
     candidates = _merge_branches(quotable, vector_hits)
+
+    # ТРЕБУЕМАЯ ФОРМА ОТВЕТА РЕШАЕТ, ЧТО ПОПАДЁТ В ДОКАЗАТЕЛЬСТВА.
+    #
+    # Прогон 443: на «по книге Линде что такое эмоционально-образная
+    # терапия» поиск нашёл нужную книгу, но в пятёрку попал раздел
+    # «Рекомендуемая литература» — фрагмент, где термин упомянут и не
+    # определён. Порядок задавал только ранг поиска; тип ответа в
+    # отборе не участвовал вовсе.
+    #
+    # Отбор идёт по ПОЛНОМУ набору, а не по пятёрке: определение могло
+    # стоять шестым, и до модели оно бы не дошло.
+    selection = select_for_operation(spec.operation, spec.question,
+                                     [item.chunk_text for item in candidates])
+    candidates = [candidates[index] for index in selection.order]
+    form_note = None if selection.found else FORM_MISSING_NOTICE.get(spec.operation)
     evidence = candidates[:MAX_EVIDENCE]
 
     # ── ОПЕРАЦИЯ РЕШАЕТ, ЧТО ДЕЛАТЬ С НАЙДЕННЫМ ─────────────────────
@@ -944,7 +959,7 @@ def probe(session: Session, *, query: str, domain: str | None = None,
                 outcome="LOCAL_ANSWER", mode=KnowledgeAnswerMode.Z2,
                 answer_text=format_with_sources(
                     done.text, [_source_label(e) for e in used],
-                    unsupported_period=spec.time.unsupported),
+                    unsupported_period=spec.time.unsupported, form_note=form_note),
                 evidence=used, candidates=candidates, answer_run_id=str(run_id),
                 sources=[{"kind": "chunk", "source_id": e.source_id,
                           "chunk_id": e.chunk_id,
@@ -1059,7 +1074,7 @@ def probe(session: Session, *, query: str, domain: str | None = None,
         evidence = [evidence[i - 1] for i in synthesis.used]
         answer_text = format_with_sources(
             synthesis.text, [_source_label(e) for e in evidence],
-            unsupported_period=spec.time.unsupported)
+            unsupported_period=spec.time.unsupported, form_note=form_note)
         mode = KnowledgeAnswerMode.Z2
     else:
         # Модель недоступна — прежний детерминированный composer. Это
