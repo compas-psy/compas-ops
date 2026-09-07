@@ -479,7 +479,12 @@ def probe(session: Session, *, query: str, domain: str | None = None,
         ))
         return ProbeResult(outcome="LOCAL_ANSWER", mode=mode, answer_text=answer_text,
                            memory=memory_hits, answer_run_id=str(run_id),
-                           sources=[{"kind": "memory", "memory_id": str(hit.memory_id)}
+                           # `source_id` — чтобы ответ из памяти можно было
+                           # ОТКРЫТЬ: с 06.09.2026 у записи есть источник, и
+                           # без этого поля панель показывала бы ответ без
+                           # единой кнопки подтверждения.
+                           sources=[{"kind": "memory", "memory_id": str(hit.memory_id),
+                                     "source_id": hit.source_id}
                                     for hit in memory_hits])
 
     # Структурный вопрос отвечается по доказанному (R5-R7), а не поиском

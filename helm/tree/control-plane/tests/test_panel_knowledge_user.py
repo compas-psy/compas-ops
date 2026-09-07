@@ -17,7 +17,7 @@ from datetime import timedelta
 import pytest
 import webauthn
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from webauthn.authentication.verify_authentication_response import VerifiedAuthentication
 from webauthn.registration.verify_registration_response import VerifiedRegistration
 
@@ -30,7 +30,7 @@ from helm_core.knowledge.rls import apply_rls
 from helm_core.knowledge.tenancy import bind_knowledge_user
 from helm_core.actions.registry import PreconditionFailed
 from helm_core.models import (
-    Approval, Base, KnowledgeUser, KnowledgeUserRole, KnowledgeUserStatus,
+    Approval, Base, KnowledgeAnswerRun, KnowledgeUser, KnowledgeUserRole, KnowledgeUserStatus,
     PanelEnrollmentToken, PanelSession, PanelStepUpChallenge, WebauthnCredential, utcnow,
 )
 
@@ -679,3 +679,59 @@ def test_source_search_is_scoped_to_the_session(app):
     assert ku.get("/api/panel/v1/knowledge/sources?q=owner-secret").json()["items"] == []
     owner = _owner_session(app)
     assert len(owner.get("/api/panel/v1/knowledge/sources?q=owner-secret").json()["items"]) == 1
+
+
+# ── вопрос к своей памяти прямо с сайта ──────────────────────────────────
+#
+# Распоряжение владельца 06.09.2026: полезный ответ «через бот И сайт».
+# До этого сайт умел показывать корпус и выдавать оригиналы, но задать
+# вопрос было негде — ответ существовал только в мессенджере.
+
+def test_owner_asks_own_memory_from_the_site(app):
+    with app.state.session_factory() as db:
+        owner_id = bind_knowledge_user(db, None)
+        try_remember(db, channel="max",
+                     text="Запомни: код от ворот на даче — 4321",
+                     knowledge_user_id=owner_id)
+        db.commit()
+
+    body = _owner_session(app).post("/api/panel/v1/knowledge/ask",
+                                    json={"question": "какой код от ворот на даче"}).json()
+
+    assert body["outcome"] == "LOCAL_ANSWER"
+    assert "4321" in body["answer_text"]
+    # Источник назван и открывается: без этого ответ нечем проверить.
+    assert body["sources"], "ответ пришёл без источника"
+    assert any(item["downloadable"] and item["id"] for item in body["sources"])
+
+
+def test_site_answer_never_reaches_another_users_memory(app):
+    user_id = _make_active_user(app, display_name="Аня")
+    with app.state.session_factory() as db:
+        owner_id = bind_knowledge_user(db, None)
+        try_remember(db, channel="max", text="Запомни: секрет владельца 9999",
+                     knowledge_user_id=owner_id)
+        db.commit()
+
+    body = _knowledge_session(app, user_id).post(
+        "/api/panel/v1/knowledge/ask", json={"question": "какой секрет владельца"}).json()
+
+    assert "9999" not in str(body)
+
+
+def test_site_question_is_free_and_logged_as_free(app):
+    """Панель в Hermes не ходит вовсе: NEEDS_REASONING здесь означает
+    «локально ответа нет», а не «сейчас заплачу»."""
+    with app.state.session_factory() as db:
+        owner_id = bind_knowledge_user(db, None)
+        try_remember(db, channel="max", text="Запомни: код от ворот на даче — 4321",
+                     knowledge_user_id=owner_id)
+        db.commit()
+
+    _owner_session(app).post("/api/panel/v1/knowledge/ask",
+                             json={"question": "какой код от ворот на даче"})
+
+    with app.state.session_factory() as db:
+        bind_knowledge_user(db, None)
+        runs = db.scalars(select(KnowledgeAnswerRun)).all()
+    assert runs and all(run.paid_ai_used is False for run in runs)

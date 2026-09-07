@@ -159,6 +159,41 @@ export const api = {
 
   /** Свой Второй мозг — и ничей больше: тенант берётся из сессии. */
   knowledge: () => request<KnowledgeShell>('/api/panel/v1/knowledge'),
+
+  /**
+   * Вопрос к своей памяти. Step-up не требуется: это чтение своего же
+   * корпуса, ровно как оболочка выше. Разговор передаётся явно —
+   * сервер переписку не хранит, а «а что он рекомендовал?» без
+   * предыдущего вопроса не значит ничего.
+   */
+  askKnowledge: (body: AskRequest) => request<AskAnswer>('/api/panel/v1/knowledge/ask', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }),
+}
+
+export interface AskRequest {
+  question: string
+  previous_question?: string | null
+  previous_source_ids?: string[]
+  previous_was_memory?: boolean
+}
+
+export interface AskSource {
+  kind: string | null
+  id: string | null
+  title: string | null
+  downloadable: boolean
+}
+
+export interface AskAnswer {
+  /** LOCAL_ANSWER | LOCAL_NOT_FOUND | NEEDS_CLARIFICATION | NEEDS_REASONING */
+  outcome: string
+  mode: string | null
+  answer_text: string | null
+  sources: AskSource[]
+  answer_run_id: string | null
 }
 
 export type PanelRole = 'SYSTEM_OWNER' | 'KNOWLEDGE_USER'

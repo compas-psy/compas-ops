@@ -11,10 +11,12 @@
 
 import { useState } from 'react'
 
-import { api } from '../api/client'
+import { api, ApiError, type AskAnswer } from '../api/client'
 import { useBlock } from '../api/useBlock'
 import { PasskeyCancelled, stepUpForScope } from '../components/passkey'
-import { Ago, Block, Empty, MetricRow, Mono, SecondaryButton } from '../components/primitives'
+import {
+  Ago, Block, Empty, MetricRow, Mono, PrimaryButton, SecondaryButton,
+} from '../components/primitives'
 
 function megabytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`
@@ -24,7 +26,44 @@ export function Knowledge() {
   const shell = useBlock(() => api.knowledge())
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [question, setQuestion] = useState('')
+  const [asking, setAsking] = useState(false)
+  const [askError, setAskError] = useState<string | null>(null)
+  const [answer, setAnswer] = useState<AskAnswer | null>(null)
+  // Предыдущий ход разговора держит браузер и присылает обратно: сервер
+  // переписку не хранит, а «а что он рекомендовал?» без предыдущего
+  // вопроса не значит ничего.
+  const [previous, setPrevious] = useState<
+    { question: string; sourceIds: string[]; wasMemory: boolean } | null>(null)
   const data = shell.data
+
+  const onAsk = async () => {
+    const asked = question.trim()
+    if (!asked) return
+    setAsking(true)
+    setAskError(null)
+    try {
+      const result = await api.askKnowledge({
+        question: asked,
+        previous_question: previous?.question ?? null,
+        previous_source_ids: previous?.sourceIds ?? [],
+        previous_was_memory: previous?.wasMemory ?? false,
+      })
+      setAnswer(result)
+      setPrevious({
+        question: asked,
+        sourceIds: result.sources.map((s) => s.id).filter((id): id is string => id !== null),
+        // Продолжением разговора о памяти считается любой её ответ,
+        // включая честное «не нашёл» и уточнение.
+        wasMemory: result.outcome !== 'NEEDS_REASONING',
+      })
+      setQuestion('')
+    } catch (cause) {
+      setAskError(cause instanceof ApiError ? cause.message : 'Не удалось спросить')
+    } finally {
+      setAsking(false)
+    }
+  }
 
   // §14.15: отдаются исходные байты, а не пересказ. Файл приходит ответом
   // на POST (свежий passkey — заголовком), поэтому сохраняем его сами.
@@ -51,6 +90,61 @@ export function Knowledge() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--h-block-gap)' }}>
+      <Block title="Спросить память">
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter') void onAsk() }}
+            placeholder={previous ? 'Уточните или спросите дальше' : 'Своими словами'}
+            disabled={asking}
+            style={{
+              flex: 1, minWidth: 0, padding: '8px 10px',
+              background: 'var(--h-bg)', color: 'var(--h-fg)',
+              border: '1px solid var(--h-line)', borderRadius: 6,
+            }}
+          />
+          <PrimaryButton onClick={() => void onAsk()} disabled={asking || !question.trim()}
+                         busy={asking}>
+            Спросить
+          </PrimaryButton>
+        </div>
+        {askError && <p style={{ color: 'var(--h-crit)', margin: '10px 0 0' }}>{askError}</p>}
+        {answer && (
+          <div style={{ marginTop: 12 }}>
+            <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+              {answer.answer_text ?? 'Локально ответа нет.'}
+            </p>
+            {answer.sources.length > 0 && (
+              <ul style={{ listStyle: 'none', margin: '10px 0 0', padding: 0 }}>
+                {answer.sources.map((source, index) => (
+                  <li key={source.id ?? `${source.kind}-${index}`} style={{
+                    display: 'flex', justifyContent: 'space-between', gap: 10,
+                    minHeight: 'var(--h-row-min)', alignItems: 'center',
+                  }}>
+                    <span style={{ minWidth: 0, overflow: 'hidden',
+                                   textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {source.title ?? (source.kind === 'memory'
+                        ? 'запись памяти'
+                        : <Mono value={(source.id ?? '—').slice(0, 8)} full={source.id ?? undefined} />)}
+                    </span>
+                    {source.downloadable && source.id && (
+                      <SecondaryButton onClick={() => onDownload(source.id as string)}
+                                       disabled={busy !== null}>
+                        Открыть оригинал
+                      </SecondaryButton>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p style={{ fontSize: 'var(--h-fs-label)', color: 'var(--h-faint)', margin: '8px 0 0' }}>
+              Отвечено локально, без платной модели{answer.mode ? ` · ${answer.mode}` : ''}
+            </p>
+          </div>
+        )}
+      </Block>
+
       <Block title="Место" error={shell.error} offline={shell.offline}
              loadedAt={shell.loadedAt} onRetry={shell.reload}>
         {data ? (

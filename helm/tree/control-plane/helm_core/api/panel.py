@@ -25,8 +25,11 @@ from sqlalchemy.orm import Session
 
 from pydantic import BaseModel, Field
 
-from ..knowledge.documents import DocumentUnavailable, find_sources, read_original
+from ..knowledge.documents import (DocumentUnavailable, _display_filename, find_sources,
+                                   read_original)
 from ..knowledge.ingest import DEFAULT_VAULT_ROOT
+from ..knowledge.probe import probe
+from ..knowledge.query_spec import DialogueContext
 from ..knowledge.offboarding import (
     BACKUP_RETENTION_NOTICE, export_user_vault,
 )
@@ -732,6 +735,85 @@ def knowledge_shell(session: Session = Depends(get_session),
             for s in sources
         ],
     }
+
+
+# ── вопрос к своей памяти прямо с сайта ──────────────────────────────────
+
+
+class PanelAskIn(BaseModel):
+    """Вопрос и — если он продолжает разговор — предыдущий ход.
+
+    Разговор держит браузер и присылает обратно, ровно как плагин
+    Telegram: Control Plane переписку не хранит, а понять «а что он
+    рекомендовал?» без предыдущего вопроса нельзя.
+    """
+
+    question: str = Field(min_length=1, max_length=2000)
+    previous_question: str | None = Field(default=None, max_length=2000)
+    previous_source_ids: list[str] = Field(default_factory=list, max_length=10)
+    previous_was_memory: bool = False
+
+
+def _answer_sources(session: Session, result) -> list[dict[str, Any]]:
+    """Источники ответа в том виде, в котором их можно ОТКРЫТЬ.
+
+    Владельцу нужен не идентификатор в JSON, а название документа и
+    кнопка «скачать оригинал» рядом с ответом — иначе проверить ответ
+    он может только на слово. Повторы схлопываются: пять чанков одного
+    документа это один источник.
+    """
+    seen: set[str] = set()
+    items: list[dict[str, Any]] = []
+    for item in result.sources:
+        source_id = item.get("source_id")
+        if source_id is None:
+            # Память и рёбра графа файлом не подтверждаются — так и
+            # сказано, а не выдано за документ.
+            items.append({"kind": item.get("kind"), "id": None,
+                          "title": None, "downloadable": False})
+            continue
+        if source_id in seen:
+            continue
+        seen.add(source_id)
+        source = session.get(KnowledgeSource, uuid.UUID(source_id))
+        items.append({
+            "kind": item.get("kind"),
+            "id": source_id,
+            "title": (_display_filename(source) if source else None)
+                     or item.get("original_filename"),
+            "downloadable": source is not None,
+        })
+    return items
+
+
+@router.post("/knowledge/ask")
+def ask_own_memory(body: PanelAskIn, session: Session = Depends(get_session),
+                   identity: PanelIdentity = Depends(require_panel_session),
+                   ) -> dict[str, Any]:
+    """Спросить свою память с сайта — тем же путём, что из бота.
+
+    Тот же `probe()`, те же исходы, те же правила оплаты: платной модели
+    здесь нет вовсе — панель не ходит в Hermes, и `NEEDS_REASONING`
+    честно означает «локально ответа нет», а не «сейчас заплачу».
+
+    Тенант — из сессии, как и во всей Knowledge-оболочке: подставить
+    чужой идентификатор нечем.
+    """
+    tenant_id = bind_knowledge_user(session, identity.knowledge_user_id)
+    try:
+        source_ids = tuple(str(uuid.UUID(value)) for value in body.previous_source_ids)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"previous_source_ids: {exc}")
+    context = DialogueContext(question=body.previous_question, source_ids=source_ids,
+                              memory=body.previous_was_memory)
+    result = probe(session, query=body.question, knowledge_user_id=tenant_id,
+                   context=context)
+    sources = _answer_sources(session, result)
+    session.commit()
+    return {"outcome": result.outcome, "mode": result.mode,
+            "answer_text": result.answer_text, "sources": sources,
+            "answer_run_id": result.answer_run_id}
 
 
 # ── §14.15: оригинал документа, а не пересказ ────────────────────────────

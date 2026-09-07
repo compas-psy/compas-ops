@@ -120,6 +120,10 @@ class MemoryHit:
     status: str
     expires_at: datetime | None
     rank: float
+    #: Источник, в который тот же текст ушёл общим жизненным циклом.
+    #: `None` у записей со сроком и у сделанных до 06.09.2026. Нужен,
+    #: чтобы ответ из памяти можно было ОТКРЫТЬ, а не только прочитать.
+    source_id: str | None = None
 
 
 def search_memories(session: Session, *, query: str, knowledge_user_id: uuid.UUID,
@@ -154,7 +158,8 @@ def search_memories(session: Session, *, query: str, knowledge_user_id: uuid.UUI
 
     return [
         MemoryHit(memory_id=str(m.id), canonical_text=m.canonical_text, kind=m.kind,
-                  status=m.status, expires_at=m.expires_at, rank=float(r))
+                  status=m.status, expires_at=m.expires_at, rank=float(r),
+                  source_id=str(m.source_id) if m.source_id else None)
         for m, r in session.execute(stmt).all()
     ]
 
