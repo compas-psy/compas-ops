@@ -13,11 +13,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from ..config import get_settings
+from .vault import share_new_files_with_group
 from .worker import run_forever
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    share_new_files_with_group()
     settings = get_settings()
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     session_factory = sessionmaker(engine, expire_on_commit=False)

@@ -72,6 +72,18 @@ VOICE_TRANSCRIBE_FAILED_NOTICE = (
     "Не получилось расшифровать голосовое — попробуйте прислать ещё раз."
 )
 
+#: Сбой ПОСЛЕ удачной расшифровки — отдельное сообщение, потому что это
+#: другой факт. Один общий except на всё тело говорил владельцу «не
+#: получилось расшифровать» и тогда, когда расшифровка прошла, а упала
+#: запись: 07.09.2026 голосовое «Запомни …» падало на правах доступа к
+#: Vault, владелец видел «пришлите ещё раз», а в базе оставалась
+#: половина записи. Неверная причина хуже отсутствия причины — по ней
+#: чинят не то.
+VOICE_SAVE_FAILED_NOTICE = (
+    "Голосовое расшифровал, но сохранить в память не смог — записи не "
+    "осталось. Пришлите ещё раз."
+)
+
 
 def _active_tenant_ids(session: Session) -> list:
     """`knowledge_users` — не tenant-scoped, RLS на неё не распространяется
@@ -170,10 +182,11 @@ def process_voice_pending(session: Session, pending: KnowledgePendingAttachment)
     (`voice_ready_menu_text()`). Не коммитит — вызывающий код решает
     транзакцию, тот же контракт, что `process_job()`.
 
-    Один try/except на всё тело — тот же урок, что уже стоил живого
-    краш-лупа у `process_job()` (29.08.2026): исключение после успешного
-    шага не должно улетать необработанным из этой функции и ронять
-    `run_forever()`. Не-Remember путь НЕ парсит файл здесь — второй раз
+    Исключение не улетает наружу ни из одного шага — тот же урок, что
+    уже стоил живого краш-лупа у `process_job()` (29.08.2026). Но
+    ветки две, а не одна: не расшифровалось и расшифровалось, да не
+    сохранилось — разные факты для владельца и разное поведение (см.
+    `VOICE_SAVE_FAILED_NOTICE`). Не-Remember путь НЕ парсит файл здесь — второй раз
     (через `register_file_for_ingest()`) это сделает обычный document-
     pipeline, когда владелец ответит на вопрос о домене; сознательный
     компромисс "проще, но транскрибируем дважды" (ADR-021), не баг.
@@ -181,28 +194,49 @@ def process_voice_pending(session: Session, pending: KnowledgePendingAttachment)
     pending_id = pending.id
     channel = pending.channel
     recipient = pending.recipient
+    tenant_id = pending.knowledge_user_id
     spool_path = Path(pending.spool_path)
 
     try:
         transcript = transcribe_audio(spool_path)
-        stripped = strip_timestamps(transcript)
-        outcome = try_remember(session, channel=channel, text=stripped,
-                               knowledge_user_id=pending.knowledge_user_id, origin_kind="voice")
-        if outcome.status != "not_command":
-            spool_path.unlink(missing_ok=True)
-            notice = outcome.text
-            reference = f"voice-remember-{outcome.status}:{pending_id}"
-            session.delete(pending)
-        else:
-            pending.transcript = transcript
-            notice = voice_ready_menu_text(session, pending)
-            reference = f"voice-transcribed:{pending_id}"
     except Exception as exc:
-        logger.warning("knowledge voice pending %s: обработка упала: %s", pending_id, exc)
+        logger.warning("knowledge voice pending %s: расшифровка упала: %s", pending_id, exc)
         spool_path.unlink(missing_ok=True)
         session.delete(pending)
         notice = VOICE_TRANSCRIBE_FAILED_NOTICE
         reference = f"voice-failed:{pending_id}"
+    else:
+        try:
+            stripped = strip_timestamps(transcript)
+            outcome = try_remember(session, channel=channel, text=stripped,
+                                   knowledge_user_id=tenant_id, origin_kind="voice")
+            if outcome.status != "not_command":
+                spool_path.unlink(missing_ok=True)
+                notice = outcome.text
+                reference = f"voice-remember-{outcome.status}:{pending_id}"
+                session.delete(pending)
+            else:
+                pending.transcript = transcript
+                notice = voice_ready_menu_text(session, pending)
+                reference = f"voice-transcribed:{pending_id}"
+        except Exception as exc:
+            # ОТКАТ, а не «оставить как есть»: `try_remember()` успевает
+            # добавить строку памяти и увеличить счётчик записей до
+            # шага, на котором падает, а вызывающий код всё равно
+            # коммитит транзакцию — половина записи уезжала в базу под
+            # сообщение о полном провале.
+            logger.warning("knowledge voice pending %s: сохранение упало: %s", pending_id, exc)
+            session.rollback()
+            # Привязка тенанта транзакционна и откатом снимается.
+            bind_knowledge_user(session, tenant_id)
+            pending = session.get(KnowledgePendingAttachment, pending_id)
+            # Расшифровка стоила ~11с и удалась — она не теряется, и по
+            # ней же строка перестаёт быть кандидатом на повтор
+            # (`claim_next_voice_pending()` берёт только transcript IS
+            # NULL): иначе воркер крутил бы один и тот же сбой вечно.
+            pending.transcript = transcript
+            notice = VOICE_SAVE_FAILED_NOTICE
+            reference = f"voice-save-failed:{pending_id}"
 
     if recipient:
         enqueue(session, channel=channel, recipient=recipient,

@@ -22,11 +22,15 @@ from .channels.telegram import TelegramSender
 from .config import Settings, get_settings, read_secret
 from .dispatch import deliver_pending
 from .hermes_bridge import DEFAULT_URL as HERMES_BRIDGE_URL, HermesBridge
+from .knowledge.vault import share_new_files_with_group
 
 
 def create_app(settings: Settings | None = None, *, service_secret: str | None = None,
               telegram_bot_token: str | None = None) -> FastAPI:
     settings = settings or get_settings()
+    # Vault пишут два процесса под разными UID — см.
+    # knowledge/vault.py::share_new_files_with_group().
+    share_new_files_with_group()
     app = FastAPI(title="HELM Control Plane", version="0.1.0",
                   docs_url=None, redoc_url=None, openapi_url=None,
                   lifespan=_lifespan)

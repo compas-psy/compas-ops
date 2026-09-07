@@ -16,14 +16,15 @@ from sqlalchemy import select
 
 from helm_core.knowledge.chat_intake import stage_attachment
 from helm_core.knowledge.ingest import register_file_for_ingest
+from helm_core.knowledge import memory as memory_module
 from helm_core.knowledge import worker as worker_module
 from helm_core.knowledge.worker import (
-    VOICE_TRANSCRIBE_FAILED_NOTICE, _frontmatter, claim_next_job, claim_next_voice_pending,
-    process_job, process_voice_pending,
+    VOICE_SAVE_FAILED_NOTICE, VOICE_TRANSCRIBE_FAILED_NOTICE, _frontmatter, claim_next_job,
+    claim_next_voice_pending, process_job, process_voice_pending,
 )
 from helm_core.models import (
-    KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus, KnowledgePendingAttachment,
-    KnowledgeSource, KnowledgeStatus, OutboxMessage,
+    KnowledgeChunk, KnowledgeIngestJob, KnowledgeIngestStatus, KnowledgeMemory,
+    KnowledgePendingAttachment, KnowledgeSource, KnowledgeStatus, OutboxMessage,
 )
 
 
@@ -458,6 +459,40 @@ def test_process_voice_pending_transcribe_failure_deletes_pending_and_notifies(
     assert not spool_path.exists()
     message = session.scalars(select(OutboxMessage)).one()
     assert message.payload_reference["text"] == VOICE_TRANSCRIBE_FAILED_NOTICE
+
+
+def test_process_voice_pending_save_failure_leaves_no_half_record(
+    session, tmp_path, monkeypatch
+):
+    """Сбой ПОСЛЕ удачной расшифровки: живой случай 07.09.2026 — воркер
+    не мог писать в каталог Vault, созданный helm-core. Владелец получал
+    «не получилось расшифровать», а в базе оставалась строка памяти без
+    зеркала и без источника."""
+    _make_voice_pending(session, tmp_path, recipient="777")
+    # pending в жизни пишет helm-core ОТДЕЛЬНОЙ транзакцией — иначе
+    # откат внутри process_voice_pending() снёс бы и его.
+    session.commit()
+    pending = claim_next_voice_pending(session)
+    pending_id, spool_path = pending.id, Path(pending.spool_path)
+
+    monkeypatch.setattr(worker_module, "transcribe_audio",
+                        lambda path: "[0s] Запомни купить молоко")
+
+    def _denied(memory, *, vault_root):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(memory_module, "_write_markdown_mirror", _denied)
+
+    process_voice_pending(session, pending)  # не поднимает исключение наружу
+    session.flush()
+
+    assert session.scalars(select(KnowledgeMemory)).all() == [], \
+        "половинчатая запись откатывается целиком"
+    row = session.get(KnowledgePendingAttachment, pending_id)
+    assert row is not None and row.transcript, \
+        "расшифровка не теряется и снимает строку с повторного захвата"
+    assert spool_path.exists(), "исходное голосовое не удаляется"
+    message = session.scalars(select(OutboxMessage)).one()
+    assert message.payload_reference["text"] == VOICE_SAVE_FAILED_NOTICE
 
 
 def test_process_voice_pending_without_recipient_does_not_notify(session, tmp_path, monkeypatch):
