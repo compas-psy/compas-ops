@@ -34,6 +34,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from datetime import date
+from itertools import zip_longest
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -398,10 +399,60 @@ def _health_vector_search(*, query_embedding: list[float], knowledge_user_id: uu
         ]
 
 
+def _merge_branches(lexical: list[Evidence], vector: list[Evidence]) -> list[Evidence]:
+    """Слить находки двух веток честной чересполосицей.
+
+    Ранг `ts_rank` и косинусная близость — величины из разных шкал, и
+    складывать их значило бы придумать курс обмена, которого нет.
+    Поэтому сравниваются не веса, а МЕСТА: первый лексический, первый
+    векторный, второй лексический, второй векторный. Каждая ветка
+    получает свою долю пятёрки, и ни одна не может вытеснить другую
+    целиком — ровно то, чего не хватало.
+
+    Кто идёт первым, решает лексика — по тому, различила ли она хоть
+    что-нибудь. Если её лучший кандидат ранжирован ровно так же, как
+    худший, значит совпало одно общее слово на всех, и порядок внутри
+    ветки случаен; вести должен вектор. Признак не пороговый, а
+    относительный: абсолютный порог здесь невозможен, `ts_rank` зависит
+    от числа лексем в вопросе (найдено разбором 06.09.2026, из-за чего
+    прежний `MIN_CHUNK_RANK_SCORE` и был убран).
+
+    Пересечения между ветками нет по построению: вектор ищет с
+    `exclude_chunk_ids` по всему, что рассмотрела лексика.
+    """
+    lexical_discriminates = bool(lexical) and lexical[0].rank > lexical[-1].rank
+    first, second = ((lexical, vector) if lexical_discriminates else (vector, lexical))
+    merged: list[Evidence] = []
+    for pair in zip_longest(first, second):
+        merged += [item for item in pair if item is not None]
+    return merged
+
+
 def _freshness(item: Evidence) -> date:
-    """Чем датируется фрагмент: сведениями внутри него, иначе документом,
-    иначе ничем — и тогда он не может считаться свежим."""
+    """Чем датируется фрагмент, когда вопрос про «последний раз»:
+    сведениями внутри него, иначе документом, иначе ничем — и тогда он
+    не может считаться свежим. Неизвестную дату нельзя объявить самой
+    новой: это было бы утверждением, которого у нас нет."""
     return item.fact_date or item.content_date or date.min
+
+
+def _tiebreak_freshness(item: Evidence) -> date:
+    """То же, но для РАЗВЕДЕНИЯ РАВНЫХ ПО РАНГУ, и с обратным
+    умолчанием.
+
+    Вопросы разные, поэтому и умолчания разные. «Что новее» — если даты
+    нет, свежим назвать нельзя. «Которое из неразличимых показать» —
+    если даты нет, старым назвать тоже нельзя, а `date.min` именно это и
+    делал: гнал в конец очереди всё недатированное.
+
+    Замером (прогон 422) видно, чего это стоило. На «до какого числа
+    действует загран» лексика вернула одиннадцать кандидатов с ОДНИМ И
+    ТЕМ ЖЕ рангом 0.01520 — собственная запись владельца среди них.
+    Ранги равны, решала дата, у записи её нет — и запись ушла в хвост,
+    уступив пятёрку медицинским PDF. Владелец получил «не нашёл» про то,
+    что сам продиктовал часом раньше.
+    """
+    return item.fact_date or item.content_date or date.max
 
 
 def _attach_dates(session: Session, items: list[Evidence]) -> None:
@@ -638,41 +689,48 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     # правила в пятёрку попадали случайные из них. Ранг остаётся
     # главным: дата решает только ничью.
     _attach_dates(session, quotable)
-    quotable.sort(key=lambda item: (round(item.rank, 4), _freshness(item)), reverse=True)
-    evidence = quotable[:MAX_EVIDENCE]
+    quotable.sort(key=lambda item: (round(item.rank, 4), _tiebreak_freshness(item)), reverse=True)
 
-    # ADR-025: pgvector дополняет лексику местами, до MAX_EVIDENCE — не
-    # запрашивается вовсе, если лексика уже набрала полный колчан
-    # (экономит HTTP-вызов к embed-сервису на самом частом случае, когда
-    # обычный лексический поиск и так справился). Fail-open: недоступный
-    # embed-сервис — это НЕ повод эскалировать вопрос, который лексика
-    # уже покрыла бы сама; для чисто-перефразированных вопросов без
-    # лексических совпадений это просто означает эскалацию, как и было
-    # до ADR-025 — деградация до прежнего поведения, не новый отказ.
-    if len(evidence) < MAX_EVIDENCE:
-        query_embedding = embed_texts_or_none([spec.retrieval_question])[0]
-        if query_embedding is not None:
-            # Исключается всё, что лексика уже рассмотрела, а не только
-            # прошедшее отбраковку: отбракованный чанк не должен
-            # вернуться вторым путём.
-            exclude_ids = considered_ids
-            vector_hits: list[Evidence] = []
-            if search_public:
-                vector_hits += _vector_search(
-                    session, query_embedding=query_embedding, domain=domain,
-                    knowledge_user_id=knowledge_user_id, exclude_chunk_ids=exclude_ids,
-                    source_ids=spec.focus_source_ids,
-                )
-            if search_health:
-                vector_hits += _health_vector_search(
-                    query_embedding=query_embedding, knowledge_user_id=knowledge_user_id,
-                    exclude_chunk_ids=exclude_ids, source_ids=spec.focus_source_ids,
-                )
-            evidence = (evidence + vector_hits)[:MAX_EVIDENCE]
+    # ВЕКТОР СПРАШИВАЕТСЯ ВСЕГДА, а не «если лексика не набрала пять».
+    #
+    # Прежнее условие `if len(evidence) < MAX_EVIDENCE` экономило один
+    # HTTP-вызов к embed-сервису и ровно этим делало совпадение слов
+    # обязательным условием ответа — то, против чего владелец возражал
+    # прямо (распоряжение 06.09.2026).
+    #
+    # Замер (прогон 422) показывает цену. На «в каком порядке я всё
+    # делаю по прилёте» лексика вернула ровно пять медицинских PDF, все
+    # с одинаковым рангом 0.01216 — то есть совпало одно общее слово, и
+    # различить она не смогла ничего. Колчан был «полон», вектор не
+    # спросили. А вектор на тот же вопрос давал 0.455/0.432/0.410 — три
+    # собственные записи владельца про билеты, вылет и порядок действий.
+    # Ответ был в одном запросе, который решили не делать.
+    #
+    # Fail-open остаётся: недоступный embed-сервис не отменяет
+    # лексический ответ, он просто оставляет прежнее поведение.
+    query_embedding = embed_texts_or_none([spec.retrieval_question])[0]
+    vector_hits: list[Evidence] = []
+    if query_embedding is not None:
+        # Исключается всё, что лексика уже рассмотрела, а не только
+        # прошедшее отбраковку: отбракованный чанк не должен вернуться
+        # вторым путём.
+        if search_public:
+            vector_hits += _vector_search(
+                session, query_embedding=query_embedding, domain=domain,
+                knowledge_user_id=knowledge_user_id, exclude_chunk_ids=considered_ids,
+                source_ids=spec.focus_source_ids,
+            )
+        if search_health:
+            vector_hits += _health_vector_search(
+                query_embedding=query_embedding, knowledge_user_id=knowledge_user_id,
+                exclude_chunk_ids=considered_ids, source_ids=spec.focus_source_ids,
+            )
+        # Отбраковка по векторным находкам: они тоже бывают шапкой
+        # документа. Лексика к этому месту уже чистая (см. выше).
+        vector_hits = [e for e in vector_hits if is_quotable(e.chunk_text)]
+        vector_hits.sort(key=lambda item: item.rank, reverse=True)
 
-    # Второй проход отбраковки — по векторным находкам: они тоже бывают
-    # шапкой документа. Лексика к этому месту уже чистая (см. выше).
-    evidence = [e for e in evidence if is_quotable(e.chunk_text)]
+    evidence = _merge_branches(quotable, vector_hits)[:MAX_EVIDENCE]
 
     # ДАТЫ КАНДИДАТОВ. Одним запросом на всех, а не по одному на чанк:
     # дата нужна и чтобы ответить «в последний раз», и чтобы подписать

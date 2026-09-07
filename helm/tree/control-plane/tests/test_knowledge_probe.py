@@ -709,3 +709,54 @@ def test_the_fragment_shows_both_dates_when_they_differ(session, monkeypatch):
 
     assert "данные от 07.10.2023" in seen["fragments"][0]
     assert "документ от 25.08.2026" in seen["fragments"][0]
+
+
+# ── Прогон 422: записанное владельцем обязано доходить до ответа ────────
+
+def test_vector_is_asked_even_when_lexical_filled_the_quiver(session, monkeypatch):
+    """Прежнее `if len(evidence) < MAX_EVIDENCE` экономило один вызов
+    embed-сервиса и ровно этим делало совпадение слов обязательным
+    условием ответа. Живой замер: на «в каком порядке я всё делаю по
+    прилёте» лексика вернула пять медицинских PDF с одинаковым рангом,
+    колчан был «полон», а ответ лежал в векторной ветке, которую решили
+    не спрашивать."""
+    same_topic = _one_hot_embedding(0)
+    monkeypatch.setattr(chunking_module, "embed_texts_or_none",
+                        lambda texts: [same_topic for _ in texts])
+    asked: list[str] = []
+
+    def spy(texts):
+        asked.extend(texts)
+        return [same_topic for _ in texts]
+    monkeypatch.setattr(probe_module, "embed_texts_or_none", spy)
+
+    # Шесть документов с одним и тем же общим словом — лексика наберёт
+    # полный колчан и ничего не различит.
+    for i in range(6):
+        ingest_text(session, domain="engineering",
+                    text=f"Решение номер {i}: используем Postgres в проекте.")
+    session.flush()
+
+    probe(session, query="решение по проекту")
+
+    assert asked, "вектор не спросили, хотя лексика ничего не различила"
+
+
+def test_an_undated_note_does_not_lose_a_rank_tie(session):
+    """Своя запись без даты документа не должна уступать пятёрку
+    медицинским PDF только потому, что у тех дата есть. Живой прогон
+    422: одиннадцать кандидатов с рангом 0.01520, среди них запись
+    владельца — и она уходила в хвост."""
+    from datetime import date as _date
+
+    from helm_core.knowledge.probe import Evidence, _tiebreak_freshness
+
+    note = Evidence(chunk_id="a", source_id="s1", chunk_text="загранпаспорт до марта",
+                    original_filename=None, rank=0.0152)
+    pdf = Evidence(chunk_id="b", source_id="s2", chunk_text="эндоскопия",
+                   original_filename="Эндоскопия.pdf", rank=0.0152)
+    pdf.content_date = _date(2026, 8, 22)
+
+    order = sorted([pdf, note], key=_tiebreak_freshness, reverse=True)
+
+    assert order[0] is note, "недатированная запись не может считаться самой старой"
