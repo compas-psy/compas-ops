@@ -149,6 +149,15 @@ MIN_LEXICAL_CHUNK_CHARS = 20
 #: evidence pack, уходящего в Hermes при NEEDS_REASONING.
 MAX_EVIDENCE = 5
 
+#: Сколько кандидатов ЗАПРАШИВАЕТСЯ у поиска до отбора. Больше, чем
+#: уходит в ответ, и вот почему: на «уровень холестерина по липидному
+#: профилю» несколько документов совпадают одинаково (все содержат и
+#: «липид», и «холестерин»), Postgres отдаёт первые пять из них в
+#: произвольном порядке, и нужный — сам липидный профиль — в пятёрку не
+#: попадал (живой прогон 402). Отбор среди равных по рангу делается
+#: здесь, по дате, а не отдаётся случаю.
+CANDIDATE_LIMIT = MAX_EVIDENCE * 3
+
 #: ADR-025: первая прикидка, не откалиброванный порог (нет golden-set —
 #: тот же статус, что MIN_RANK_SCORE до своего первого реального
 #: замера). Измерено на минимальной проверке смысла (embed_benchmark.py,
@@ -292,7 +301,7 @@ def _lexical_search(session: Session, *, query: str, domain: str | None,
         # заменяет другой.
         .where(KnowledgeSource.knowledge_user_id == knowledge_user_id)
         .order_by(rank.desc())
-        .limit(MAX_EVIDENCE)
+        .limit(CANDIDATE_LIMIT)
     )
     stmt = _exclude_forgotten(_apply_source_filter(_apply_domain_filter(stmt, domain),
                                                    KnowledgeChunk, source_ids))
@@ -353,7 +362,7 @@ def _health_lexical_search(*, query: str, knowledge_user_id: uuid.UUID,
             .where(func.length(HealthKnowledgeChunk.text) >= MIN_LEXICAL_CHUNK_CHARS)
             .where(HealthKnowledgeChunk.knowledge_user_id == knowledge_user_id)
             .order_by(rank.desc())
-            .limit(MAX_EVIDENCE)
+            .limit(CANDIDATE_LIMIT)
         )
         stmt = _apply_source_filter(stmt, HealthKnowledgeChunk, source_ids)
         rows = session.execute(stmt).all()
@@ -387,6 +396,32 @@ def _health_vector_search(*, query_embedding: list[float], knowledge_user_id: uu
             for chunk, filename, sim in rows
             if str(chunk.id) not in exclude_chunk_ids and float(sim) >= MIN_COSINE_SIMILARITY
         ]
+
+
+def _freshness(item: Evidence) -> date:
+    """Чем датируется фрагмент: сведениями внутри него, иначе документом,
+    иначе ничем — и тогда он не может считаться свежим."""
+    return item.fact_date or item.content_date or date.min
+
+
+def _attach_dates(session: Session, items: list[Evidence]) -> None:
+    """Проставить датам фрагментов их значения одним запросом на всех.
+
+    Health-чанки лежат в своей схеме, но строка источника — общая,
+    поэтому запрос один и тот же. Повторный вызов на уже размеченных
+    фрагментах ничего не портит: значения те же.
+    """
+    if not items:
+        return
+    dates = dict(session.execute(
+        select(KnowledgeSource.id, KnowledgeSource.content_date)
+        .where(KnowledgeSource.id.in_([uuid.UUID(item.source_id) for item in items]))).all())
+    for item in items:
+        item.content_date = dates.get(uuid.UUID(item.source_id))
+        # Дата сведений — из текста самого фрагмента. Консультация от
+        # 25.08 может пересказывать анализ от 07.10.2023, и для
+        # «последнего» такой фрагмент старый, а не свежий.
+        item.fact_date = fact_date(item.chunk_text)
 
 
 def _source_label(item: Evidence) -> str:
@@ -595,7 +630,16 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     # пять строк бланка так и продолжали бы вытеснять шестого кандидата,
     # который и есть текст.
     considered_ids = {e.chunk_id for e in lexical}
-    evidence = [e for e in lexical if is_quotable(e.chunk_text)][:MAX_EVIDENCE]
+    quotable = [e for e in lexical if is_quotable(e.chunk_text)]
+
+    # РАВНЫЕ ПО РАНГУ РАЗЛИЧАЮТСЯ ДАТОЙ. Несколько документов совпадают
+    # с вопросом одинаково («липидный профиль» есть и в самом анализе, и
+    # в трёх консультациях, которые его пересказывают), и без этого
+    # правила в пятёрку попадали случайные из них. Ранг остаётся
+    # главным: дата решает только ничью.
+    _attach_dates(session, quotable)
+    quotable.sort(key=lambda item: (round(item.rank, 4), _freshness(item)), reverse=True)
+    evidence = quotable[:MAX_EVIDENCE]
 
     # ADR-025: pgvector дополняет лексику местами, до MAX_EVIDENCE — не
     # запрашивается вовсе, если лексика уже набрала полный колчан
@@ -634,24 +678,14 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     # дата нужна и чтобы ответить «в последний раз», и чтобы подписать
     # ответ числом. Health-чанки лежат в своей схеме, но строка
     # источника — общая, поэтому запрос один и тот же.
-    if evidence:
-        dates = dict(session.execute(
-            select(KnowledgeSource.id, KnowledgeSource.content_date)
-            .where(KnowledgeSource.id.in_([uuid.UUID(e.source_id) for e in evidence]))).all())
-        for item in evidence:
-            item.content_date = dates.get(uuid.UUID(item.source_id))
-            # Дата сведений — из текста самого фрагмента. Консультация
-            # от 25.08 может пересказывать анализ от 07.10.2023, и для
-            # «последнего» такой фрагмент старый, а не свежий.
-            item.fact_date = fact_date(item.chunk_text)
+    _attach_dates(session, evidence)
 
     # «В последний раз», «свежий», «актуальный» — вопрос о ВРЕМЕНИ, и
     # порядок кандидатов обязан это отражать: сначала самое новое.
     # Документы без даты уходят в конец — не потому что они старые, а
     # потому что утверждать их новизну нечем.
     if spec.time.recent:
-        evidence.sort(key=lambda item: item.fact_date or item.content_date or date.min,
-                      reverse=True)
+        evidence.sort(key=_freshness, reverse=True)
 
     # §14.13 quality gate: без evidence выше порога бесплатного ответа
     # нет. Что делать дальше, решает ОБЛАСТЬ ВОПРОСА, а не факт пустоты.
