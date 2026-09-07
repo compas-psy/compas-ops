@@ -487,10 +487,9 @@ def test_process_voice_pending_save_failure_leaves_no_half_record(
 
     assert session.scalars(select(KnowledgeMemory)).all() == [], \
         "половинчатая запись откатывается целиком"
-    row = session.get(KnowledgePendingAttachment, pending_id)
-    assert row is not None and row.transcript, \
-        "расшифровка не теряется и снимает строку с повторного захвата"
-    assert spool_path.exists(), "исходное голосовое не удаляется"
+    assert session.get(KnowledgePendingAttachment, pending_id) is None, \
+        "висящий pending перехватил бы следующее сообщение владельца как выбор домена"
+    assert not spool_path.exists()
     message = session.scalars(select(OutboxMessage)).one()
     assert message.payload_reference["text"] == VOICE_SAVE_FAILED_NOTICE
 

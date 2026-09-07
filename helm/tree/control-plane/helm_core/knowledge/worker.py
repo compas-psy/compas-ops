@@ -229,12 +229,19 @@ def process_voice_pending(session: Session, pending: KnowledgePendingAttachment)
             session.rollback()
             # Привязка тенанта транзакционна и откатом снимается.
             bind_knowledge_user(session, tenant_id)
+            # Сорванная попытка не оставляет за собой НИЧЕГО — ни строки
+            # в базе, ни висящего pending. Первая версия этой ветки
+            # сохраняла расшифровку на pending, чтобы не терять 11с
+            # работы; живой прогон 07.09.2026 показал, чем это
+            # оборачивается для владельца: pending без ответа про домен
+            # перехватывает СЛЕДУЮЩЕЕ текстовое сообщение как выбор
+            # домена. Два сорванных голосовых — и на «Напомни название
+            # книжки» бот отвечает списком доменов. Потерянная
+            # расшифровка дешевле съеденного вопроса.
             pending = session.get(KnowledgePendingAttachment, pending_id)
-            # Расшифровка стоила ~11с и удалась — она не теряется, и по
-            # ней же строка перестаёт быть кандидатом на повтор
-            # (`claim_next_voice_pending()` берёт только transcript IS
-            # NULL): иначе воркер крутил бы один и тот же сбой вечно.
-            pending.transcript = transcript
+            if pending is not None:
+                session.delete(pending)
+            spool_path.unlink(missing_ok=True)
             notice = VOICE_SAVE_FAILED_NOTICE
             reference = f"voice-save-failed:{pending_id}"
 
