@@ -231,6 +231,21 @@ def grounded_fragments(answer: str, fragments: list[str]) -> tuple[int, ...]:
     return tuple(i for i, count in enumerate(overlaps, start=1) if count == best)
 
 
+#: Отброшенный ответ — это НЕ «модели не было». Разница видна
+#: владельцу: при недоступной модели откат на ближайшую цитату честен
+#: (мы просто не читали фрагменты), а при отброшенном ответе — нет.
+#: Живой прогон 419: заземление отбросило выдуманный срок загранпаспорта,
+#: probe откатился на детерминированный composer, и на «до какого числа
+#: действует загран» пришло «Ближайшее из ваших записей: Антитела к
+#: фактору Кастла 0.5 Ед/мл». Модель прочитала все пять фрагментов и не
+#: смогла собрать проверяемый ответ; механическая «ближайшая» цитата из
+#: тех же пяти не добавляет к этому ничего, кроме шума.
+#:
+#: Поэтому отброшенный ответ возвращается тем же исходом, что и честное
+#: «НЕТ ОТВЕТА» модели: причины разные, вывод для владельца один — в
+#: найденном ответа нет, вот что смотрели.
+
+
 @dataclass(frozen=True)
 class Synthesis:
     """Результат синтеза. `answered=False` — модель прочитала фрагменты
@@ -241,6 +256,10 @@ class Synthesis:
     #: Номера фрагментов (1-based, как в промпте), на которые сослалась
     #: модель. Пусто при `answered=False`.
     used: tuple[int, ...] = ()
+
+
+#: Единственный экземпляр «прочитано, показывать нечего» — см. выше.
+_REJECTED = Synthesis(answered=False)
 
 
 def build_prompt(question: str, fragments: list[str]) -> str:
@@ -299,7 +318,7 @@ def parse_response(raw: str, *, fragments: list[str],
         return None
     if _CITATION_LEFTOVER_RE.search(body):
         logger.warning("синтез отброшен: маркер цитирования не разобран")
-        return None
+        return _REJECTED
     if _NO_ANSWER_RE.search(body) and not claimed:
         return Synthesis(answered=False)
 
@@ -308,12 +327,12 @@ def parse_response(raw: str, *, fragments: list[str],
         # Не «показать с оговоркой»: число, которого нет в источнике, —
         # это и есть выдумка, а выдумка с источником хуже отказа.
         logger.warning("синтез отброшен: чисел нет в источниках: %s", sorted(invented))
-        return None
+        return _REJECTED
 
     unknown = ungrounded_words(body, sources)
     if unknown:
         logger.warning("синтез отброшен: названий нет в источниках: %s", sorted(unknown))
-        return None
+        return _REJECTED
 
     # Заземление по содержанию — главное, ссылки модели — уточнение.
     # Пересечение, если оно непусто: модель могла сослаться и на лишний
@@ -323,7 +342,7 @@ def parse_response(raw: str, *, fragments: list[str],
     if not used:
         # Ответ не опирается ни на один показанный фрагмент. Проверить
         # его нечем — значит, показывать нельзя.
-        return None
+        return _REJECTED
     return Synthesis(answered=True, text=body, used=used)
 
 

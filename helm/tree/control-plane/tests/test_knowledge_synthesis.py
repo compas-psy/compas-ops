@@ -37,9 +37,11 @@ def test_model_reference_to_a_fragment_it_did_not_use_is_dropped():
 
 
 def test_answer_resting_on_nothing_shown_is_refused():
-    """Проверить такой ответ нечем — показывать его нельзя."""
-    assert parse_response("Общие рассуждения без единого совпадения",
-                          fragments=FRAGMENTS) is None
+    """Проверить такой ответ нечем — показывать его нельзя. И это не
+    «модели не было»: фрагменты прочитаны, ответа в них нет."""
+    rejected = parse_response("Общие рассуждения без единого совпадения",
+                              fragments=FRAGMENTS)
+    assert rejected is not None and not rejected.answered
 
 
 def test_no_answer_is_an_outcome_not_a_failure():
@@ -77,7 +79,8 @@ ANALYSIS = ["Холестерин общий 6,2 ммоль/л", "Давлени
 
 
 def test_a_value_that_is_not_in_the_evidence_is_refused():
-    assert parse_response("Уровень холестерина 8.1 ммоль/л.", fragments=ANALYSIS) is None
+    rejected = parse_response("Уровень холестерина 8.1 ммоль/л.", fragments=ANALYSIS)
+    assert rejected is not None and not rejected.answered
 
 
 def test_the_same_value_written_with_a_comma_counts_as_present():
@@ -108,8 +111,9 @@ def test_our_own_date_signature_is_not_evidence_for_itself():
     shown = ["(документ от 22.08.2026) Эзофагогастродуоденоскопия выполнена."]
     sources = ["Эзофагогастродуоденоскопия выполнена."]
 
-    assert parse_response("Загранпаспорт действует до 22.08.2026.",
-                          fragments=shown, sources=sources) is None
+    rejected = parse_response("Загранпаспорт действует до 22.08.2026.",
+                              fragments=shown, sources=sources)
+    assert rejected is not None and not rejected.answered
     # Без разделения тот же ответ проходил — вот цена смешения.
     assert parse_response("Загранпаспорт действует до 22.08.2026.",
                           fragments=shown) is not None
@@ -120,8 +124,8 @@ def test_a_name_that_is_not_in_the_evidence_is_refused():
     «сколько пунктов в аптечке»). Проверка чисел букв не смотрела."""
     kit = ["я кладу ибопрофен, лаперамид, пластырь и антисептик"]
 
-    assert parse_response("В аптечке: ibuprofene, лаперамид, пластырь.",
-                          fragments=kit) is None
+    rejected = parse_response("В аптечке: ibuprofene, лаперамид, пластырь.", fragments=kit)
+    assert rejected is not None and not rejected.answered
     result = parse_response("В аптечке: ибопрофен, лаперамид, пластырь.", fragments=kit)
     assert result is not None and result.answered
 
@@ -160,4 +164,18 @@ def test_the_citation_marker_is_cut_wherever_it_stands():
 def test_an_unparsed_marker_refuses_the_answer():
     """Разметку, которую мы не узнали, показывать нельзя: неизвестно, что
     ещё в тексте не ответ."""
-    assert parse_response("Давление 120/80. ФРАГМЕНТЫ: нет", fragments=ANALYSIS) is None
+    rejected = parse_response("Давление 120/80. ФРАГМЕНТЫ: нет", fragments=ANALYSIS)
+    assert rejected is not None and not rejected.answered
+
+
+def test_a_rejected_answer_is_not_the_same_as_no_model():
+    """Живой прогон 419: заземление отбросило выдуманный срок, probe
+    откатился на ближайшую цитату — и на «до какого числа действует
+    загран» пришли «Антитела к фактору Кастла». Отброшенный ответ
+    обязан читаться как «прочитал, ответа нет», а не как «модели не
+    было»: во втором случае откат на цитату честен, в первом — нет."""
+    rejected = parse_response("Срок до 01.01.2030.", fragments=ANALYSIS)
+
+    assert rejected is not None, "не None — иначе probe уйдёт в откат на цитату"
+    assert not rejected.answered
+    assert rejected.text == ""
