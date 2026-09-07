@@ -345,7 +345,19 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
     # §14.11: бесплатный локальный путь ДО платной модели. LOCAL_ANSWER
     # уже залогирован в knowledge_answer_runs внутри probe() — здесь
     # только доставка; chief вообще не вызывается.
-    probe_result = probe(session, query=result.text)
+    # Тот же контракт политики, что у Telegram-плагина: право оплатить
+    # приходит от входа, а не выводится из формулировки (распоряжение
+    # владельца 07.09.2026, п.5). MAX — второй пользовательский вход в
+    # ту же память, и закрывать надо оба, иначе политика есть только на
+    # словах.
+    #
+    # `paid_allowed=True` здесь пока безусловный: у этого входа нет
+    # состояния разговора, по которому Telegram-плагин отличает
+    # обращение к памяти. Дыра не в оплате пустого поиска — probe
+    # закрывает платный переход сам, как только корпус что-то нашёл, —
+    # а в вопросе к памяти, на который не нашлось НИЧЕГО. Названо
+    # прямо, чинится вместе с состоянием разговора MAX.
+    probe_result = probe(session, query=result.text, paid_allowed=True)
     if probe_result.outcome == "LOCAL_ANSWER":
         enqueue(session, channel="max", recipient=inbound.chat_id,
                 reference=f"knowledge-probe:{task_id}",

@@ -528,7 +528,25 @@ async def _handle_batch_attachment_async(event, gateway, source, channel: str) -
         _send_reply(gateway, source, staged["text"])
 
 
-def _probe_local_answer(text: str, context: dict | None = None) -> dict | None:
+def _mark_memory_conversation(source) -> None:
+    """Отметить чат как разговор о памяти.
+
+    Владелец сохранил «Запомни», прислал файл, ответил про домен или
+    дал команду управления памятью — всё это обращения к памяти, и
+    следующий его вопрос продолжает их, каким бы словом ни начинался
+    (распоряжение 07.09.2026, п.5: «После „Запомни" и загрузки нужно
+    сохранять контекст обращения к памяти»). До этой правки контекст
+    ставился только ответом probe, то есть разговор считался «о памяти»
+    лишь после того, как память уже ответила.
+    """
+    if source is None or getattr(source, "chat_id", None) is None:
+        return
+    turn = _last_turn.setdefault(str(source.chat_id), {})
+    turn["memory"] = True
+
+
+def _probe_local_answer(text: str, context: dict | None = None, *,
+                        paid_allowed: bool = False) -> dict | None:
     """Free-first Knowledge Probe (ТЗ §14.11, v3.4), ДО обращения к LLM.
 
     Три исхода, и путать их нельзя (правка 06.09.2026):
@@ -549,7 +567,7 @@ def _probe_local_answer(text: str, context: dict | None = None) -> dict | None:
     доходит вовсе. Значит сюда попадает только сбой САМОГО probe, и
     честный отказ здесь не отнимает у владельца обычную переписку.
     """
-    payload: dict = {"query": text}
+    payload: dict = {"query": text, "paid_allowed": paid_allowed}
     if context:
         payload["context"] = context
     body = json.dumps(payload).encode("utf-8")
@@ -695,6 +713,7 @@ def _on_pre_gateway_dispatch(event, gateway):
         if remember_result.get("status") != "not_command":
             if remember_result.get("text"):
                 _send_reply(gateway, source, remember_result["text"])
+            _mark_memory_conversation(source)
             return {"action": "skip", "reason": "knowledge_remember_" + remember_result["status"]}
 
     # §14.16: там же и по той же причине. «Забудь про код домофона» иначе
@@ -710,6 +729,7 @@ def _on_pre_gateway_dispatch(event, gateway):
         if admin_result.get("status") != "not_command":
             if admin_result.get("text"):
                 _send_reply(gateway, source, admin_result["text"])
+            _mark_memory_conversation(source)
             return {"action": "skip", "reason": "knowledge_admin_" + admin_result["status"]}
 
     # P8.5.7 шаг 2: если на этом канале есть неразрешённое вложение, это
@@ -722,6 +742,7 @@ def _on_pre_gateway_dispatch(event, gateway):
     if attachment_result and attachment_result.get("status") != "not_pending":
         if attachment_result.get("text"):
             _send_reply(gateway, source, attachment_result["text"])
+        _mark_memory_conversation(source)
         return {"action": "skip",
                "reason": "knowledge_attachment_" + attachment_result["status"]}
 
@@ -733,6 +754,7 @@ def _on_pre_gateway_dispatch(event, gateway):
     if batch_result and batch_result.get("status") != "not_pending":
         if batch_result.get("text"):
             _send_reply(gateway, source, batch_result["text"])
+        _mark_memory_conversation(source)
         return {"action": "skip", "reason": "knowledge_batch_" + batch_result["status"]}
 
     try:
@@ -755,8 +777,18 @@ def _on_pre_gateway_dispatch(event, gateway):
         _task_ids[str(source.chat_id)] = result["task_id"]
 
     chat_key = str(source.chat_id) if source and source.chat_id is not None else None
+    # ПОЛИТИКА ОПЛАТЫ ПРИХОДИТ ОТСЮДА, СВЕРХУ, а не выводится внутри
+    # probe() из формулировки вопроса (распоряжение владельца
+    # 07.09.2026, п.5). Разговор, в котором владелец уже обращался к
+    # памяти — сохранял «Запомни», присылал файл, получал ответ из своих
+    # записей, — остаётся разговором о памяти: следующий вопрос в нём
+    # платный переход не открывает. Это состояние чата, а не свойство
+    # текста; словарь слов-признаков догнать живую речь не может, и
+    # владелец запретил его расширять.
+    turn = _last_turn.get(chat_key) if chat_key else None
+    in_memory_conversation = bool(turn and turn.get("memory"))
     probe_result = _probe_local_answer(
-        event.text, _last_turn.get(chat_key) if chat_key else None)
+        event.text, turn, paid_allowed=not in_memory_conversation)
     outcome = (probe_result or {}).get("outcome")
     if chat_key and outcome and outcome != "LOCAL_UNAVAILABLE":
         # Ход запоминается ЛЮБОЙ, кроме собственного сбоя: продолжением

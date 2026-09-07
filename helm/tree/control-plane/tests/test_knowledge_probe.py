@@ -87,14 +87,14 @@ def test_question_absent_from_corpus_escalates(session):
     ingest_text(session, domain="engineering", text="Решение: используем Postgres.")
     session.flush()
 
-    result = probe(session, query="какая погода в Токио")
+    result = probe(session, paid_allowed=True, query="какая погода в Токио")
 
     assert result.outcome == "NEEDS_REASONING"
     assert result.answer_text is None
 
 
 def test_empty_corpus_escalates(session):
-    result = probe(session, query="что угодно")
+    result = probe(session, paid_allowed=True, query="что угодно")
     assert result.outcome == "NEEDS_REASONING"
 
 
@@ -154,7 +154,7 @@ def test_zapiski_domain_excluded_from_general_query(session):
     ingest_text(session, domain="simpas/zapiski", text="Клиент рассказал про тревогу на работе.")
     session.flush()
 
-    result = probe(session, query="про тревогу на работе")
+    result = probe(session, paid_allowed=True, query="про тревогу на работе")
 
     assert result.outcome == "NEEDS_REASONING", (
         "simpas/zapiski не должен попадать в обычный поиск без явного domain (§14.15)"
@@ -176,7 +176,7 @@ def test_general_query_does_not_leak_across_other_domains_by_mistake(session):
     ingest_text(session, domain="ventures", text="Инвестор согласился на раунд A.")
     session.flush()
 
-    result = probe(session, query="что с раундом", domain="personal")
+    result = probe(session, paid_allowed=True, query="что с раундом", domain="personal")
 
     assert result.outcome == "NEEDS_REASONING"
 
@@ -228,7 +228,8 @@ def test_needs_reasoning_does_not_log_answer_run(monkeypatch):
 
     fake = _RecordingSession()
     # Вопрос общий: личный дал бы LOCAL_NOT_FOUND, и это уже другая ветка.
-    result = probe_module.probe(fake, query="переведи этот текст на английский")
+    result = probe_module.probe(fake, query="переведи этот текст на английский",
+                                paid_allowed=True)
 
     assert result.outcome == "NEEDS_REASONING"
     assert fake.added == [], "probe записал строку прогона там, где не должен"
@@ -300,7 +301,7 @@ def test_vector_search_skipped_when_embed_service_unavailable(session, monkeypat
     ingest_text(session, domain="engineering", text="Решение: используем Postgres.")
     session.flush()
 
-    result = probe(session, query="какая погода в Токио")
+    result = probe(session, paid_allowed=True, query="какая погода в Токио")
 
     assert result.outcome == "NEEDS_REASONING"
     assert result.answer_text is None
@@ -325,7 +326,7 @@ def test_vector_search_does_not_leak_across_tenants(session, monkeypatch):
                knowledge_user_id=other_user.id)
     session.flush()
 
-    result = probe(session, query="как у нас с инфраструктурой")
+    result = probe(session, paid_allowed=True, query="как у нас с инфраструктурой")
 
     assert result.outcome == "NEEDS_REASONING"
 
@@ -532,9 +533,19 @@ def test_model_says_the_fragments_do_not_answer_and_that_is_free(session, monkey
     assert run.paid_ai_used is False
 
 
-def test_general_question_still_escalates_when_the_fragments_do_not_answer(session, monkeypatch):
-    """Правила остальных направлений не меняются: общий вопрос, на
-    который найденное не отвечает, идёт к платной модели, как и раньше."""
+def test_found_evidence_closes_the_paid_route_even_for_a_general_question(session, monkeypatch):
+    """Правило переписано 07.09.2026 (распоряжение владельца, п.5).
+    Раньше здесь проверялось обратное: общий по формулировке вопрос, на
+    который найденное не отвечает, уходил к платной модели.
+
+    Прогон 422 показал, что формулировка этого не решает: «что я беру с
+    собой из лекарств?» — вопрос к собственным записям владельца —
+    определялся как general и получал право на оплату, хотя вектор нашёл
+    его же голосовую заметку. Признак теперь не словарный: КОРПУС
+    ОТВЕТИЛ на запрос, значит запрос его касается, и платить нельзя.
+
+    Платный переход остаётся там, где локально не нашлось ничего — это
+    проверяет test_question_absent_from_corpus_escalates выше."""
     _health_and_vector_off(monkeypatch)
     ingest_text(session, domain="engineering",
                 text="Английский язык на проекте используется в коммитах и в документации.",
@@ -543,9 +554,9 @@ def test_general_question_still_escalates_when_the_fragments_do_not_answer(sessi
     monkeypatch.setattr(probe_module, "synthesize_or_none",
                         lambda q, f, **_: Synthesis(answered=False))
 
-    result = probe(session, query="переведи этот текст на английский")
+    result = probe(session, paid_allowed=True, query="переведи этот текст на английский")
 
-    assert result.outcome == "NEEDS_REASONING"
+    assert result.outcome == "LOCAL_NOT_FOUND"
 
 
 def test_unavailable_model_degrades_to_a_quote_not_to_silence(session, monkeypatch):

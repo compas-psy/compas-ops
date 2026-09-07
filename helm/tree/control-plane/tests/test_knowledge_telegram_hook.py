@@ -248,7 +248,13 @@ def test_secondary_user_probe_never_reaches_needs_reasoning_paid_ai(app, client)
     response = post_hook(client, _private_message("какое решение приняли по проекту",
                                                    user_id=111, message_id=2))
 
-    assert response.json()["status"] == "needs_reasoning_no_paid_ai"
+    # До 07.09.2026 исход назывался needs_reasoning_no_paid_ai: probe
+    # объявлял эскалацию, а роутер её не исполнял, потому что Hermes не
+    # импортирует. Теперь политика закрыта раньше — на самом probe, у
+    # которого `paid_allowed` по умолчанию ложь, — и до «эскалации,
+    # которую некому исполнить» дело не доходит вовсе. Свойство то же и
+    # сильнее: у этого пользователя платного пути нет ни на одном шаге.
+    assert response.json()["status"] == "local_not_found"
 
 
 def test_secondary_user_probe_does_not_see_system_owner_document_corpus(app, client):
@@ -271,7 +277,10 @@ def test_secondary_user_probe_does_not_see_system_owner_document_corpus(app, cli
     response = post_hook(client, _private_message("какое решение приняли по секретному проекту",
                                                    user_id=111, message_id=2))
 
-    assert response.json()["status"] == "needs_reasoning_no_paid_ai"
+    # Изоляция та же: чужой документ не находится. Изменилось только имя
+    # исхода — политика local-only закрывает платный переход раньше, чем
+    # probe успевает объявить эскалацию (распоряжение 07.09.2026, п.5).
+    assert response.json()["status"] == "local_not_found"
 
 
 # ── §14.16: управление памятью через Dedicated Knowledge Bot ─────────────

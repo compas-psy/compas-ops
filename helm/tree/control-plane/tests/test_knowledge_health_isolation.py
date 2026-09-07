@@ -423,7 +423,7 @@ def test_probe_general_query_still_excludes_zapiski_client_content(
                knowledge_user_id=user.id)
     session.flush()
 
-    result = probe(session, query="про тревогу на работе", knowledge_user_id=user.id)
+    result = probe(session, paid_allowed=True, query="про тревогу на работе", knowledge_user_id=user.id)
 
     assert result.outcome == "NEEDS_REASONING"
 

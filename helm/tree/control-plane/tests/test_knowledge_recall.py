@@ -132,7 +132,7 @@ def test_expired_memory_is_excluded_from_current_recall(session):
     assert stored.memory.expires_at is not None
     # Пока срок не вышел — факт находится: иначе следующая проверка
     # прошла бы вхолостую, просто ничего не найдя.
-    assert probe(session, query="какая машина у курьера").outcome == "LOCAL_ANSWER"
+    assert probe(session, paid_allowed=True, query="какая машина у курьера").outcome == "LOCAL_ANSWER"
 
     # Статус остаётся ACTIVE — фоновая рутина, материализующая EXPIRED,
     # не существует. Именно это и проверяем: срок обязан отсекаться
@@ -140,7 +140,7 @@ def test_expired_memory_is_excluded_from_current_recall(session):
     stored.memory.expires_at = utcnow() - timedelta(seconds=1)
     session.flush()
 
-    result = probe(session, query="какая машина у курьера")
+    result = probe(session, paid_allowed=True, query="какая машина у курьера")
 
     assert result.outcome == "NEEDS_REASONING"
     assert session.get(KnowledgeMemory, stored.memory.id).status == KnowledgeMemoryStatus.ACTIVE
@@ -168,8 +168,8 @@ def test_expired_status_row_is_available_to_historical_query(session):
     stored.memory.status = KnowledgeMemoryStatus.EXPIRED
     session.flush()
 
-    current = probe(session, query="Напомни мне номер машины курьера")
-    historical = probe(session, query="Какой был номер машины курьера вчера?")
+    current = probe(session, paid_allowed=True, query="Напомни мне номер машины курьера")
+    historical = probe(session, paid_allowed=True, query="Какой был номер машины курьера вчера?")
 
     assert current.outcome == "NEEDS_REASONING"
     assert historical.outcome == "LOCAL_ANSWER"
@@ -180,13 +180,13 @@ def test_disabled_memory_never_returns_even_historically(session):
     stored = try_remember(session, channel=CHANNEL,
                           text="Запомни: номер машины курьера А123ВС77")
     session.flush()
-    assert probe(session, query="Напомни мне номер машины курьера").outcome == "LOCAL_ANSWER"
+    assert probe(session, paid_allowed=True, query="Напомни мне номер машины курьера").outcome == "LOCAL_ANSWER"
 
     stored.memory.status = KnowledgeMemoryStatus.DISABLED
     session.flush()
 
-    assert probe(session, query="Напомни мне номер машины курьера").outcome == "NEEDS_REASONING"
-    assert probe(session, query="Какой был номер машины вчера?").outcome == "NEEDS_REASONING"
+    assert probe(session, paid_allowed=True, query="Напомни мне номер машины курьера").outcome == "NEEDS_REASONING"
+    assert probe(session, paid_allowed=True, query="Какой был номер машины вчера?").outcome == "NEEDS_REASONING"
 
 
 # ── §14.13 напоминание не съедает вопрос к памяти и наоборот ─────────────
@@ -202,13 +202,23 @@ def test_future_reminder_does_not_answer_from_memory(session):
     session.flush()
     runs_before = len(session.scalars(select(KnowledgeAnswerRun)).all())
 
-    result = probe(session, query="Напомни мне завтра в 10 позвонить курьеру")
+    # Платный переход разрешён политикой вызывающего — тогда постановка
+    # напоминания уходит туда, как и раньше, и строку прогона не пишет.
+    result = probe(session, query="Напомни мне завтра в 10 позвонить курьеру",
+                   paid_allowed=True)
     session.flush()
 
     assert result.outcome == "NEEDS_REASONING"
     assert result.answer_text is None
-    # И не пишет answer_run: локального ответа не было.
     assert len(session.scalars(select(KnowledgeAnswerRun)).all()) == runs_before
+
+    # А без разрешения (умолчание, распоряжение 07.09.2026 п.5) — честный
+    # отказ вместо оплаты, и телефон курьера в нём не всплывает.
+    closed = probe(session, query="Напомни мне завтра в 10 позвонить курьеру")
+    session.flush()
+
+    assert closed.outcome == "LOCAL_NOT_FOUND"
+    assert "+79990000000" not in (closed.answer_text or "")
 
 
 # ── §14.12 приоритет памяти над документами ──────────────────────────────
@@ -248,12 +258,12 @@ def test_memory_of_one_user_is_never_recalled_by_another(session, knowledge_user
                  knowledge_user_id=owner_id)
     session.flush()
 
-    other = probe(session, query="какой код сейфа", knowledge_user_id=knowledge_user.id)
+    other = probe(session, paid_allowed=True, query="какой код сейфа", knowledge_user_id=knowledge_user.id)
 
     assert other.outcome == "NEEDS_REASONING"
     # А у владельца тот же вопрос отвечается — значит дело в тенанте, а
     # не в том, что запрос вообще ничего не находит.
-    assert probe(session, query="какой код сейфа",
+    assert probe(session, paid_allowed=True, query="какой код сейфа",
                  knowledge_user_id=owner_id).outcome == "LOCAL_ANSWER"
 
 

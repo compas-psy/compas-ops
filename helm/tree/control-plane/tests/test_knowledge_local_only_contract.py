@@ -30,6 +30,9 @@ import uuid
 import pytest
 
 from helm_core.knowledge import probe as probe_mod
+from helm_core.knowledge.ingest import ingest_text
+from helm_core.knowledge.probe import probe
+from helm_core.knowledge.synthesis import Synthesis
 from helm_core.knowledge import rephrase as rephrase_mod
 from helm_core.knowledge.query_router import (
     AnswerPath, DoctorItem, DoctorsAnswer, Proof, QuestionIntent,
@@ -303,7 +306,7 @@ def _dispatch_with(monkeypatch, outcome_payload):
     monkeypatch.setattr(plugin, "_register_task", lambda *a, **kw: {"task_id": "t-1"})
     monkeypatch.setattr(plugin, "_send_reply", lambda gw, src, text: sent.append(text))
     monkeypatch.setattr(plugin, "_probe_local_answer",
-                        lambda text, context=None: outcome_payload)
+                        lambda text, context=None, **_: outcome_payload)
     return plugin._on_pre_gateway_dispatch(_Event("какие анализы я сдавал?"), None), sent
 
 
@@ -363,7 +366,10 @@ def test_general_question_with_no_evidence_still_escalates(monkeypatch):
     monkeypatch.setattr(probe_mod, "_health_lexical_search", lambda *a, **kw: [])
     monkeypatch.setattr(probe_mod, "embed_texts_or_none", lambda texts: [None])
 
-    result = probe_mod.probe(_FakeSession(), query="переведи этот текст на английский")
+    # Политика теперь приходит от вызывающего: право оплатить не
+    # выводится из формулировки (распоряжение владельца 07.09.2026, п.5).
+    result = probe_mod.probe(_FakeSession(), query="переведи этот текст на английский",
+                             paid_allowed=True)
 
     assert result.outcome == "NEEDS_REASONING"
 
@@ -399,3 +405,43 @@ def test_clarification_does_not_reach_the_paid_model(monkeypatch):
         "answer_text": "Уточните, о каком документе речь."})
     assert action == {"action": "skip", "reason": "knowledge_probe_needs_clarification"}
     assert sent == ["Уточните, о каком документе речь."]
+
+
+# ── Политика оплаты приходит сверху (распоряжение 07.09.2026, п.5) ──────
+
+def test_paid_route_is_closed_by_default(session):
+    """Умолчание закрыто: вызывающий, который про политику не знает, не
+    может её и разрешить. «Напомни завтра позвонить» — не вопрос к
+    памяти, и раньше это было безусловным основанием заплатить."""
+    result = probe(session, query="Напомни мне завтра позвонить в клинику")
+
+    assert result.outcome != "NEEDS_REASONING"
+    assert result.answer_text
+
+
+def test_found_evidence_closes_the_paid_route_whatever_the_wording(session, monkeypatch):
+    """Прогон 422: «что я беру с собой из лекарств?» — режим general,
+    при этом вектор нашёл собственную заметку владельца с близостью
+    0.633. Право на оплату выдавалось по отсутствию слова-признака в
+    тексте, а не по тому, нашлось ли что-нибудь."""
+    monkeypatch.setattr(probe_mod, "synthesize_or_none",
+                        lambda q, f, **_: Synthesis(answered=False))
+    ingest_text(session, domain="personal",
+                text="В дорожную аптечку я кладу ибупрофен и пластырь.")
+    session.flush()
+
+    # Формулировка нарочно НЕ похожа на обращение к записям: раньше
+    # именно это и открывало платный переход.
+    result = probe(session, query="перечисли что кладу в аптечку", paid_allowed=True)
+
+    assert result.outcome == "LOCAL_NOT_FOUND", (
+        "находки есть — значит вопрос о данных владельца, и платить за него нельзя")
+
+
+def test_an_explicitly_permitted_task_keeps_its_paid_route(session):
+    """Запрет касается памяти, а не всей работы: когда локально не
+    нашлось НИЧЕГО и режим задачи разрешает оплату, переход остаётся."""
+    result = probe(session, query="переведи это предложение на английский",
+                   paid_allowed=True)
+
+    assert result.outcome == "NEEDS_REASONING"

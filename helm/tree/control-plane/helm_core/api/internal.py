@@ -88,6 +88,14 @@ class KnowledgeProbeIn(BaseModel):
     query: str = Field(min_length=1)
     domain: str | None = None
     context: DialogueContextIn | None = None
+    #: Право на платный переход приходит ОТ ВЫЗЫВАЮЩЕГО, который один и
+    #: знает режим задачи (распоряжение владельца 07.09.2026, п.5).
+    #: Умолчание закрыто: вызывающий, который про политику не знает, не
+    #: может её и разрешить. Раньше право выводилось из формулировки
+    #: вопроса внутри probe() — и вопрос «что я беру с собой из
+    #: лекарств?» получал разрешение оплатить ответ о собственных
+    #: записях владельца (прогон 422).
+    paid_allowed: bool = False
 
 
 @router.post("/knowledge/probe")
@@ -114,7 +122,8 @@ def knowledge_probe(body: KnowledgeProbeIn,
                                   source_ids=source_ids,
                                   filenames=tuple(body.context.filenames),
                                   memory=body.context.memory)
-    result = probe(session, query=body.query, domain=body.domain, context=context)
+    result = probe(session, query=body.query, domain=body.domain, context=context,
+                   paid_allowed=body.paid_allowed)
     session.commit()
     # `sources` и `answer_run_id` добавлены 06.09.2026. До этого наружу
     # уходили только три поля, и вызывающий физически не мог ни показать

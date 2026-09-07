@@ -399,6 +399,33 @@ def _health_vector_search(*, query_embedding: list[float], knowledge_user_id: uu
         ]
 
 
+#: Напоминание, которое некому поставить, и платить за него нельзя.
+#: Подсистемы напоминаний в HELM нет вовсе (§14.13) — честная форма
+#: отказа, а не молчание и не оплаченная догадка.
+REMINDER_NOT_SUPPORTED = (
+    "Напоминания я пока не ставлю — такой подсистемы в HELM нет. "
+    "Если это нужно запомнить, начните сообщение с «Запомни»."
+)
+
+
+def _local_dead_end(session: Session, *, query: str, domain: str | None,
+                    knowledge_user_id: uuid.UUID) -> ProbeResult:
+    """Тупик, из которого раньше выходили платным вызовом.
+
+    Запрос к памяти не покупает ответ ни при какой причине остановки
+    (распоряжение владельца 07.09.2026, п.5). Строка `knowledge_answer_
+    runs` пишется здесь так же, как у обычного N0: отказ — это тоже
+    ответ, и он должен быть виден в метрике paid-avoidance."""
+    run_id = uuid.uuid4()
+    session.add(KnowledgeAnswerRun(
+        id=run_id, knowledge_user_id=knowledge_user_id,
+        query_hash=query_hash(query), domain=domain,
+        mode=KnowledgeAnswerMode.N0, paid_ai_used=False, evidence_count=0,
+    ))
+    return ProbeResult(outcome="LOCAL_NOT_FOUND", mode=KnowledgeAnswerMode.N0,
+                       answer_text=REMINDER_NOT_SUPPORTED, answer_run_id=str(run_id))
+
+
 def _merge_branches(lexical: list[Evidence], vector: list[Evidence]) -> list[Evidence]:
     """Слить находки двух веток честной чересполосицей.
 
@@ -522,7 +549,8 @@ def _compose_answer(evidence: list[Evidence]) -> tuple[str, str]:
 
 def probe(session: Session, *, query: str, domain: str | None = None,
          knowledge_user_id: uuid.UUID | None = None,
-         context: DialogueContext | None = None) -> ProbeResult:
+         context: DialogueContext | None = None,
+         paid_allowed: bool = False) -> ProbeResult:
     """Прогнать вопрос через локальную базу знаний до платной модели.
 
     LOCAL_ANSWER пишет строку `knowledge_answer_runs` сразу — paid_ai_used
@@ -535,6 +563,26 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     LLM у себя, Control Plane не видит момент завершения хода, чтобы
     залогировать строку постфактум; это открытый пробел, не реализовано,
     ждёт живой разведки хуков gateway на предмет пост-ответного события.
+
+    `paid_allowed=False` ПО УМОЛЧАНИЮ, и это не мелочь настройки, а
+    политика (распоряжение владельца 07.09.2026, п.5): «У запроса к
+    памяти должна быть обязательная политика local-only, передаваемая от
+    пользовательского входа через весь маршрут. Неизвестное намерение,
+    пустой поиск, ошибка разбора и таймаут не разрешают платный вызов».
+
+    Раньше право на платный переход выводилось из ФОРМУЛИРОВКИ вопроса:
+    `classify_mode()` смотрел, похож ли текст на обращение к записям, и
+    непохожий пропускал к платной модели. Прогон 422 показал цену:
+    «что я беру с собой из лекарств?» и «в каком порядке я всё делаю по
+    прилёте?» — вопросы к собственным записям владельца — были
+    определены как general и получили право на оплату. Чинить это
+    добавлением слов «беру» и «прилёт» в регулярное выражение владелец
+    запретил прямо, и правильно: словарь никогда не догонит живую речь.
+
+    Теперь право приходит СВЕРХУ, от того, кто знает режим задачи:
+    вызывающий обязан назвать его явно. Умолчание закрыто — незнание не
+    может быть разрешением. Платные инженерные задачи это не трогает:
+    их маршрут передаёт `paid_allowed=True` сам.
 
     `knowledge_user_id=None` — существующие call sites (P8.6.2 Dedicated
     Knowledge Bot ещё не существует): разрешается в SYSTEM_OWNER. v3.8
@@ -577,7 +625,10 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     # request into Hermes by accident" для secondary соблюдается тем,
     # что этот бот в Hermes не ходит вовсе).
     if is_future_reminder(query):
-        return ProbeResult(outcome="NEEDS_REASONING")
+        if paid_allowed:
+            return ProbeResult(outcome="NEEDS_REASONING")
+        return _local_dead_end(session, query=query, domain=domain,
+                               knowledge_user_id=knowledge_user_id)
 
     # §14.12 unified retrieval: память проверяется ДО документных чанков
     # и имеет над ними абсолютный приоритет (осознанное упрощение
@@ -760,7 +811,7 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     # заодно с запретом (§5 CHUNKING_AND_BAD_ANSWERS откладывал это
     # различение до QuerySpec; дальше откладывать нельзя).
     if not evidence:
-        if not spec.personal:
+        if not spec.personal and paid_allowed:
             return ProbeResult(outcome="NEEDS_REASONING")
         run_id = uuid.uuid4()
         session.add(KnowledgeAnswerRun(
@@ -794,11 +845,21 @@ def probe(session: Session, *, query: str, domain: str | None = None,
                                    sources=[e.chunk_text for e in evidence])
 
     if synthesis is not None and not synthesis.answered:
-        # Найденное прочитано и ответа не содержит. Для общего вопроса
-        # это и есть штатная эскалация: платная модель не знает данных
-        # владельца, но общий вопрос к ним и не относится.
-        if spec.mode == MODE_GENERAL:
-            return ProbeResult(outcome="NEEDS_REASONING")
+        # НАЙДЕННОЕ ЕСТЬ — ЗНАЧИТ, ВОПРОС О ДАННЫХ ВЛАДЕЛЬЦА, и платить
+        # за него нельзя ни при какой политике.
+        #
+        # Прежде здесь решала формулировка: `spec.mode == MODE_GENERAL`
+        # открывал платный переход. Прогон 422: «что я беру с собой из
+        # лекарств?» — режим general, при этом векторная ветка нашла его
+        # собственную голосовую заметку про аптечку с близостью 0.633.
+        # Вопрос был к его записям, запись нашлась, а право на оплату
+        # выдавалось по тому, что в тексте нет слова-признака.
+        #
+        # Наличие находок — это и есть признак, и он не словарный:
+        # корпус ответил на запрос, значит запрос его касается. Платный
+        # переход остаётся только там, где локально не нашлось НИЧЕГО
+        # (см. `if not evidence` выше) — там же, где его разрешает и
+        # политика вызывающего.
         run_id = uuid.uuid4()
         session.add(KnowledgeAnswerRun(
             id=run_id, knowledge_user_id=knowledge_user_id,

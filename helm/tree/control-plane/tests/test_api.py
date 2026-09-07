@@ -88,7 +88,11 @@ def test_inbound_rejects_non_owner(client):
 # ── §14.11: Knowledge Probe как internal endpoint, вызываемый до Hermes ──────
 
 def test_knowledge_probe_endpoint_returns_needs_reasoning_on_empty_corpus(client):
-    r = post_internal(client, "/internal/knowledge/probe", {"query": "что угодно"})
+    # `paid_allowed` обязателен в теле запроса с 07.09.2026: право
+    # оплатить приходит от вызывающего, а не выводится внутри probe
+    # (распоряжение владельца, п.5). Без него эндпойнт закрыт.
+    r = post_internal(client, "/internal/knowledge/probe",
+                      {"query": "что угодно", "paid_allowed": True})
     assert r.status_code == 200, r.text
     body = r.json()
     # Сравнение по трём полям, а не всего словаря: с 06.09.2026 ответ
@@ -700,3 +704,12 @@ def test_knowledge_cache_decision_did_not_disable_the_paid_path_cache():
         "решение ADR-103 касается только кэша ответов Knowledge, "
         "платный контур им не затрагивается"
     )
+
+
+def test_knowledge_probe_endpoint_is_closed_to_paid_by_default(client):
+    """Умолчание закрыто: вызывающий, который про политику не знает, не
+    может её и разрешить (распоряжение владельца 07.09.2026, п.5)."""
+    r = post_internal(client, "/internal/knowledge/probe", {"query": "что угодно"})
+
+    assert r.status_code == 200, r.text
+    assert r.json()["outcome"] != "NEEDS_REASONING"

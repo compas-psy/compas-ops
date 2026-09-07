@@ -81,7 +81,7 @@ def test_ordinary_text_is_not_a_command():
 
 def test_forget_hides_from_recall_but_keeps_the_row(session, vault):
     memory = _remember(session, "Запомни: код домофона 4512", vault)
-    assert probe(session, query="какой код домофона").outcome == "LOCAL_ANSWER"
+    assert probe(session, paid_allowed=True, query="какой код домофона").outcome == "LOCAL_ANSWER"
 
     outcome = try_admin_command(session, text="Забудь про код домофона",
                                 vault_root=vault)
@@ -89,7 +89,7 @@ def test_forget_hides_from_recall_but_keeps_the_row(session, vault):
     assert outcome.status == "forgotten"
     assert "4512" in outcome.text
     assert session.get(KnowledgeMemory, memory.id).status == KnowledgeMemoryStatus.DISABLED
-    assert probe(session, query="какой код домофона").outcome == "NEEDS_REASONING"
+    assert probe(session, paid_allowed=True, query="какой код домофона").outcome == "NEEDS_REASONING"
 
 
 def test_forget_removes_the_markdown_mirror(session, vault):
