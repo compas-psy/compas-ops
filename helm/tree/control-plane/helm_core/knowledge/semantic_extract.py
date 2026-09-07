@@ -34,6 +34,7 @@ import urllib.request
 from dataclasses import dataclass, field, replace
 
 from ..config import get_settings
+from .model_gate import background_call
 from ..models.base import (
     SemanticDatePrecision, SemanticNodeKind, SemanticRelationType,
 )
@@ -525,8 +526,13 @@ def _call_ollama(prompt: str, *, model: str, keep_alive: str | None = None,
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
-            payload = json.loads(response.read().decode())
+        # Ворота (`model_gate.py`): фоновый разбор уступает модель живому
+        # вопросу. Замер 07.09.2026 — при непрерывном разборе книги ответ
+        # владельцу шёл 48 секунд при пороге 45, то есть деградировал
+        # каждый раз.
+        with background_call():
+            with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+                payload = json.loads(response.read().decode())
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         raise ExtractionFailed(f"извлекатель недоступен: {exc}") from exc
     answer = (payload.get("response") or "").strip()

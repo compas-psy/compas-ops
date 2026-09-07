@@ -50,6 +50,8 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
+from .model_gate import interactive_call
+
 logger = logging.getLogger(__name__)
 
 #: Тот же сервис и та же модель, что у Z2-рефраза (rephrase.py).
@@ -535,8 +537,13 @@ def synthesize_or_none(question: str, fragments: list[str],
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
-            result = json.loads(resp.read().decode())
+        # Ворота (`model_gate.py`): живой вопрос заявляет намерение, и
+        # фоновый разбор уступает ему модель. Ждём освобождения недолго
+        # и в любом случае идём дальше — ответ не должен зависеть от
+        # исправности замка.
+        with interactive_call():
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+                result = json.loads(resp.read().decode())
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         logger.warning("локальный синтез недоступен, откат на composer: %s", exc)
         return None

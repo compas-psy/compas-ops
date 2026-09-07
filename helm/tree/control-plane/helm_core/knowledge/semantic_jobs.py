@@ -32,13 +32,21 @@
   `MAX_ATTEMPTS` не даёт заданию, которое роняет воркер каждый раз,
   крутиться вечно: после исчерпания оно становится `FAILED` и видно.
 
-ЧЕГО ЗДЕСЬ НЕТ НАМЕРЕННО. Ни приоритетов, ни расписаний, ни продления
-аренды на лету. Продление (heartbeat) нужно, только если разбор
-переживает срок аренды; срок взят с большим запасом к наблюдаемому
-времени разбора, и пока запас держится, heartbeat — лишняя машинерия.
-Если разбор начнёт выходить за срок, это будет видно по повторным
-попыткам одного и того же задания, и тогда heartbeat станет обоснован
-замером, а не предположением.
+ПРОДЛЕНИЕ АРЕНДЫ ПО ФАКТУ РАБОТЫ. Добавлено 07.09.2026, и именно тем
+замером, которого ждал прошлый абзац этого докстринга: книга на 1399
+фрагментов не уложилась в тридцатиминутную аренду, держала воркер и
+роняла живые ответы владельца до деградации. Разбор стал порционным
+(`semantic_publish.WINDOW_BUDGET`), а аренда продлевается после порции,
+которая РЕАЛЬНО добавила завершённые окна (`renew_lease_on_progress`).
+
+Продление по часам, а не по работе, вернуло бы ту же монополию: задание
+жило бы вечно, ничего не делая. Продление по работе даёт ровно
+обратное — задание, которое не двигается, отдаёт очередь.
+
+ЧЕГО ЗДЕСЬ НЕТ НАМЕРЕННО. Ни приоритетов между заданиями, ни
+расписаний. Приоритет живого над фоновым решается не здесь: очередь дел
+владельца опрашивается раньше следующей порции (`worker.run_forever`), а
+за локальную модель отвечают ворота (`model_gate.py`).
 """
 
 from __future__ import annotations
@@ -51,9 +59,9 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from ..models import KnowledgeSemanticJob, KnowledgeSemanticRun, KnowledgeSource
+from ..models import KnowledgeSemanticJob, KnowledgeSource
 from ..models.base import KnowledgeIngestStatus, SemanticRunStatus
-from .semantic_publish import SEMANTIC_VERSION, publish_semantic_run
+from .semantic_publish import SEMANTIC_VERSION, WINDOW_BUDGET, publish_semantic_run
 from .tenancy import bind_knowledge_user
 
 logger = logging.getLogger(__name__)
@@ -157,11 +165,15 @@ def claim_next_semantic_job(session: Session) -> KnowledgeSemanticJob | None:
     if job is None:
         return None
     if job.status == KnowledgeIngestStatus.RUNNING:
-        # Возврат брошенного. Ревизия, начатая упавшим воркером, осталась
-        # в RUNNING и текущей стать уже не может (§14.20 — только READY):
-        # она закрывается здесь, иначе зомби копятся с каждой попыткой и
-        # отчёт по ревизиям перестаёт быть читаемым.
-        _abandon_orphan_run(session, job)
+        # Возврат брошенного. РАНЬШЕ здесь ревизия упавшего воркера
+        # закрывалась как зомби, и разбор начинался с первого окна. С
+        # порционным разбором (07.09.2026) это стало прямым уничтожением
+        # прогресса: книга, дошедшая до половины, теряла половину при
+        # каждом перезапуске. Ревизия остаётся RUNNING и продолжается с
+        # последнего ЗАВЕРШЁННОГО окна — `publish_semantic_run(resume=True)`.
+        # Зомби она больше не является: незаконченная ревизия текущей всё
+        # так же стать не может (§14.20), а от склейки с изменившимся
+        # текстом защищает проверка границ в `_text_unchanged()`.
         logger.warning("semantic job %s возвращён в работу: аренда истекла, попытка %s",
                        job.id, job.attempts + 1)
     job.status = KnowledgeIngestStatus.RUNNING
@@ -171,25 +183,44 @@ def claim_next_semantic_job(session: Session) -> KnowledgeSemanticJob | None:
     return job
 
 
-def _abandon_orphan_run(session: Session, job: KnowledgeSemanticJob) -> None:
-    """Пометить незавершённую ревизию прошлой попытки как провалённую."""
-    orphans = session.scalars(
-        select(KnowledgeSemanticRun)
-        .where(KnowledgeSemanticRun.source_id == job.source_id,
-               KnowledgeSemanticRun.semantic_version == job.semantic_version,
-               KnowledgeSemanticRun.status == SemanticRunStatus.RUNNING)).all()
-    for run in orphans:
-        run.status = SemanticRunStatus.FAILED
-        logger.warning("ревизия %s брошена упавшим воркером, помечена FAILED", run.id)
+def renew_lease_on_progress(session: Session, job: KnowledgeSemanticJob) -> None:
+    """Продлить аренду и снять накопленные попытки — по факту работы.
+
+    ДВЕ ВЕЩИ, И ОБЕ ПО ФАКТУ, А НЕ ПО ЧАСАМ.
+
+    Аренда продлевается только после порции, которая реально добавила
+    завершённые окна. Продление «просто потому, что мы ещё живы» вернуло
+    бы ту самую монополию, из-за которой книга держала воркер полчаса:
+    задание, которое не двигается, обязано отдать работу.
+
+    `attempts` обнуляется по той же причине. Счётчик заведён против
+    задания, которое РОНЯЕТ воркер, а не против задания, которое просто
+    большое. Без обнуления книга из сотен окон исчерпывала бы три
+    попытки на ровном месте и закрывалась как неисполнимая, разобранная
+    наполовину.
+    """
+    job.lease_expires_at = _now() + dt.timedelta(seconds=LEASE_SECONDS)
+    job.attempts = 0
 
 
-def process_semantic_job(session: Session, job: KnowledgeSemanticJob) -> None:
-    """Разобрать источник и опубликовать ревизию.
+def process_semantic_job(session: Session, job: KnowledgeSemanticJob) -> bool:
+    """Разобрать ОДНУ порцию источника. Вернуть, закончен ли источник.
 
     Задание отвечает на вопрос «работа выполнялась», ревизия — на вопрос
     «что получилось»: `DEGRADED`-ревизия это выполненная работа с плохим
     результатом, а не невыполненная. Поэтому `DONE` ставится и на неё, а
     `FAILED` — только когда разбор упал и ревизии нет.
+
+    ПОЧЕМУ ПОРЦИЯ, А НЕ ИСТОЧНИК ЦЕЛИКОМ. До 07.09.2026 этот вызов
+    разбирал книгу от первого окна до последнего, не коммитил ничего до
+    конца и не отдавал управление. Владелец получал деградировавшие
+    ответы всё это время, а снять источник с обработки можно было только
+    правкой статуса задания руками. Порция возвращает управление воркеру,
+    который сначала смотрит очередь дел владельца и только потом берёт
+    следующую порцию.
+
+    `False` означает «порция кончилась, источник нет»: задание остаётся
+    RUNNING с продлённой арендой, звать снова.
     """
     bind_knowledge_user(session, job.knowledge_user_id)
     source = session.get(KnowledgeSource, job.source_id)
@@ -197,7 +228,7 @@ def process_semantic_job(session: Session, job: KnowledgeSemanticJob) -> None:
         job.status = KnowledgeIngestStatus.FAILED
         job.error = "SourceMissing"
         job.lease_expires_at = None
-        return
+        return True
 
     from .semantic_pilot import source_text  # локально: цикл импортов
 
@@ -206,11 +237,12 @@ def process_semantic_job(session: Session, job: KnowledgeSemanticJob) -> None:
         job.status = KnowledgeIngestStatus.FAILED
         job.error = "NoText"
         job.lease_expires_at = None
-        return
+        return True
 
     try:
         result = publish_semantic_run(session, source=source, text=text,
-                                      semantic_version=job.semantic_version)
+                                      semantic_version=job.semantic_version,
+                                      budget=WINDOW_BUDGET, resume=True)
     except Exception as exc:
         session.rollback()
         bind_knowledge_user(session, job.knowledge_user_id)
@@ -221,7 +253,14 @@ def process_semantic_job(session: Session, job: KnowledgeSemanticJob) -> None:
         job.error = type(exc).__name__
         job.lease_expires_at = None
         logger.warning("semantic job %s упал: %s", job.id, job.error)
-        return
+        return True
+
+    if not result.finished:
+        job.semantic_run_id = result.run_id
+        renew_lease_on_progress(session, job)
+        logger.info("semantic job %s: порция готова, окон %s/%s",
+                    job.id, result.windows_processed, result.windows_total)
+        return False
 
     job.semantic_run_id = result.run_id
     job.status = KnowledgeIngestStatus.DONE
@@ -242,3 +281,4 @@ def process_semantic_job(session: Session, job: KnowledgeSemanticJob) -> None:
         from .entity_resolution import resolve_all  # локально: цикл импортов
 
         resolve_all(session, knowledge_user_id=job.knowledge_user_id)
+    return True

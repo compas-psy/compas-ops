@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from pathlib import Path
 
 from sqlalchemy import select
@@ -48,8 +49,8 @@ from .tenancy import bind_knowledge_user
 from .vault import frontmatter
 from ..models import (
     KnowledgeBatchItem, KnowledgeIngestJob, KnowledgeIngestStatus,
-    KnowledgePendingAttachment, KnowledgeSource, KnowledgeStatus, KnowledgeUser,
-    KnowledgeUserStatus,
+    KnowledgePendingAttachment, KnowledgeSemanticJob, KnowledgeSource, KnowledgeStatus,
+    KnowledgeUser, KnowledgeUserStatus,
 )
 from ..outbox import enqueue
 
@@ -444,6 +445,12 @@ def run_forever(session_factory) -> None:  # pragma: no cover — процесс
     уводить контейнер в краш-луп, симметрично тому же уроку, что и
     process_job() выше — просто на уровень выше."""
     logger.info("knowledge ingest worker started")
+    #: Задание, которое ЭТОТ воркер взял и не доразобрал. Владение
+    #: держится процессом: от второго воркера защищает живая аренда
+    #: (`claim_next_semantic_job` не берёт задание, пока она не истекла),
+    #: от смерти этого — сама аренда, по истечении которой задание
+    #: продолжится с последнего завершённого окна, а не с первого.
+    in_progress: uuid.UUID | None = None
     while True:
         try:
             with session_factory() as session:
@@ -475,16 +482,30 @@ def run_forever(session_factory) -> None:  # pragma: no cover — процесс
                 # крутилось бы в очереди и выглядело как «работа идёт».
                 fail_exhausted_semantic_jobs(session)
 
-                semantic = claim_next_semantic_job(session)
+                # Своя недоразобранная порция продолжается ЗДЕСЬ, ниже
+                # обеих проверок очереди владельца, — в этом и состоит
+                # приоритет: между порциями книги воркер каждый раз
+                # сначала смотрит, не прислал ли владелец файл или
+                # голосовое, и берётся за них.
+                semantic = (session.get(KnowledgeSemanticJob, in_progress)
+                            if in_progress is not None
+                            else claim_next_semantic_job(session))
                 if semantic is not None:
                     session.commit()  # RUNNING виден снаружи на время разбора
-                    process_semantic_job(session, semantic)
+                    finished = process_semantic_job(session, semantic)
                     session.commit()
-                    logger.info("semantic job %s -> %s", semantic.id, semantic.status)
+                    in_progress = None if finished else semantic.id
+                    if finished:
+                        logger.info("semantic job %s -> %s", semantic.id, semantic.status)
                     continue
 
+                in_progress = None
                 session.commit()
                 time.sleep(POLL_INTERVAL_SECONDS)
         except Exception:
+            # Состояние порции неизвестно — отпускаем владение и даём
+            # решать аренде. Прогресс от этого не теряется: он записан
+            # окнами, и следующая попытка продолжит с них.
+            in_progress = None
             logger.exception("knowledge ingest worker: необработанная ошибка цикла")
             time.sleep(POLL_INTERVAL_SECONDS)

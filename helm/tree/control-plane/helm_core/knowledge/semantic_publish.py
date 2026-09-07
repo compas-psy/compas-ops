@@ -35,6 +35,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from sqlalchemy import func, select
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
@@ -61,6 +62,18 @@ from ..models.base import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: Сколько окон верхнего уровня разбирается за один вызов. Порция
+#: существует не ради скорости, а ради двух свойств: прогресс
+#: коммитится и переживает остановку, и воркер между порциями
+#: возвращается к очереди, где уже могли появиться дела владельца.
+#:
+#: Пять — из арифметики аренды, а не из вкуса. Окно ждёт модель до
+#: `semantic_extract.REQUEST_TIMEOUT` = 120 с, значит худшая порция это
+#: десять минут при аренде `semantic_jobs.LEASE_SECONDS` = 30 минут.
+#: Запас втрое: порция обязана заведомо укладываться в аренду, иначе
+#: задание вернётся в очередь ровно посреди работы.
+WINDOW_BUDGET = 5
 
 #: Сколько раз подряд можно делить переполненное окно. Три уровня — это
 #: восемь кусков из одного окна; если и они переполняются, дело не в
@@ -141,6 +154,10 @@ class PublishResult:
     nodes_created: int = 0
     edges_created: int = 0
     coverage_ratio: float = 0.0
+    #: `False` — порция закончилась, у источника осталась работа. Ревизия
+    #: при этом остаётся RUNNING и текущей не становится: §14.20 требует
+    #: READY, а половина разобранной книги — не READY.
+    finished: bool = True
 
 
 def normalize_key(label: str) -> str:
@@ -426,10 +443,104 @@ def _process(graph, models: _Models, *, window: SemanticWindow, ordinal: int,
     return next_ordinal
 
 
+def _progress(graph, models, run_id: uuid.UUID) -> tuple[int, int]:
+    """Сколько окон верхнего уровня уже разобрано и какой номер свободен.
+
+    Прогресс НЕ хранится отдельным полем: он и так записан строками
+    `knowledge_semantic_windows`, а второе поле с тем же смыслом однажды
+    разъедется с первым. Окно верхнего уровня — это `parent_window_id IS
+    NULL`; делённое окно остаётся одним таким окном, сколько бы детей у
+    него ни было.
+
+    Считаются только закоммиченные строки: порция, оборванная на
+    середине, откатывается целиком, и её окна сюда не попадают. Отсюда и
+    берётся «продолжение с последнего ЗАВЕРШЁННОГО участка».
+    """
+    done = graph.scalar(
+        select(func.count()).select_from(models.window)
+        .where(models.window.semantic_run_id == run_id,
+               models.window.parent_window_id.is_(None))) or 0
+    top_ordinal = graph.scalar(
+        select(func.max(models.window.ordinal))
+        .where(models.window.semantic_run_id == run_id))
+    return done, (top_ordinal + 1) if top_ordinal is not None else 0
+
+
+#: Статусы окна, при которых участок считается покрытым. FAILED — не
+#: покрыт, SPLIT — не лист (его площадь покрывают дети), PENDING —
+#: незавершён.
+_COVERED = (SemanticWindowStatus.PROCESSED, SemanticWindowStatus.NO_KNOWLEDGE)
+
+
+def _counters(graph, models, run_id: uuid.UUID) -> dict:
+    """Счётчики прогона — из записей окон, а не из переменной в памяти.
+
+    Переменная не переживает порцию: между порциями процесс мог быть
+    перезапущен. Единственное, что переживает, — записи, и честные
+    числа берутся оттуда.
+    """
+    window = models.window
+    row = graph.execute(
+        select(
+            func.count().filter(window.status.in_(_COVERED)),
+            func.count().filter(window.status == SemanticWindowStatus.FAILED),
+            func.coalesce(func.sum(window.nodes_created), 0),
+            func.coalesce(func.sum(window.edges_created), 0),
+            func.coalesce(
+                func.sum(window.char_end - window.char_start)
+                .filter(window.status.in_(_COVERED)), 0),
+            func.count(),
+        ).where(window.semantic_run_id == run_id)).one()
+    return {"processed": row[0], "failed": row[1], "nodes": row[2],
+            "edges": row[3], "covered_chars": row[4], "total": row[5]}
+
+
+def _text_unchanged(graph, models, run_id: uuid.UUID, windows, done: int) -> bool:
+    """Тот ли это текст, на котором прогон начинался.
+
+    Продолжение доверяет тому, что `build_windows(text)` даст ту же
+    разбивку, что и в прошлой порции. Если текст источника подменили,
+    склеенная из двух разных текстов ревизия выглядела бы исправной —
+    и это худший из отказов, потому что он тихий. Сверяется правая
+    граница последнего завершённого окна верхнего уровня.
+    """
+    if done == 0:
+        return True
+    if done > len(windows):
+        return False
+    last = graph.scalar(
+        select(models.window.char_end)
+        .where(models.window.semantic_run_id == run_id,
+               models.window.parent_window_id.is_(None))
+        .order_by(models.window.ordinal.desc()).limit(1))
+    return last == windows[done - 1].char_end
+
+
+def resumable_run(session: Session, *, source_id: uuid.UUID,
+                  semantic_version: int) -> KnowledgeSemanticRun | None:
+    """Незаконченная ревизия того же источника той же версии, если есть."""
+    return session.scalars(
+        select(KnowledgeSemanticRun)
+        .where(KnowledgeSemanticRun.source_id == source_id,
+               KnowledgeSemanticRun.semantic_version == semantic_version,
+               KnowledgeSemanticRun.status == SemanticRunStatus.RUNNING)
+        .order_by(KnowledgeSemanticRun.created_at.desc()).limit(1)).first()
+
+
 def publish_semantic_run(session: Session, *, source: KnowledgeSource, text: str,
                          model: str | None = None, extract=extract_nodes_window,
-                         semantic_version: int) -> PublishResult:
-    """Разобрать источник целиком и опубликовать ревизию, если она годна.
+                         semantic_version: int, budget: int | None = None,
+                         resume: bool = False) -> PublishResult:
+    """Разобрать источник и опубликовать ревизию, если она годна.
+
+    `budget` — сколько окон верхнего уровня разобрать за этот вызов.
+    `None` (по умолчанию) — весь источник за раз: прежнее поведение,
+    на нём стоят бенчмарки и ручные CLI. `resume=True` продолжает
+    незаконченную ревизию того же источника той же версии вместо того,
+    чтобы начинать новую.
+
+    Возвращённый `finished=False` означает «порция кончилась, источник
+    нет»: прогресс записан, ревизия осталась RUNNING, звать снова.
 
     Единственная точка, которой разрешено менять `current_semantic_run_
     id`. Всё остальное — чтение.
@@ -448,29 +559,43 @@ def publish_semantic_run(session: Session, *, source: KnowledgeSource, text: str
         raise ValueError("источник без владельца не может иметь семантической ревизии")
     model = model or get_settings().knowledge_semantic_model
 
-    run = KnowledgeSemanticRun(
-        knowledge_user_id=tenant_id, source_id=source.id, semantic_version=semantic_version,
-        extractor_model=model, status=SemanticRunStatus.RUNNING,
-        windows_total=0, windows_processed=0, windows_failed=0,
-        nodes_created=0, edges_created=0, unresolved_candidates=0,
-        started_at=datetime.now(timezone.utc),
-    )
-    session.add(run)
-    session.flush()
+    run = resumable_run(session, source_id=source.id,
+                        semantic_version=semantic_version) if resume else None
+    if run is None:
+        run = KnowledgeSemanticRun(
+            knowledge_user_id=tenant_id, source_id=source.id,
+            semantic_version=semantic_version,
+            extractor_model=model, status=SemanticRunStatus.RUNNING,
+            windows_total=0, windows_processed=0, windows_failed=0,
+            nodes_created=0, edges_created=0, unresolved_candidates=0,
+            started_at=datetime.now(timezone.utc),
+        )
+        session.add(run)
+        session.flush()
 
     windows = build_windows(text)
-    counters = {"processed": 0, "failed": 0, "nodes": 0, "edges": 0, "covered_chars": 0}
     use_health = is_health_domain(source.domain) and health_schema_configured()
     models = HEALTH_MODELS if use_health else PUBLIC_MODELS
+    state: dict = {}
 
     def run_windows(graph) -> None:
-        ordinal = 0
-        for window in windows:
+        done, ordinal = _progress(graph, models, run.id)
+        if not _text_unchanged(graph, models, run.id, windows, done):
+            state["drift"] = True
+            return
+        todo = windows[done:] if budget is None else windows[done:done + budget]
+        # Счётчики этой порции нужны только чтобы понять, был ли прогресс:
+        # итоговые числа берутся из записей окон (`_counters`), потому что
+        # переменная в памяти не переживает остановку между порциями.
+        batch = {"processed": 0, "failed": 0, "nodes": 0, "edges": 0, "covered_chars": 0}
+        for window in todo:
             ordinal = _process(
                 graph, models, window=window, ordinal=ordinal, parent_id=None, depth=0,
                 domain=source.domain, run_id=run.id, source_id=source.id,
-                tenant_id=tenant_id, extract=extract, model=model, counters=counters)
-        counters["total"] = ordinal
+                tenant_id=tenant_id, extract=extract, model=model, counters=batch)
+        state["done"] = done + len(todo)
+        state["advanced"] = len(todo)
+        state["counters"] = _counters(graph, models, run.id)
 
     if use_health:
         with health_session(tenant_id) as graph:
@@ -478,15 +603,41 @@ def publish_semantic_run(session: Session, *, source: KnowledgeSource, text: str
     else:
         run_windows(session)
 
+    if state.get("drift"):
+        # Текст источника изменился между порциями. Склеенная из двух
+        # разных текстов ревизия выглядела бы исправной — это худший
+        # отказ, потому что тихий.
+        run.status = SemanticRunStatus.FAILED
+        run.error_code = "SOURCE_TEXT_CHANGED"
+        run.finished_at = datetime.now(timezone.utc)
+        session.flush()
+        return PublishResult(run_id=run.id, status=run.status, switched=False,
+                             coverage_ratio=0.0, finished=True)
+
+    counters = state["counters"]
     total_chars = sum(w.char_end - w.char_start for w in windows)
     coverage = (counters["covered_chars"] / total_chars) if total_chars else 1.0
 
-    run.windows_total = counters.get("total", 0)
+    run.windows_total = counters["total"]
     run.windows_processed = counters["processed"]
     run.windows_failed = counters["failed"]
     run.nodes_created = counters["nodes"]
     run.edges_created = counters["edges"]
     run.coverage_ratio = round(coverage, 3)
+
+    if state["done"] < len(windows):
+        # Порция кончилась, источник — нет. Ревизия остаётся RUNNING и
+        # текущей не становится: §14.20 требует READY, а половина
+        # разобранной книги не READY. Прогресс при этом уже записан и
+        # переживёт остановку воркера.
+        session.flush()
+        return PublishResult(
+            run_id=run.id, status=run.status, switched=False,
+            windows_total=run.windows_total, windows_processed=run.windows_processed,
+            windows_failed=run.windows_failed, nodes_created=run.nodes_created,
+            edges_created=run.edges_created, coverage_ratio=float(run.coverage_ratio),
+            finished=False)
+
     run.finished_at = datetime.now(timezone.utc)
 
     # Единственное условие READY: ни одно окно не провалено. Покрытие
