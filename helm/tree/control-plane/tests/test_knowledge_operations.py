@@ -54,22 +54,31 @@ def test_a_sentence_with_a_lead_in_is_not_counted():
 
 
 def test_a_bare_list_without_a_lead_in_is_counted():
-    found = find_enumeration("сколько пунктов", "Ибупрофен, лоперамид, пластырь, антисептик.")
+    found = find_enumeration("сколько лекарств",
+                             "Лекарства: ибупрофен, лоперамид, пластырь, антисептик.")
 
     assert found is not None and found.count == 4
 
 
+def test_a_list_the_question_does_not_touch_is_refused():
+    """Поиск отбирает документ, но не предложение внутри него: без
+    общего слова с вопросом перечисление считать нельзя (прогон 427)."""
+    assert find_enumeration("сколько лекарств",
+                            "Ибупрофен, лоперамид, пластырь, антисептик.") is None
+
+
 def test_counting_refuses_instead_of_guessing():
-    assert run_count("сколько", ["Просто предложение без перечисления."]) is None
+    assert run_count("сколько пунктов",
+                     ["Просто предложение без перечисления."]) is None
 
 
 def test_listing_says_when_it_showed_not_everything():
-    answer = run_enumerate("перечисли", [KIT], complete=False)
+    answer = run_enumerate("перечисли аптечку", [KIT], complete=False)
 
     assert answer is not None
     assert "Показал не всё" in answer.text
 
-    complete = run_enumerate("перечисли", [KIT], complete=True)
+    complete = run_enumerate("перечисли аптечку", [KIT], complete=True)
     assert "Показал не всё" not in complete.text
 
 
@@ -119,3 +128,24 @@ def test_asking_for_the_value_still_returns_the_note_verbatim(session):
     result = probe(session, query="дай ссылку на мой канал B17")
 
     assert "https://www.b17.ru/eliah/" in result.answer_text
+
+
+# ── Прогон 427: чужое перечисление не считается ────────────────────────
+
+def test_a_list_from_an_unrelated_text_is_not_counted():
+    """Живой прогон 427 поймал регрессию в этой же операции через час
+    после её выката: на «сколько у меня каналов» пришло «Насчитал 6» по
+    фразе из книги Линде «В результате двухлетней терапии она сказала:
+    „У меня, конечно, остались проблемы…"». Двоеточие и запятые сделали
+    цитату «списком», а совпадение по слову «меня» — «релевантной»."""
+    quote = ("В результате двухлетней терапии она сказала: «У меня, конечно, "
+             "остались проблемы, но я вспоминаю, какой я была, это просто ужас!»")
+
+    assert find_enumeration("сколько у меня каналов", quote) is None
+
+
+def test_a_matching_list_is_still_counted():
+    channels = "Ссылки на мои каналы: Telegram, B17, VK, Дзен."
+    found = find_enumeration("сколько у меня каналов", channels)
+
+    assert found is not None and found.count == 4
