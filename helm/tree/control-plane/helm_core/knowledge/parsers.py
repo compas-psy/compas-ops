@@ -85,6 +85,91 @@ def _parse_with_docling(path: Path) -> str:
     return result.document.export_to_markdown()
 
 
+#: fb2 — XML, и конвертера для него у MarkItDown нет: файл распознаётся
+#: как text/xml и возвращается PlainTextConverter'ом как есть. ИЗМЕРЕНО
+#: 07.09.2026 на книге владельца: разметка проходила `_quality_ok()`
+#: (валидный текст, ни одного U+FFFD, буквы распределены нормально), а
+#: `rechunk()` не находил в XML ни одной пустой строки — вся книга
+#: становилась ОДНИМ чанком, и бот честно отвечал «сохранено
+#: фрагментов: 1».
+FB2_SUFFIX = ".fb2"
+
+#: Обёртки fb2, внутри которых лежат те же `<p>`: разворачиваются, а не
+#: схлопываются в один абзац.
+_FB2_CONTAINERS = frozenset({"epigraph", "cite", "poem", "stanza", "annotation"})
+
+#: Части имени автора и их порядок. Именно перечислением, а не «все
+#: дети `<author>`»: там же лежат `<email>`, `<home-page>` и `<id>`,
+#: которым в тексте книги делать нечего.
+_FB2_NAME_TAGS = ("first-name", "middle-name", "last-name", "nickname")
+
+
+def _fb2_text(elem) -> str:
+    """Текст элемента без внутренней разметки: `<p>Первый <emphasis>абзац
+    </emphasis>.</p>` → «Первый абзац.». Куски склеиваются встык, а не
+    через пробел: пробелы уже стоят в исходнике, лишний развалил бы
+    пунктуацию."""
+    return " ".join("".join(elem.itertext()).split())
+
+
+def _fb2_blocks(elem, depth: int, out: list[str]) -> None:
+    for child in elem:
+        tag = child.tag.rpartition("}")[2]
+        if tag == "section":
+            _fb2_blocks(child, depth + 1, out)
+        elif tag == "title":
+            # Заголовок из нескольких `<p>` — отдельные блоки, а не одна
+            # строка: без разделителя «Часть первая» и «Начало» слиплись
+            # бы в «Часть перваяНачало».
+            parts = [_fb2_text(line) for line in child]
+            text = " ".join(part for part in parts if part) or _fb2_text(child)
+            if text:
+                out.append("#" * max(1, min(depth, 6)) + " " + text)
+        elif tag in _FB2_CONTAINERS:
+            _fb2_blocks(child, depth, out)
+        else:
+            text = _fb2_text(child)
+            if text:
+                out.append(text)
+
+
+def _parse_fb2(path: Path) -> str:
+    """Разделы и абзацы книги вместо её разметки.
+
+    Заголовок раздела становится Markdown-заголовком по глубине
+    вложенности — ровно та форма, которую `chunking._is_heading()` уже
+    умеет читать: заголовок приклеивается к тексту под ним и обрывает
+    склейку на границе раздела. Абзацы разделяются пустой строкой,
+    потому что это единственная граница, которую видит `rechunk()`.
+    """
+    # defusedxml, а не stdlib: разбор идёт над присланным файлом, а
+    # ElementTree разворачивает сущности и на «billion laughs» кладёт
+    # воркер. Ставить нечего — это объявленная зависимость markitdown,
+    # то есть пакет уже стоит везде, где вообще работают парсеры.
+    from defusedxml.ElementTree import parse
+
+    root = parse(str(path)).getroot()
+    out: list[str] = []
+    # Глубина ТЕЛА, не раздела: заголовок раздела берёт глубину своего
+    # раздела, а `_fb2_blocks()` увеличивает её, спускаясь внутрь. С
+    # названием книги главы идут `##` под ним, без названия — `#`.
+    depth = 0
+    title = root.find("./{*}description/{*}title-info/{*}book-title")
+    if title is not None and _fb2_text(title):
+        out.append("# " + _fb2_text(title))
+        depth = 1
+    author = root.find("./{*}description/{*}title-info/{*}author")
+    if author is not None:
+        parts = [_fb2_text(part) for tag in _FB2_NAME_TAGS
+                 for part in author.findall("{*}" + tag)]
+        name = " ".join(part for part in parts if part)
+        if name:
+            out.append("Автор: " + name)
+    for body in root.findall("./{*}body"):
+        _fb2_blocks(body, depth, out)
+    return "\n\n".join(out)
+
+
 def parse_file(path: Path) -> ParseResult:
     """Fast path (MarkItDown) сначала; при провале quality gate —
     эскалация на Docling (quality path). Если Docling тоже не проходит
@@ -98,10 +183,17 @@ def parse_file(path: Path) -> ParseResult:
     заведомо провалила бы quality gate. Тот же `_quality_ok()` gate
     применяется и к транскрипту — пустая/бессмысленная расшифровка
     эскалирует в NEEDS_REVIEW тем же путём, что и плохой документ.
+    
+    fb2 — тоже отдельная ветка ДО MarkItDown, и по обратной причине: он
+    её не отвергает, а принимает как обычный текст (см. `FB2_SUFFIX`).
     """
     if is_audio_file(path):
         text = transcribe_audio(path)
         return ParseResult(text=text, parser="gigaam", quality_ok=_quality_ok(text))
+
+    if path.suffix.lower() == FB2_SUFFIX:
+        text = _parse_fb2(path)
+        return ParseResult(text=text, parser="fb2", quality_ok=_quality_ok(text))
 
     text = _parse_with_markitdown(path)
     if _quality_ok(text):

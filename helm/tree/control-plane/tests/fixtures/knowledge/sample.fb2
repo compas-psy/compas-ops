@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">
+  <description>
+    <title-info>
+      <book-title>Записки о погоде</book-title>
+      <author>
+        <first-name>Иван</first-name><last-name>Петров</last-name><email>skip@example.com</email>
+      </author>
+    </title-info>
+  </description>
+  <body>
+    <section>
+      <title><p>Часть первая</p><p>Начало</p></title>
+      <epigraph>
+        <p>Всякая погода начинается с наблюдения за небом.</p>
+      </epigraph>
+      <section>
+        <title><p>Глава о дожде</p></title>
+        <p>Дождь в этих местах идёт ровно сорок дней подряд, начиная с середины октября, и заканчивается в один день без предупреждения.</p>
+        <p>Местные жители называют этот <emphasis>сорокадневный</emphasis> дождь «долгой водой» и считают его признаком урожайного года.</p>
+      </section>
+    </section>
+    <section>
+      <title><p>Часть вторая</p></title>
+      <p>Снег ложится позже дождя и держится до апреля, укрывая поля ровным слоем в полметра толщиной.</p>
+    </section>
+  </body>
+</FictionBook>

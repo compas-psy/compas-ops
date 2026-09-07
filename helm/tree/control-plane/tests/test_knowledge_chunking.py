@@ -14,7 +14,7 @@ import pathlib
 
 from helm_core.knowledge import ingest as ingest_mod
 from helm_core.knowledge import worker as worker_mod
-from helm_core.knowledge.chunking import MIN_CHUNK_CHARS, rechunk
+from helm_core.knowledge.chunking import MAX_CHUNK_CHARS, MIN_CHUNK_CHARS, rechunk
 
 #: Кусок бланка ровно той формы, что дала пять одинаковых кандидатов и
 #: заняла весь колчан доказательств.
@@ -134,3 +134,48 @@ def test_the_old_blank_line_splitter_is_gone():
     """Иначе он останется вторым правилом нарезки, которое кто-нибудь
     позовёт по привычке."""
     assert not hasattr(ingest_mod, "split_chunks")
+
+
+# ── блок длиннее максимума (замер 07.09.2026) ────────────────────────────
+
+def test_document_without_blank_lines_is_not_one_chunk():
+    """Дефект книги в fb2: пустых строк в тексте нет вовсе, и весь
+    документ становился ОДНИМ чанком — не единица поиска, а весь
+    документ, который ранжировать не по чему."""
+    text = "\n".join(f"Строка номер {i} с осмысленным содержанием внутри." for i in range(200))
+
+    chunks = rechunk(text)
+
+    assert len(chunks) > 1
+    assert all(len(chunk) <= MAX_CHUNK_CHARS for chunk in chunks)
+
+
+def test_long_block_is_split_on_line_boundaries_only():
+    """Строка бланка и строка таблицы неделимы: разрез внутри строки
+    оторвал бы значение от названия."""
+    lines = [f"Гемоглобин {i}: 140 г/л (норма 130–160)" for i in range(100)]
+
+    chunks = rechunk("\n".join(lines))
+
+    assert len(chunks) > 1
+    for line in lines:
+        assert any(line in chunk for chunk in chunks), line
+
+
+def test_split_preserves_the_source_verbatim():
+    """Чанк обязан совпадать с источником посимвольно — иначе цитата
+    перестаёт быть цитатой."""
+    lines = [f"Пункт {i}: значение {i * 7} единиц измерения по протоколу." for i in range(100)]
+    text = "\n".join(lines)
+
+    assert "\n".join(rechunk(text)) == text
+
+
+def test_single_line_longer_than_max_stays_one_chunk():
+    """Документированный предел, а не недосмотр: границы внутри строки
+    этот файл не ищет."""
+    line = "слово " * (MAX_CHUNK_CHARS // 2)
+
+    chunks = rechunk(line)
+
+    assert len(chunks) == 1

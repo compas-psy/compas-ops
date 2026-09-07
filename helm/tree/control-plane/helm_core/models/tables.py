@@ -414,7 +414,7 @@ class KnowledgeSource(Base):
     #: определить не удалось; ответ обязан сказать это, а не молчать.
     content_date: Mapped[dt_date | None] = mapped_column(Date)
     mime_type: Mapped[str | None] = mapped_column(String(128))
-    #: markitdown | docling | gigaam | manual — чем получен source_path.
+    #: markitdown | docling | gigaam | fb2 | manual — чем получен source_path.
     parser: Mapped[str | None] = mapped_column(String(32))
     sensitivity: Mapped[str] = mapped_column(String(32), default="internal", nullable=False)
     trust: Mapped[str] = mapped_column(String(32), default="extracted", nullable=False)
