@@ -27,7 +27,8 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import date
 
 #: Роль якоря. Наследовать дату атому можно будет ТОЛЬКО от `EVENT`:
 #: остальные четыре описывают не то, когда случилось событие.
@@ -137,22 +138,100 @@ class DateAnchor:
                 "char_start": self.char_start, "char_end": self.char_end}
 
 
-def _role_for(text: str, start: int) -> str:
-    """Роль по подписи слева от даты. Не нашли — `unlabelled`."""
-    head = text[max(0, start - _LABEL_WINDOW):start]
+def _sentence_cut(head: str) -> int:
+    """Позиция конца последнего предложения в тексте перед датой, или -1.
+
+    Точка сокращения концом предложения НЕ считается: «д.р. 04.07.1985»
+    — одна подпись, а не две фразы. Признак сокращения простой и
+    проверяемый: слово перед точкой короче двух символов или само
+    содержит точку («д.р», «г», «им»).
+    """
+    best = -1
+    for separator in (". ", "; ", "! ", "? "):
+        index = head.rfind(separator)
+        while index > best:
+            word = head[:index].rsplit(" ", 1)[-1]
+            if separator != ". " or (len(word) > 1 and "." not in word):
+                best = index
+                break
+            index = head.rfind(separator, 0, index)
+    return best
+
+
+def _head_for(text: str, start: int, previous_end: int) -> str:
+    """Текст слева от даты, в котором можно искать её подпись.
+
+    Две границы, и обе поставлены по ошибкам, найденным владельцем
+    06.09.2026 на «Дата рождения: 04.07.1985. Приём от 12.03.2025»,
+    где обе даты получали роль `reference`:
+
+    * ЧУЖАЯ ДАТА. Окно не переходит конец предыдущей даты: подпись,
+      стоящая перед ней, относится к ней, а не к следующей.
+    * КОНЕЦ ПРЕДЛОЖЕНИЯ. Часть шаблонов («дата рождения», «выдан»)
+      не привязана к концу окна и потому срабатывала через точку.
+      Перенос строки границей НЕ считается: в бланке подпись сплошь и
+      рядом стоит строкой выше своего значения.
+    """
+    head = text[max(previous_end, start - _LABEL_WINDOW):start]
+    return head[_sentence_cut(head) + 1:]
+
+
+#: Подпись СПРАВА от даты: «12.03.2025 выполнено УЗИ». Найдено
+#: владельцем 06.09.2026 — распознаватель смотрел только влево и такую
+#: форму не видел вовсе. Список глаголов тот же, что в событии слева:
+#: роль от стороны не меняется, меняется только место подписи.
+_TAIL_WINDOW = 32
+_TAIL_LABELS: tuple[tuple[str, str], ...] = (
+    (ROLE_EVENT,
+     r"^\s*[-—:]?\s*(выполнен\w*|проведен\w*|сделан\w*|принят\w*|"
+     r"осмотрен\w*|обследован\w*|госпитализирован\w*|прооперирован\w*|"
+     r"состоял\w*|проходил\w*)"),
+)
+_TAIL_RES = tuple((role, re.compile(pattern, re.IGNORECASE)) for role, pattern in _TAIL_LABELS)
+
+
+def _role_for(text: str, start: int, end: int = 0, previous_end: int = 0,
+              next_start: int | None = None) -> str:
+    """Роль по подписи: сначала слева, потом справа. Нет — `unlabelled`.
+
+    Слева приоритетнее: явная подпись бланка («Дата приёма:») сильнее
+    глагола, случайно оказавшегося после числа.
+    """
+    head = _head_for(text, start, previous_end)
     if _RELATIVE_NEAR_RE.search(head):
         return ROLE_UNLABELLED
     for role, pattern in _LABEL_RES:
         if pattern.search(head):
             return role
+
+    limit = min(len(text), end + _TAIL_WINDOW)
+    if next_start is not None:
+        limit = min(limit, next_start)
+    tail = text[end:limit]
+    for role, pattern in _TAIL_RES:
+        if pattern.search(tail):
+            return role
     return ROLE_UNLABELLED
 
 
 def _valid(year: int, month: int, day: int | None) -> bool:
-    """Отсев заведомо не-дат: номеров, кодов, диапазонов норм."""
+    """Отсев заведомо не-дат: номеров, кодов, диапазонов норм.
+
+    День проверяется КАЛЕНДАРЁМ, а не потолком 31. Найдено владельцем
+    06.09.2026: «Приём от 31.02.2025» принималось как дата. Такой
+    «даты» не существует, и в тексте это либо опечатка, либо не дата
+    вовсе — в обоих случаях якорем ей быть нельзя. Тот же дефект
+    пропускал 29.02 в невисокосный год.
+    """
     if not 1900 <= year <= 2100 or not 1 <= month <= 12:
         return False
-    return day is None or 1 <= day <= 31
+    if day is None:
+        return True
+    try:
+        date(year, month, day)
+    except ValueError:
+        return False
+    return True
 
 
 def _add(found: dict[tuple[int, int], DateAnchor], anchor: DateAnchor) -> None:
@@ -174,14 +253,14 @@ def find_date_anchors(text: str) -> list[DateAnchor]:
         year, month, day = (int(g) for g in match.groups())
         if _valid(year, month, day):
             _add(found, DateAnchor(f"{year:04d}-{month:02d}-{day:02d}", "day",
-                                   _role_for(text, match.start()),
+                                   ROLE_UNLABELLED,
                                    match.start(), match.end(), match.group(0)))
 
     for match in _NUMERIC_RE.finditer(text):
         day, month, year = (int(g) for g in match.groups())
         if _valid(year, month, day):
             _add(found, DateAnchor(f"{year:04d}-{month:02d}-{day:02d}", "day",
-                                   _role_for(text, match.start()),
+                                   ROLE_UNLABELLED,
                                    match.start(), match.end(), match.group(0)))
 
     for match in _DAY_MONTH_RE.finditer(text):
@@ -190,7 +269,7 @@ def find_date_anchors(text: str) -> list[DateAnchor]:
         year = int(match.group(3))
         if _valid(year, month, day):
             _add(found, DateAnchor(f"{year:04d}-{month:02d}-{day:02d}", "day",
-                                   _role_for(text, match.start()),
+                                   ROLE_UNLABELLED,
                                    match.start(), match.end(), match.group(0)))
 
     for match in _MONTH_YEAR_RE.finditer(text):
@@ -198,10 +277,21 @@ def find_date_anchors(text: str) -> list[DateAnchor]:
         year = int(match.group(2))
         if _valid(year, month, None):
             _add(found, DateAnchor(f"{year:04d}-{month:02d}", "month",
-                                   _role_for(text, match.start()),
+                                   ROLE_UNLABELLED,
                                    match.start(), match.end(), match.group(0)))
 
-    return [found[key] for key in sorted(found)]
+    # Роли назначаются последним проходом, когда известны ВСЕ даты
+    # текста: подпись ищется в окне, не переходящем соседнюю дату ни
+    # влево, ни вправо. До 06.09.2026 роль вычислялась прямо в разборе,
+    # каждая дата в одиночку, — отсюда и «обе даты reference».
+    anchors = [found[key] for key in sorted(found)]
+    roled: list[DateAnchor] = []
+    for index, anchor in enumerate(anchors):
+        previous_end = anchors[index - 1].char_end if index else 0
+        next_start = anchors[index + 1].char_start if index + 1 < len(anchors) else None
+        roled.append(replace(anchor, role=_role_for(
+            text, anchor.char_start, anchor.char_end, previous_end, next_start)))
+    return roled
 
 
 def inheritable_anchor(anchors: list[DateAnchor]) -> DateAnchor | None:

@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from helm_core.knowledge.temporal import (
     ROLE_DOCUMENT, ROLE_EVENT, ROLE_PLANNED, ROLE_REFERENCE, ROLE_UNLABELLED,
     find_date_anchors, inheritable_anchor,
@@ -189,3 +191,50 @@ def test_section_header_and_material_are_events():
         ("2025-03-12", ROLE_EVENT)]
     assert _roles("Дата поступления биопсийного операционного материала 12.03.2025") == [
         ("2025-03-12", ROLE_EVENT)]
+
+
+# ── три дефекта, воспроизведённые владельцем 06.09.2026 ──────────────────
+#
+# «Ранее выявленные ошибки распознавателя остаются незакрытыми. Если они
+# ещё актуальны, исправь адресно».
+
+def test_label_on_the_right_of_the_date_is_seen():
+    """«12.03.2025 выполнено УЗИ» — распознаватель смотрел только влево
+    и такую форму не видел вовсе."""
+    anchors = find_date_anchors("12.03.2025 выполнено УЗИ.")
+
+    assert [(a.value, a.role) for a in anchors] == [("2025-03-12", "event")]
+
+
+def test_neighbouring_date_does_not_lend_its_label():
+    """Обе даты получали роль `reference`: окно подписи переходило через
+    точку и через саму первую дату."""
+    anchors = find_date_anchors("Дата рождения: 04.07.1985. Приём от 12.03.2025")
+
+    assert [(a.value, a.role) for a in anchors] == [
+        ("1985-07-04", "reference"),
+        ("2025-03-12", "event"),
+    ]
+
+
+@pytest.mark.parametrize("text", [
+    "Приём от 31.02.2025",   # такого дня не существует
+    "Приём от 29.02.2025",   # 2025 не високосный
+    "Приём от 32.01.2025",
+])
+def test_impossible_dates_are_not_anchors(text):
+    assert find_date_anchors(text) == []
+
+
+def test_a_real_leap_day_is_still_a_date():
+    """Проверка календарём, а не «месяц февраль — отбросить»."""
+    anchors = find_date_anchors("Приём от 29.02.2024")
+
+    assert [a.value for a in anchors] == ["2024-02-29"]
+
+
+def test_an_explicit_label_on_the_left_beats_a_verb_on_the_right():
+    """Подпись бланка сильнее глагола, случайно оказавшегося после числа."""
+    anchors = find_date_anchors("Дата рождения: 04.07.1985 принят в поликлинику")
+
+    assert [a.role for a in anchors] == ["reference"]
