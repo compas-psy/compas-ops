@@ -122,6 +122,22 @@ def _numbers(text: str) -> set[str]:
     return found
 
 
+#: Год как год, а не как любое четырёхзначное число. Двузначный —
+#: только внутри даты: «25.08.26» → 2026, но «26» само по себе годом не
+#: считается, иначе годом станет любой номер строки бланка.
+_YEAR_RE = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
+_SHORT_YEAR_RE = re.compile(r"(?<!\d)\d{1,2}[./-]\d{1,2}[./-](\d{2})(?!\d)")
+
+
+def _supported_years(fragments: list[str]) -> set[str]:
+    """Годы, которые источники действительно называют."""
+    years: set[str] = set()
+    for fragment in fragments:
+        years |= set(_YEAR_RE.findall(fragment))
+        years |= {f"20{short}" for short in _SHORT_YEAR_RE.findall(fragment)}
+    return years
+
+
 def ungrounded_numbers(answer: str, fragments: list[str]) -> set[str]:
     """Числа ответа, которых нет ни в одном показанном фрагменте.
 
@@ -130,15 +146,19 @@ def ungrounded_numbers(answer: str, fragments: list[str]) -> set[str]:
     из-за него владелец 07.09.2026 получил несуществующий уровень
     холестерина с честно названным источником, где этого значения нет.
 
-    Годы (четыре цифры) исключены: ответ вправе сказать «в 2026 году»,
-    когда во фрагменте стоит «25.08.26». Всё остальное — измеренные
-    величины, и они обязаны быть во фрагменте буквально.
+    Год прощается ТОЛЬКО тот, который источник действительно называет:
+    ответ вправе сказать «в 2026 году», когда во фрагменте стоит
+    «25.08.26». Прежнее правило прощало любое четырёхзначное число, и
+    через эту дыру проходили дозировка «1000 мг», значение «1250» и
+    цена — всё, что случайно оказалось в четыре знака. Год — это
+    исключение про даты, а не про длину числа.
     """
     known = set()
     for fragment in fragments:
         known |= _numbers(fragment)
+    supported = _supported_years(fragments)
     return {value for value in _numbers(answer) - known
-            if not (value.isdigit() and len(value) == 4)}
+            if not (value.isdigit() and len(value) == 4 and value in supported)}
 
 
 #: Слово ответа, которое обязано быть в источнике: латиница в русском
@@ -194,6 +214,81 @@ def ungrounded_words(answer: str, fragments: list[str]) -> set[str]:
     return {word for word in _name_like(answer) if word[:_STEM_LEN] not in known}
 
 
+#: Единицы измерения — закрытый список. Именно они отличают «значение
+#: чего-то» от номера строки, кода услуги и года: проверка привязки
+#: включается только там, где ответ утверждает измеренную величину.
+_UNITS = (r"ммоль/л|мкмоль/л|мкг/л|мг/дл|мг/л|г/л|ме/л|ед/мл|"
+          r"мм\s*рт\.?\s*ст\.?|уд/мин|ккал|"
+          r"мг|мкг|кг|мл|см|мм|%")
+_MEASUREMENT_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?(?:\s*/\s*\d+(?:[.,]\d+)?)?)\s*(" + _UNITS + r")",
+    re.IGNORECASE)
+
+
+def _sentence_head(text: str, position: int) -> str:
+    """Начало предложения до указанной позиции — там стоит название, к
+    которому относится значение."""
+    head = text[:position]
+    cut = max(head.rfind(ch) for ch in _SENTENCE_END)
+    return head[cut + 1:] if cut >= 0 else head
+
+
+def _labelled_lines(fragment: str) -> list[str]:
+    """Строки фрагмента, к каждой из которых приклеена строка-название
+    над ней, если та сама чисел не содержит.
+
+    Лабораторный бланк из PDF нередко разложен на две строки: название
+    показателя отдельно, значение отдельно. Склейка только с БЕСЧИСЛОВОЙ
+    строкой: строка, где числа есть, — это соседняя строка таблицы, и
+    заимствовать у неё название значило бы разрешить ровно ту подмену,
+    против которой вся проверка.
+    """
+    lines = fragment.splitlines()
+    result = []
+    for i, line in enumerate(lines):
+        previous = lines[i - 1] if i else ""
+        result.append(f"{previous}\n{line}" if previous and not any(
+            ch.isdigit() for ch in previous) else line)
+    return result
+
+
+def unbound_measurements(answer: str, fragments: list[str]) -> set[str]:
+    """Измеренные величины ответа, стоящие в источнике при ДРУГОМ названии.
+
+    Разница с `ungrounded_numbers()` — вся суть проверки. Та спрашивает
+    «есть ли такое число во фрагментах», эта — «чьё оно». ИЗМЕРЕНО
+    07.09.2026 на живом корпусе: на «какой у меня был холестерин в
+    последний раз» пришло «5.7 ммоль/л». Число во фрагментах было —
+    строкой «(RBC) Эритроциты: 5.45 (4.3-5.7)», то есть верхней границей
+    нормы эритроцитов. Проверка чисел это пропустила, потому что цифры
+    совпали. Настоящее значение холестерина в корпусе одно:
+    «07.10.2023 Липидный профиль (ммоль/л) Холестерин общий: 6.2».
+
+    Правило: значение с единицей измерения обязано стоять в источнике на
+    одной строке хотя бы с одним содержательным словом из того же
+    предложения ответа. Не «где-то в документе» — на строке: в таблице
+    соседняя строка это другой показатель.
+
+    Чего правило НЕ делает: не проверяет числа без единицы измерения —
+    даты, счёт, коды. Для них единицы нет, и отличить значение от номера
+    нечем. Ограничение названное, не закрытое.
+    """
+    unbound = set()
+    lines = [line for fragment in fragments for line in _labelled_lines(fragment)]
+    for match in _MEASUREMENT_RE.finditer(answer):
+        value = _numbers(match.group(1))
+        labels = {stem for stem in _stems(_sentence_head(answer, match.start()))
+                  if len(stem) >= 4}
+        if not labels:
+            continue
+        carrying = [line for line in lines if _numbers(line) & value]
+        if not carrying:
+            continue  # числа нет вовсе — это ловит ungrounded_numbers()
+        if not any(_stems(line) & labels for line in carrying):
+            unbound.add(" ".join(match.group(0).split()))
+    return unbound
+
+
 def grounded_fragments(answer: str, fragments: list[str]) -> tuple[int, ...]:
     """По каким фрагментам ответ РЕАЛЬНО собран — по содержанию, а не по
     словам модели о себе.
@@ -222,7 +317,17 @@ def grounded_fragments(answer: str, fragments: list[str]) -> tuple[int, ...]:
         scores = [sum(len(token) for token in tokens & distinctive)
                   for tokens in per_fragment]
         best = max(scores)
-        return tuple(i for i, count in enumerate(scores, start=1) if count == best)
+        # НЕ «только сильнейший»: ответ, собранный из двух документов,
+        # называл один. Точного равенства весов между двумя настоящими
+        # источниками почти не бывает, и второй молча пропадал — а
+        # владельцу показывали ответ с половиной его происхождения.
+        # Половина лучшего веса разделяет эти два случая: случайная
+        # словоформа («ссылку», вес 6) против самого адреса
+        # («www.b17.ru/eliah», вес 16) — 6 < 8, фрагмент отсеивается;
+        # два документа, каждый со своим именем или значением, весят
+        # сопоставимо и остаются оба.
+        return tuple(i for i, score in enumerate(scores, start=1)
+                     if score > 0 and score * 2 >= best)
     # Различающих слов нет — берутся фрагменты с наибольшим пересечением.
     overlaps = [len(tokens & answer_tokens) for tokens in per_fragment]
     best = max(overlaps, default=0)
@@ -256,10 +361,16 @@ class Synthesis:
     #: Номера фрагментов (1-based, как в промпте), на которые сослалась
     #: модель. Пусто при `answered=False`.
     used: tuple[int, ...] = ()
+    #: `False` — ответ БЫЛ, но не прошёл проверку. Это не то же самое,
+    #: что «модель прочитала и говорит, что ответа нет», и владельцу
+    #: показывать это одинаково нельзя: в первом случае в документах
+    #: что-то есть и мы не смогли это подтвердить, во втором — там
+    #: действительно нет ответа.
+    verified: bool = True
 
 
 #: Единственный экземпляр «прочитано, показывать нечего» — см. выше.
-_REJECTED = Synthesis(answered=False)
+_REJECTED = Synthesis(answered=False, verified=False)
 
 
 def relevant_window(question: str, fragment: str,
@@ -374,6 +485,14 @@ def parse_response(raw: str, *, fragments: list[str],
         # Не «показать с оговоркой»: число, которого нет в источнике, —
         # это и есть выдумка, а выдумка с источником хуже отказа.
         logger.warning("синтез отброшен: чисел нет в источниках: %s", sorted(invented))
+        return _REJECTED
+
+    unbound = unbound_measurements(body, sources)
+    if unbound:
+        # Число во фрагментах есть, но принадлежит другому показателю.
+        # Худший вид выдумки: она проходит проверку цифр и приходит с
+        # честно названным источником.
+        logger.warning("синтез отброшен: значения при чужом названии: %s", sorted(unbound))
         return _REJECTED
 
     unknown = ungrounded_words(body, sources)

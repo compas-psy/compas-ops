@@ -149,3 +149,33 @@ def test_a_matching_list_is_still_counted():
     found = find_enumeration("сколько у меня каналов", channels)
 
     assert found is not None and found.count == 4
+
+
+# ── список в столбик (замер 07.09.2026) ──────────────────────────────────
+
+#: Запись владельца дословно, сокращённая до четырёх строк.
+CHANNELS = """ссылки на мои каналы:
+Telegram: https://t.me/ilyamartynov_yourway
+Max: https://max.ru/id505003226577_biz
+VC.ru: https://vc.ru/id3888317
+B17.ru: https://www.b17.ru/eliah/"""
+
+
+def test_a_list_written_line_by_line_is_counted():
+    """Прогон 435: на «сколько у меня каналов» пришёл сам список, а не
+    число. `_SENTENCE_SPLIT_RE` режет текст по переводу строки, и каждая
+    строка становилась «предложением» без разделителей — верный расчёт
+    отбрасывался на самой обычной форме списка."""
+    answer = run_count("Сколько у меня каналов?", [CHANNELS])
+
+    assert answer is not None
+    assert "Насчитал 4" in answer.text
+
+
+def test_a_colon_inside_a_sentence_does_not_start_a_column_list():
+    """Граница списка — двоеточие НА КОНЦЕ строки. Иначе цитата из книги
+    снова станет списком (прогон 427)."""
+    quote = ("В результате двухлетней терапии она сказала: «У меня, конечно, "
+             "остались проблемы, но я вспоминаю, какой я была, это просто ужас!»")
+
+    assert run_count("Сколько у меня каналов?", [quote]) is None

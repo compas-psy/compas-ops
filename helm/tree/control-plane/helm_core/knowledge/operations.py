@@ -129,6 +129,37 @@ def _items_of(sentence: str) -> tuple[str, ...]:
     return ()
 
 
+def _line_list(text: str) -> Enumeration | None:
+    """Список, разложенный ПО СТРОКАМ: строка с двоеточием на конце и
+    идущие за ней непустые строки.
+
+    Без этого счёт не работал на самой обычной форме списка. ИЗМЕРЕНО
+    07.09.2026 на записи владельца «ссылки на мои каналы:» с девятью
+    строками под ней: `_SENTENCE_SPLIT_RE` режет текст по переводу
+    строки, каждая строка становилась отдельным «предложением» без
+    разделителей, и `_items_of()` не находил в них ничего. На вопрос
+    «сколько у меня каналов» исполнитель отказывался считать, и ответом
+    шёл сам список — верный расчёт был отброшен на ровном месте.
+
+    Граница та же, что и у `_items_of()`, и по той же причине: список
+    начинается после двоеточия НА КОНЦЕ строки. Двоеточие посреди фразы
+    («она сказала: „…"») границей не считается — иначе цитата снова
+    станет списком.
+    """
+    lines = [line.strip() for line in text.splitlines()]
+    for i, line in enumerate(lines):
+        if not line.endswith(":"):
+            continue
+        items: list[str] = []
+        for candidate in lines[i + 1:]:
+            if not candidate:
+                break
+            items.append(candidate)
+        if len(items) >= MIN_ITEMS:
+            return Enumeration(f"{line}\n" + "\n".join(items), tuple(items))
+    return None
+
+
 def find_enumeration(question: str, text: str) -> Enumeration | None:
     """Предложение-перечисление, ближайшее к вопросу по словам.
 
@@ -159,6 +190,13 @@ def find_enumeration(question: str, text: str) -> Enumeration | None:
         score = len(_stems(sentence) & wanted)
         if score > best_score:
             best, best_score = Enumeration(sentence.strip(), items), score
+
+    # Список в столбик — та же проверка совпадения с вопросом, что и у
+    # списка в строку: границу видно, но принадлежность вопросу решает
+    # не она.
+    column = _line_list(text)
+    if column is not None and len(_stems(column.sentence) & wanted) > best_score:
+        best = column
     return best
 
 

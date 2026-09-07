@@ -6,7 +6,8 @@
 """
 
 from helm_core.knowledge.synthesis import (build_prompt, grounded_fragments,
-                                          parse_response, ungrounded_numbers)
+                                          parse_response, unbound_measurements,
+                                          ungrounded_numbers)
 
 CHANNELS = ("ссылки на мои каналы:\n"
             "Telegram: https://t.me/ilyamartynov_yourway\n"
@@ -213,3 +214,66 @@ def test_a_fragment_without_question_words_keeps_its_beginning():
     text = "первая строка\n" + "прочее содержание\n" * 40
 
     assert relevant_window("совсем другая тема", text, width=50).startswith("первая строка")
+
+
+# ── п.4 распоряжения 07.09.2026: проверка утверждений ────────────────────
+
+def test_four_digit_number_is_checked_like_any_other():
+    """Прежнее правило прощало ЛЮБОЕ четырёхзначное число как «год», и
+    через эту дыру проходила дозировка."""
+    assert ungrounded_numbers("Принимать 1000 мг", ["Принимать 500 мг"]) == {"1000"}
+
+
+def test_year_is_forgiven_only_when_the_source_names_it():
+    assert ungrounded_numbers("Приём был в 2026 году", ["Осмотр 25.08.26"]) == set()
+    assert ungrounded_numbers("Родился в 1998 году", ["Осмотр 25.08.26"]) == {"1998"}
+
+
+#: Живой корпус владельца, прогон 437 — дословно.
+CHOLESTEROL = "07.10.2023  Липидный профиль (ммоль/л) Холестерин общий: 6.2"
+ERYTHROCYTES = ("07.10.2023  Гематологические исследования (InterSystem) СОЭ: 4 (0-15), "
+                "(RBC) Эритроциты: 5.45 (4.3-5.7),")
+
+
+def test_value_belonging_to_another_measure_is_not_grounding():
+    """Прогон 435 ответил «5.7 ммоль/л» на вопрос о холестерине. Число во
+    фрагментах было — верхней границей нормы эритроцитов."""
+    assert unbound_measurements("Уровень холестерина 5.7 ммоль/л",
+                                [CHOLESTEROL, ERYTHROCYTES]) == {"5.7 ммоль/л"}
+
+
+def test_the_real_value_passes_the_binding_check():
+    assert unbound_measurements("Уровень холестерина 6.2 ммоль/л",
+                                [CHOLESTEROL, ERYTHROCYTES]) == set()
+
+
+def test_label_on_the_line_above_still_binds_the_value():
+    """Лабораторный бланк из PDF часто разложен на две строки."""
+    assert unbound_measurements("Холестерин общий 6.2 ммоль/л",
+                                ["Холестерин общий\n6.2 ммоль/л"]) == set()
+
+
+def test_a_value_does_not_borrow_the_label_of_a_neighbouring_table_row():
+    fragment = "Холестерин общий: 6.2\nЭритроциты: 5.45"
+    assert unbound_measurements("Уровень холестерина 5.45 ммоль/л", [fragment]) \
+        == {"5.45 ммоль/л"}
+
+
+def test_rejected_answer_is_marked_unverified_not_absent():
+    """«Отклонили» и «в документах нет» — разные исходы (п.4)."""
+    rejected = parse_response("Уровень холестерина 5.7 ммоль/л ФРАГМЕНТЫ: 2",
+                              fragments=[CHOLESTEROL, ERYTHROCYTES])
+    assert rejected.answered is False
+    assert rejected.verified is False
+
+    honest = parse_response("НЕТ ОТВЕТА", fragments=[CHOLESTEROL])
+    assert honest.answered is False
+    assert honest.verified is True
+
+
+def test_an_answer_built_from_two_documents_names_both():
+    """Прежде оставался только сильнейший фрагмент, и половина
+    происхождения ответа пропадала молча."""
+    assert grounded_fragments("Безручко назначила эндокринолог осмотр",
+                              ["Врач: Безручко Дарья", "Направление: эндокринолог"]) \
+        == (1, 2)

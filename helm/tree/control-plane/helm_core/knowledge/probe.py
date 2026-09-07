@@ -42,7 +42,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .answer_format import (PERSONAL_NOT_FOUND, format_doctors, format_nearest_quote,
-                            format_nothing_answered, format_with_sources, is_quotable)
+                            format_nothing_answered, format_unverified,
+                            format_with_sources, is_quotable)
 from .embeddings import embed_texts_or_none
 from .health_schema import health_schema_configured, health_session
 from .operations import (OP_COUNT, OP_ENUMERATE, OP_VALUE, run_count,
@@ -958,8 +959,14 @@ def probe(session: Session, *, query: str, domain: str | None = None,
         # видеть, что именно было просмотрено, и иметь возможность
         # открыть это самому.
         return ProbeResult(
+            # Строка исхода остаётся LOCAL_NOT_FOUND намеренно: на неё
+            # завязан контракт платного перехода (находки его закрывают),
+            # и новое значение здесь означало бы «исход неизвестен» для
+            # плагина — то есть открытую дверь. Разводятся ТЕКСТЫ, а
+            # владелец видит именно их.
             outcome="LOCAL_NOT_FOUND", mode=KnowledgeAnswerMode.N0,
-            answer_text=format_nothing_answered([_source_label(e) for e in evidence]),
+            answer_text=(format_nothing_answered if synthesis.verified
+                         else format_unverified)([_source_label(e) for e in evidence]),
             answer_run_id=str(run_id), candidates=candidates,
             sources=[{"kind": "chunk", "source_id": item.source_id,
                       "chunk_id": item.chunk_id,
