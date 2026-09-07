@@ -15,6 +15,7 @@ from __future__ import annotations
 import pytest
 
 from helm_core.knowledge.temporal import content_date as _content_date
+from helm_core.knowledge.temporal import fact_date as _fact_date
 from helm_core.knowledge.temporal import (
     ROLE_DOCUMENT, ROLE_EVENT, ROLE_PLANNED, ROLE_REFERENCE, ROLE_UNLABELLED,
     find_date_anchors, inheritable_anchor,
@@ -260,3 +261,15 @@ def test_two_events_without_a_document_date_give_nothing():
 
 def test_birth_date_alone_is_not_the_document_date():
     assert _content_date("Дата рождения: 04.07.1985") is None
+
+
+def test_quoted_analysis_keeps_its_own_date():
+    """«Приём от 07.10.2023» внутри документа от 25.08.2026 — сведения
+    датируются 2023 годом, а не обложкой."""
+    assert _fact_date("Дата 25.08.2026 Приём от 07.10.2023: холестерин 6,2") == \
+        __import__("datetime").date(2023, 10, 7)
+
+
+def test_without_events_the_form_date_dates_the_facts():
+    assert _fact_date("Дата 23.08.2026 Липидный профиль. Холестерин 8,4") == \
+        __import__("datetime").date(2026, 8, 23)

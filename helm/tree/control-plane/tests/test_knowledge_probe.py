@@ -659,3 +659,53 @@ def test_a_document_without_a_date_is_not_dressed_up_as_dated(session, monkeypat
 
     assert "дата документа неизвестна" in seen["fragments"][0]
     assert result.answer_text.count("(") == 0 or "неизвестна" not in result.answer_text
+
+
+def test_a_consultation_quoting_an_older_analysis_is_not_the_latest(session, monkeypatch):
+    """Разбор живого ответа 07.09.2026: сортировка по дате документа
+    выбирала консультацию от 25.08, которая ПЕРЕСКАЗЫВАЕТ анализ от
+    07.10.2023, вместо самого свежего анализа. Дата сведений и дата
+    документа — разные вещи."""
+    _health_and_vector_off(monkeypatch)
+    ingest_text(session, domain="health",
+                text=("Дата 25.08.2026\nОсмотр гастроэнтеролога. Приём от 07.10.2023: "
+                      "липидный профиль, холестерин общий 6,2 ммоль/л."),
+                original_filename="консультация.pdf")
+    ingest_text(session, domain="health",
+                text="Дата 23.08.2026\nЛипидный профиль расширенный. Холестерин общий 8,4 ммоль/л.",
+                original_filename="анализ.pdf")
+    session.flush()
+
+    seen = {}
+
+    def fake_synthesis(question, fragments):
+        seen["fragments"] = fragments
+        return Synthesis(answered=True, text="Холестерин 8,4 ммоль/л.", used=(1,))
+
+    monkeypatch.setattr(probe_module, "synthesize_or_none", fake_synthesis)
+    result = probe(session, query="какой у меня холестерин был в последний раз")
+
+    assert "8,4" in seen["fragments"][0], "первым ушёл пересказ старого анализа"
+    assert result.sources[0]["original_filename"] == "анализ.pdf"
+
+
+def test_the_fragment_shows_both_dates_when_they_differ(session, monkeypatch):
+    """Модель обязана видеть, что сведения старше своего документа —
+    иначе она выберет по обложке."""
+    _health_and_vector_off(monkeypatch)
+    ingest_text(session, domain="health",
+                text=("Дата 25.08.2026\nОсмотр гастроэнтеролога. Приём от 07.10.2023: "
+                      "липидный профиль, холестерин общий 6,2 ммоль/л."),
+                original_filename="консультация.pdf")
+    session.flush()
+    seen = {}
+
+    def fake_synthesis(question, fragments):
+        seen["fragments"] = fragments
+        return Synthesis(answered=True, text="Холестерин 6,2.", used=(1,))
+
+    monkeypatch.setattr(probe_module, "synthesize_or_none", fake_synthesis)
+    probe(session, query="какой у меня холестерин")
+
+    assert "данные от 07.10.2023" in seen["fragments"][0]
+    assert "документ от 25.08.2026" in seen["fragments"][0]

@@ -52,6 +52,7 @@ from .recall import (
 )
 from .rephrase import rephrase_or_none
 from .synthesis import synthesize_or_none
+from .temporal import fact_date
 from .tenancy import bind_knowledge_user
 from ..models import (
     HealthKnowledgeChunk, HealthKnowledgeSourcePrivate, KnowledgeAnswerMode, KnowledgeAnswerRun,
@@ -167,6 +168,10 @@ class Evidence:
     #: Дата, которой датирован документ. `None` — определить не удалось;
     #: ответ обязан сказать это, а не подставить дату загрузки.
     content_date: date | None = None
+    #: Дата самих сведений во фрагменте, если она в нём написана:
+    #: пересказ чужого анализа несёт свою дату рядом с собой. Отличается
+    #: от даты документа — и именно эта разница решает, что «последнее».
+    fact_date: date | None = None
 
 
 @dataclass
@@ -400,6 +405,12 @@ def _dated_fragment(item: Evidence) -> str:
     последний результат, ни сказать, к какому числу относится значение
     — а именно этого не хватило в живом ответе владельцу 07.09.2026.
     """
+    if item.fact_date is not None and item.fact_date != item.content_date:
+        # Сведения старше своего документа: он их пересказывает.
+        # Модель обязана видеть обе даты, иначе выберет по обложке.
+        document = (f", документ от {item.content_date:%d.%m.%Y}"
+                    if item.content_date else "")
+        return f"(данные от {item.fact_date:%d.%m.%Y}{document}) {item.chunk_text}"
     if item.content_date is None:
         return f"(дата документа неизвестна) {item.chunk_text}"
     return f"(документ от {item.content_date:%d.%m.%Y}) {item.chunk_text}"
@@ -629,13 +640,18 @@ def probe(session: Session, *, query: str, domain: str | None = None,
             .where(KnowledgeSource.id.in_([uuid.UUID(e.source_id) for e in evidence]))).all())
         for item in evidence:
             item.content_date = dates.get(uuid.UUID(item.source_id))
+            # Дата сведений — из текста самого фрагмента. Консультация
+            # от 25.08 может пересказывать анализ от 07.10.2023, и для
+            # «последнего» такой фрагмент старый, а не свежий.
+            item.fact_date = fact_date(item.chunk_text)
 
     # «В последний раз», «свежий», «актуальный» — вопрос о ВРЕМЕНИ, и
     # порядок кандидатов обязан это отражать: сначала самое новое.
     # Документы без даты уходят в конец — не потому что они старые, а
     # потому что утверждать их новизну нечем.
     if spec.time.recent:
-        evidence.sort(key=lambda item: item.content_date or date.min, reverse=True)
+        evidence.sort(key=lambda item: item.fact_date or item.content_date or date.min,
+                      reverse=True)
 
     # §14.13 quality gate: без evidence выше порога бесплатного ответа
     # нет. Что делать дальше, решает ОБЛАСТЬ ВОПРОСА, а не факт пустоты.

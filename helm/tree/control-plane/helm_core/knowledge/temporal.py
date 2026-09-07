@@ -331,3 +331,32 @@ def content_date(text: str) -> date | None:
     if len(events) == 1:
         return date.fromisoformat(events[0].value)
     return None
+
+
+def fact_date(text: str) -> date | None:
+    """Дата САМИХ СВЕДЕНИЙ во фрагменте, а не документа, который их несёт.
+
+    Консультация от 25.08.2026 цитирует анализ от 07.10.2023 — и на
+    вопрос «в последний раз» такой фрагмент обязан считаться старым, а
+    не свежим. Дата документа этого не различает: она у него одна на
+    весь текст.
+
+    Берётся САМАЯ РАННЯЯ дата события во фрагменте: пересказанный чужой
+    результат несёт свою дату рядом с собой («07.10.2023 Липидный
+    профиль… Холестерин общий: …»), и именно она датирует сведения.
+    Если событий нет — дата документа, найденная в самом фрагменте.
+    Если ничего нет — `None`, и решает дата источника.
+
+    Найдено разбором живого ответа владельцу 07.09.2026: сортировка по
+    дате документа выбирала консультацию, которая пересказывала
+    предыдущий анализ, вместо самого свежего анализа.
+    """
+    anchors = find_date_anchors(text)
+    events = sorted(a.value for a in anchors
+                    if a.role == ROLE_EVENT and a.precision == "day")
+    if events:
+        return date.fromisoformat(events[0])
+    documents = [a for a in anchors if a.role == ROLE_DOCUMENT and a.precision == "day"]
+    if documents:
+        return date.fromisoformat(documents[0].value)
+    return None
