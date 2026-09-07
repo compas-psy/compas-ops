@@ -95,6 +95,13 @@ _ANAPHORA_RE = re.compile(
 #: Год: явные четыре цифры либо «в этом году». Остальные формы периода
 #: исполнитель применить не умеет — они попадают в `unsupported`.
 _EXPLICIT_YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
+#: «Последний», «свежий», «актуальный», «сейчас» — вопрос о самом новом
+#: значении, а не о любом. Отдельно от `unsupported`: это условие мы
+#: применить УМЕЕМ — порядком по дате документа.
+_RECENT_RE = re.compile(
+    r"\bв\s+последний\s+раз\b|\bпоследн\w+\b|\bсамый\s+свеж\w+|\bсвеж\w+\b|"
+    r"\bактуальн\w+\b|\bна\s+сегодня\b|\bсейчас\b|\bнедавн\w+\b|\bновейш\w+\b",
+    re.IGNORECASE)
 _THIS_YEAR_RE = re.compile(r"в\s+этом\s+году", re.IGNORECASE)
 
 
@@ -135,10 +142,15 @@ class TimeConstraint:
     #: Текст ограничения, которое применить нечем («в марте», «за
     #: последний год»). Не `None` — ответ обязан назвать его вслух.
     unsupported: str | None = None
+    #: Спрашивают о САМОМ СВЕЖЕМ: «в последний раз», «актуальный»,
+    #: «сейчас». Добавлено 07.09.2026 после живого ответа владельцу: он
+    #: спросил последний анализ, а система про время вопроса не знала
+    #: ничего и отдала первый попавшийся.
+    recent: bool = False
 
     @property
     def present(self) -> bool:
-        return self.year is not None or self.unsupported is not None
+        return self.year is not None or self.unsupported is not None or self.recent
 
 
 @dataclass(frozen=True)
@@ -200,7 +212,8 @@ def parse_time(question: str, *, today: date | None = None) -> TimeConstraint:
         year = int(match.group(1))
     elif _THIS_YEAR_RE.search(question):
         year = (today or date.today()).year
-    return TimeConstraint(year=year, unsupported=unsupported_period(question))
+    return TimeConstraint(year=year, unsupported=unsupported_period(question),
+                          recent=bool(_RECENT_RE.search(question)))
 
 
 def classify_mode(question: str, *, context: DialogueContext, intent: str) -> str:
@@ -220,12 +233,15 @@ def classify_mode(question: str, *, context: DialogueContext, intent: str) -> st
         return MODE_MEMORY
     # Вопрос о СВОЁМ документе бывает без единого притяжательного слова:
     # «что решили по подзадачам в ТЗ» — ни «мой», ни «я», а платная
-    # модель этого ТЗ всё равно не знает. Форма вопроса одна этого не
-    # различает; различает связка «спрашивают о факте» + «речь о
-    # записи». Определение («что такое ферритин») под неё не подходит:
-    # у него нет ни того, ни другого.
-    if (intent in (INTENT_LOOKUP, INTENT_DECISION, INTENT_ENUMERATE)
-            and _RECORD_WORD_RE.search(question)):
+    # модель этого ТЗ всё равно не знает. Различает связка «это вопрос»
+    # + «речь о записи».
+    #
+    # Раньше здесь требовалось ещё и распознанное намерение, и на этом
+    # проваливался «Уровень холестерина по липидному профилю?»:
+    # намерение `unknown`, слово о записи есть, а вопрос уходил в
+    # платную модель. Намерение — про то, КАКОЙ ответ считать ответом,
+    # и решать право на оплату им незачем.
+    if is_question(question) and _RECORD_WORD_RE.search(question):
         return MODE_MEMORY
     return MODE_GENERAL
 

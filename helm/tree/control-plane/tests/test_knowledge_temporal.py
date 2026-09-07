@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pytest
 
+from helm_core.knowledge.temporal import content_date as _content_date
 from helm_core.knowledge.temporal import (
     ROLE_DOCUMENT, ROLE_EVENT, ROLE_PLANNED, ROLE_REFERENCE, ROLE_UNLABELLED,
     find_date_anchors, inheritable_anchor,
@@ -238,3 +239,24 @@ def test_an_explicit_label_on_the_left_beats_a_verb_on_the_right():
     anchors = find_date_anchors("Дата рождения: 04.07.1985 принят в поликлинику")
 
     assert [a.role for a in anchors] == ["reference"]
+
+
+# ── дата самого документа ────────────────────────────────────────────────
+
+def test_document_date_is_taken_from_the_form_header():
+    assert _content_date("Направление №123 Дата 25.08.2026\nПриём проведён") == \
+        __import__("datetime").date(2026, 8, 25)
+
+
+def test_a_single_event_date_is_used_when_the_form_has_no_own_date():
+    assert _content_date("Приём от 12.03.2025, жалоб нет") == \
+        __import__("datetime").date(2025, 3, 12)
+
+
+def test_two_events_without_a_document_date_give_nothing():
+    """Выбирать между двумя приёмами было бы догадкой."""
+    assert _content_date("Приём от 12.03.2025. Приём от 20.04.2025") is None
+
+
+def test_birth_date_alone_is_not_the_document_date():
+    assert _content_date("Дата рождения: 04.07.1985") is None

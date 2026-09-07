@@ -42,6 +42,7 @@ from .health_schema import (
 from .memory import try_remember
 from .parsers import parse_file
 from .relations import note_id_for, store_relations
+from .temporal import content_date
 from .tenancy import bind_knowledge_user
 from .vault import frontmatter
 from ..models import (
@@ -261,6 +262,9 @@ def process_job(session: Session, job: KnowledgeIngestJob) -> None:
         # только через Postgres, а Vault, открытый напрямую (Obsidian,
         # SFTP), показывает неотличимые друг от друга .md-файлы — включая
         # health/client_restricted содержимое без единой видимой пометки.
+        # Та же дата документа, что и у текстового пути (ingest.py):
+        # разобранный текст появляется только здесь.
+        source.content_date = content_date(result.text)
         Path(source.source_path).parent.mkdir(parents=True, exist_ok=True)
         Path(source.source_path).write_text(_frontmatter(source) + result.text, encoding="utf-8")
 

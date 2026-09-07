@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from datetime import date
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -163,6 +164,9 @@ class Evidence:
     chunk_text: str
     original_filename: str | None
     rank: float
+    #: Дата, которой датирован документ. `None` — определить не удалось;
+    #: ответ обязан сказать это, а не подставить дату загрузки.
+    content_date: date | None = None
 
 
 @dataclass
@@ -380,6 +384,27 @@ def _health_vector_search(*, query_embedding: list[float], knowledge_user_id: uu
         ]
 
 
+def _source_label(item: Evidence) -> str:
+    """Имя источника с его датой — чтобы владелец видел, к какому числу
+    относится ответ, не открывая документ."""
+    name = item.original_filename or item.source_id
+    if item.content_date is None:
+        return name
+    return f"{name} ({item.content_date:%d.%m.%Y})"
+
+
+def _dated_fragment(item: Evidence) -> str:
+    """Фрагмент для синтеза, подписанный датой документа.
+
+    Без даты в самом фрагменте модель физически не может ни выбрать
+    последний результат, ни сказать, к какому числу относится значение
+    — а именно этого не хватило в живом ответе владельцу 07.09.2026.
+    """
+    if item.content_date is None:
+        return f"(дата документа неизвестна) {item.chunk_text}"
+    return f"(документ от {item.content_date:%d.%m.%Y}) {item.chunk_text}"
+
+
 def _compose_answer(evidence: list[Evidence]) -> tuple[str, str]:
     """Детерминированный composer (§14.12) — без LLM.
 
@@ -594,6 +619,24 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     # шапкой документа. Лексика к этому месту уже чистая (см. выше).
     evidence = [e for e in evidence if is_quotable(e.chunk_text)]
 
+    # ДАТЫ КАНДИДАТОВ. Одним запросом на всех, а не по одному на чанк:
+    # дата нужна и чтобы ответить «в последний раз», и чтобы подписать
+    # ответ числом. Health-чанки лежат в своей схеме, но строка
+    # источника — общая, поэтому запрос один и тот же.
+    if evidence:
+        dates = dict(session.execute(
+            select(KnowledgeSource.id, KnowledgeSource.content_date)
+            .where(KnowledgeSource.id.in_([uuid.UUID(e.source_id) for e in evidence]))).all())
+        for item in evidence:
+            item.content_date = dates.get(uuid.UUID(item.source_id))
+
+    # «В последний раз», «свежий», «актуальный» — вопрос о ВРЕМЕНИ, и
+    # порядок кандидатов обязан это отражать: сначала самое новое.
+    # Документы без даты уходят в конец — не потому что они старые, а
+    # потому что утверждать их новизну нечем.
+    if spec.time.recent:
+        evidence.sort(key=lambda item: item.content_date or date.min, reverse=True)
+
     # §14.13 quality gate: без evidence выше порога бесплатного ответа
     # нет. Что делать дальше, решает ОБЛАСТЬ ВОПРОСА, а не факт пустоты.
     #
@@ -635,7 +678,7 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     # (synthesis.py): ответ со ссылками на фрагменты, честное «здесь
     # ответа нет» и недоступность модели. Смешивать их нельзя: первый —
     # ответ, второй — тоже ответ, третий — незнание.
-    synthesis = synthesize_or_none(spec.question, [e.chunk_text for e in evidence])
+    synthesis = synthesize_or_none(spec.question, [_dated_fragment(e) for e in evidence])
 
     if synthesis is not None and not synthesis.answered:
         # Найденное прочитано и ответа не содержит. Для общего вопроса
@@ -654,8 +697,7 @@ def probe(session: Session, *, query: str, domain: str | None = None,
         # открыть это самому.
         return ProbeResult(
             outcome="LOCAL_NOT_FOUND", mode=KnowledgeAnswerMode.N0,
-            answer_text=format_nothing_answered([e.original_filename or e.source_id
-                                                 for e in evidence]),
+            answer_text=format_nothing_answered([_source_label(e) for e in evidence]),
             answer_run_id=str(run_id),
             sources=[{"kind": "chunk", "source_id": item.source_id,
                       "chunk_id": item.chunk_id,
@@ -668,7 +710,7 @@ def probe(session: Session, *, query: str, domain: str | None = None,
         # ответ нечем (§14.12, контракт ответа 05.09.2026).
         evidence = [evidence[i - 1] for i in synthesis.used]
         answer_text = format_with_sources(
-            synthesis.text, [e.original_filename or e.source_id for e in evidence],
+            synthesis.text, [_source_label(e) for e in evidence],
             unsupported_period=spec.time.unsupported)
         mode = KnowledgeAnswerMode.Z2
     else:

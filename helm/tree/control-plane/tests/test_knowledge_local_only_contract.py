@@ -35,6 +35,8 @@ from helm_core.knowledge.query_router import (
     AnswerPath, DoctorItem, DoctorsAnswer, Proof, QuestionIntent,
 )
 
+SOURCE_ONE = "11111111-1111-1111-1111-111111111111"
+SOURCE_TWO = "22222222-2222-2222-2222-222222222222"
 TENANT = uuid.UUID("00000000-0000-0000-0000-00000000beef")
 
 #: Плагин лежит вне пакета и в каталоге с дефисом — обычным импортом не
@@ -57,6 +59,17 @@ class _FakeSession:
 
     def add(self, row):
         self.added.append(row)
+
+    def execute(self, statement, *args, **kwargs):
+        # probe() спрашивает даты найденных документов одним запросом.
+        # Тестам этого файла корпуса не нужно — им важно решение об
+        # оплате, — поэтому запрос отвечает пусто, а не падает.
+        return _EmptyResult()
+
+
+class _EmptyResult:
+    def all(self):
+        return []
 
 
 def _stub_common(monkeypatch):
@@ -129,14 +142,14 @@ def test_structured_answer_carries_its_spans(monkeypatch):
     answer.items = [DoctorItem(
         identity_id=str(uuid.uuid4()), person="Иванов И. И.",
         specialties=["гастроэнтеролог"],
-        proofs=[Proof(source_id="src-1", window_id=4, char_start=10, char_end=42)])]
+        proofs=[Proof(source_id=SOURCE_ONE, window_id=4, char_start=10, char_end=42)])]
     monkeypatch.setattr(probe_mod, "answer_doctors_visited",
                         lambda session, *, question, knowledge_user_id: answer)
 
     result = probe_mod.probe(_FakeSession(), query="каких врачей я посещал?")
 
     assert result.mode == "S1"
-    assert result.sources == [{"kind": "span", "source_id": "src-1", "window_id": 4,
+    assert result.sources == [{"kind": "span", "source_id": SOURCE_ONE, "window_id": 4,
                                "char_start": 10, "char_end": 42}]
     assert result.answer_run_id, "нечем сцепить увиденный ответ с серверной строкой"
 
@@ -144,7 +157,7 @@ def test_structured_answer_carries_its_spans(monkeypatch):
 def test_document_answer_carries_its_chunks(monkeypatch):
     _stub_common(monkeypatch)
     monkeypatch.setattr(probe_mod, "detect_intent", lambda q: QuestionIntent.UNSUPPORTED)
-    evidence = [probe_mod.Evidence(chunk_id="c-1", source_id="src-2",
+    evidence = [probe_mod.Evidence(chunk_id="c-1", source_id=SOURCE_TWO,
                                    chunk_text="Артериальное давление 120/80 мм рт. ст.",
                                    original_filename="выписка.pdf", rank=1.0)]
     monkeypatch.setattr(probe_mod, "_lexical_search", lambda *a, **kw: evidence)
@@ -155,7 +168,7 @@ def test_document_answer_carries_its_chunks(monkeypatch):
     result = probe_mod.probe(_FakeSession(), query="какое у меня было давление?")
 
     assert result.outcome == "LOCAL_ANSWER"
-    assert result.sources == [{"kind": "chunk", "source_id": "src-2", "chunk_id": "c-1",
+    assert result.sources == [{"kind": "chunk", "source_id": SOURCE_TWO, "chunk_id": "c-1",
                                "original_filename": "выписка.pdf"}]
     assert result.answer_run_id
 
@@ -172,12 +185,12 @@ def test_unquotable_lexical_hits_do_not_block_the_vector_branch(monkeypatch):
     _stub_common(monkeypatch)
     monkeypatch.setattr(probe_mod, "detect_intent", lambda q: QuestionIntent.UNSUPPORTED)
 
-    junk = [probe_mod.Evidence(chunk_id=f"c-{i}", source_id="src-1",
+    junk = [probe_mod.Evidence(chunk_id=f"c-{i}", source_id=SOURCE_ONE,
                                chunk_text="Врач: __________________",
                                original_filename=None, rank=1.0 - i / 100)
             for i in range(probe_mod.MAX_EVIDENCE)]
     real = probe_mod.Evidence(
-        chunk_id="c-real", source_id="src-2",
+        chunk_id="c-real", source_id=SOURCE_TWO,
         chunk_text="Назначен приём препарата по одной таблетке дважды в сутки.",
         original_filename="выписка.pdf", rank=0.5)
 
@@ -199,7 +212,7 @@ def test_unquotable_lexical_hits_do_not_block_the_vector_branch(monkeypatch):
 
     assert asked_vector, "вектор снова не запросился — колчан заняла бракованная лексика"
     assert result.outcome == "LOCAL_ANSWER"
-    assert result.sources == [{"kind": "chunk", "source_id": "src-2", "chunk_id": "c-real",
+    assert result.sources == [{"kind": "chunk", "source_id": SOURCE_TWO, "chunk_id": "c-real",
                                "original_filename": "выписка.pdf"}]
     # Отбракованное не должно вернуться вторым путём.
     assert asked_vector["exclude"] == {item.chunk_id for item in junk}
@@ -211,12 +224,12 @@ def test_a_good_lexical_hit_below_the_junk_is_not_cut_off(monkeypatch):
     _stub_common(monkeypatch)
     monkeypatch.setattr(probe_mod, "detect_intent", lambda q: QuestionIntent.UNSUPPORTED)
 
-    junk = [probe_mod.Evidence(chunk_id=f"c-{i}", source_id="src-1",
+    junk = [probe_mod.Evidence(chunk_id=f"c-{i}", source_id=SOURCE_ONE,
                                chunk_text="Врач: __________________",
                                original_filename=None, rank=1.0 - i / 100)
             for i in range(probe_mod.MAX_EVIDENCE)]
     real = probe_mod.Evidence(
-        chunk_id="c-real", source_id="src-2",
+        chunk_id="c-real", source_id=SOURCE_TWO,
         chunk_text="Назначен приём препарата по одной таблетке дважды в сутки.",
         original_filename="выписка.pdf", rank=0.4)
 
@@ -241,13 +254,13 @@ def test_graph_proof_is_reported_as_an_edge_not_an_empty_span(monkeypatch):
     answer.path_used = AnswerPath.GRAPH
     answer.items = [DoctorItem(
         identity_id=str(uuid.uuid4()), person="Иванов И. И.", specialties=[],
-        proofs=[Proof(source_id="src-1", edge_id="edge-7")])]
+        proofs=[Proof(source_id=SOURCE_ONE, edge_id="edge-7")])]
     monkeypatch.setattr(probe_mod, "answer_doctors_visited",
                         lambda session, *, question, knowledge_user_id: answer)
 
     result = probe_mod.probe(_FakeSession(), query="каких врачей я посещал?")
 
-    assert result.sources == [{"kind": "edge", "source_id": "src-1", "edge_id": "edge-7"}]
+    assert result.sources == [{"kind": "edge", "source_id": SOURCE_ONE, "edge_id": "edge-7"}]
 
 
 # ── 4. Строгий local-only: пустой поиск тоже не оплачивается ─────────

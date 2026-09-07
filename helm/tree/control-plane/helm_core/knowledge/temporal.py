@@ -308,3 +308,26 @@ def inheritable_anchor(anchors: list[DateAnchor]) -> DateAnchor | None:
     """
     events = [anchor for anchor in anchors if anchor.role == ROLE_EVENT]
     return events[0] if len(events) == 1 else None
+
+
+def content_date(text: str) -> date | None:
+    """Дата САМОГО документа: когда он составлен.
+
+    Не «дата любого факта внутри» и не дата загрузки. Порядок ровно
+    такой: сначала подписанная дата документа («Дата: 25.08.2026» в
+    шапке бланка), затем единственная дата события, если документа нет.
+    Несколько событий — отказ: выбирать между ними было бы догадкой.
+
+    Нужна для двух вещей, которых без неё сделать нельзя: ответить на
+    «в последний раз» и сказать в ответе, К КАКОМУ ЧИСЛУ относится
+    значение. Найдено живым ответом владельцу 07.09.2026: на вопрос о
+    последнем анализе система не знала дат своих документов вовсе.
+    """
+    anchors = find_date_anchors(text)
+    documents = [a for a in anchors if a.role == ROLE_DOCUMENT and a.precision == "day"]
+    if documents:
+        return date.fromisoformat(documents[0].value)
+    events = [a for a in anchors if a.role == ROLE_EVENT and a.precision == "day"]
+    if len(events) == 1:
+        return date.fromisoformat(events[0].value)
+    return None

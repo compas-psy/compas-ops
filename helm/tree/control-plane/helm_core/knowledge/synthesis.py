@@ -79,6 +79,15 @@ SYSTEM_PROMPT = (
 #: символов, включая точки и слэши (адреса, коды услуг, номера).
 _TOKEN_RE = re.compile(r"[0-9a-zа-яё][0-9a-zа-яё._/\-]{3,}", re.IGNORECASE)
 
+#: ЧИСЛА проверяются отдельно и по другому правилу. Найдено на живом
+#: ответе владельцу 07.09.2026: на «какой у меня холестерин был в
+#: последний раз» пришло «8.1 ммоль/л», а в корпусе этого значения нет
+#: вовсе — ближайшее «Холестерин 6.2» от 07.10.2023. Проверка
+#: заземления его пропустила, потому что «8.1» короче четырёх символов
+#: и словом не считалась: самая ответственная часть ответа —
+#: измеренное значение — не проверялась ничем.
+_NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)?(?:\s*/\s*\d+(?:[.,]\d+)?)?")
+
 _CITATION_RE = re.compile(r"^[^\S\n]*ФРАГМЕНТЫ[^\S\n]*:[^\S\n]*([0-9][0-9,\s]*)[^\S\n]*$",
                           re.IGNORECASE | re.MULTILINE)
 _NO_ANSWER_RE = re.compile(r"НЕТ\s+ОТВЕТА", re.IGNORECASE)
@@ -86,6 +95,40 @@ _NO_ANSWER_RE = re.compile(r"НЕТ\s+ОТВЕТА", re.IGNORECASE)
 
 def _tokens(text: str) -> set[str]:
     return {match.group(0).lower().strip("._/-") for match in _TOKEN_RE.finditer(text)}
+
+
+def _numbers(text: str) -> set[str]:
+    """Числа текста в сравнимом виде: запятая → точка, пробелы убраны,
+    хвостовые нули отброшены («8,10» и «8.1» — одно число)."""
+    found = set()
+    for match in _NUMBER_RE.finditer(text):
+        raw = match.group(0).replace(",", ".").replace(" ", "")
+        parts = []
+        for part in raw.split("/"):
+            if "." in part:
+                part = part.rstrip("0").rstrip(".")
+            parts.append(part or "0")
+        found.add("/".join(parts))
+    return found
+
+
+def ungrounded_numbers(answer: str, fragments: list[str]) -> set[str]:
+    """Числа ответа, которых нет ни в одном показанном фрагменте.
+
+    Непустой результат означает, что модель ЧТО-ТО ПРИДУМАЛА: значение
+    анализа, дату, дозировку. Такой ответ показывать нельзя — именно
+    из-за него владелец 07.09.2026 получил несуществующий уровень
+    холестерина с честно названным источником, где этого значения нет.
+
+    Годы (четыре цифры) исключены: ответ вправе сказать «в 2026 году»,
+    когда во фрагменте стоит «25.08.26». Всё остальное — измеренные
+    величины, и они обязаны быть во фрагменте буквально.
+    """
+    known = set()
+    for fragment in fragments:
+        known |= _numbers(fragment)
+    return {value for value in _numbers(answer) - known
+            if not (value.isdigit() and len(value) == 4)}
 
 
 def grounded_fragments(answer: str, fragments: list[str]) -> tuple[int, ...]:
@@ -177,6 +220,13 @@ def parse_response(raw: str, *, fragments: list[str]) -> Synthesis | None:
         return None
     if _NO_ANSWER_RE.search(body) and not claimed:
         return Synthesis(answered=False)
+
+    invented = ungrounded_numbers(body, fragments)
+    if invented:
+        # Не «показать с оговоркой»: число, которого нет в источнике, —
+        # это и есть выдумка, а выдумка с источником хуже отказа.
+        logger.warning("синтез отброшен: чисел нет в источниках: %s", sorted(invented))
+        return None
 
     # Заземление по содержанию — главное, ссылки модели — уточнение.
     # Пересечение, если оно непусто: модель могла сослаться и на лишний

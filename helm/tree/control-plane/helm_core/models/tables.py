@@ -14,10 +14,12 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date as dt_date
 from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    Date,
     BigInteger, Boolean, CheckConstraint, ForeignKey, Index, Integer,
     LargeBinary, Numeric, String, Text, UniqueConstraint,
 )
@@ -405,6 +407,12 @@ class KnowledgeSource(Base):
     #: содержимое. Настоящее значение живёт в `health.knowledge_source_
     #: private.original_filename`, доступной только роли `helm_health`.
     original_filename: Mapped[str | None] = mapped_column(String(255))
+    #: Дата, которой ДАТИРОВАН сам документ (шапка бланка, дата приёма),
+    #: а не дата загрузки. Добавлена 07.09.2026: без неё вопрос «в
+    #: последний раз» отвечать нечем — все документы владельца загружены
+    #: одной пачкой, и `created_at` их не различает. `None` — дату
+    #: определить не удалось; ответ обязан сказать это, а не молчать.
+    content_date: Mapped[dt_date | None] = mapped_column(Date)
     mime_type: Mapped[str | None] = mapped_column(String(128))
     #: markitdown | docling | gigaam | manual — чем получен source_path.
     parser: Mapped[str | None] = mapped_column(String(32))

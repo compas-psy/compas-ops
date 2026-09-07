@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from .temporal import content_date
 from .semantic_pilot import source_text
 from .semantic_publish import SEMANTIC_VERSION, publish_semantic_run
 from .tenancy import bind_knowledge_user, set_current_knowledge_user
@@ -249,3 +250,42 @@ def _cli(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(_cli())
+
+
+def backfill_content_dates(session: Session, *, limit: int | None = None) -> tuple[int, int]:
+    """Проставить дату документа источникам, загруженным до 07.09.2026.
+
+    Возвращает «скольким проставили, у скольких определить не удалось».
+    Идемпотентно: берутся только источники с пустым `content_date`,
+    повтор на обработанном корпусе не делает ничего.
+
+    Нужно потому, что весь корпус владельца загружен одной пачкой:
+    без этого прохода «в последний раз» продолжало бы упорядочивать
+    документы по времени загрузки, то есть никак.
+    """
+    tenant = bind_knowledge_user(session, None)
+    sources = session.scalars(
+        select(KnowledgeSource)
+        .where(KnowledgeSource.knowledge_user_id == tenant,
+               KnowledgeSource.content_date.is_(None),
+               KnowledgeSource.status == KnowledgeStatus.ACTIVE)
+        .order_by(KnowledgeSource.created_at)
+        .limit(limit) if limit else
+        select(KnowledgeSource)
+        .where(KnowledgeSource.knowledge_user_id == tenant,
+               KnowledgeSource.content_date.is_(None),
+               KnowledgeSource.status == KnowledgeStatus.ACTIVE)
+        .order_by(KnowledgeSource.created_at)).all()
+
+    dated = 0
+    unknown = 0
+    for source in sources:
+        text = source_text(source)
+        found = content_date(text) if text else None
+        if found is None:
+            unknown += 1
+            continue
+        source.content_date = found
+        dated += 1
+    session.commit()
+    return dated, unknown

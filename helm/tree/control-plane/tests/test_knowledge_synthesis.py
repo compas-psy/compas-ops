@@ -5,7 +5,8 @@
 Качество модели меряется живьём, а не в unit-тесте.
 """
 
-from helm_core.knowledge.synthesis import build_prompt, grounded_fragments, parse_response
+from helm_core.knowledge.synthesis import (build_prompt, grounded_fragments,
+                                          parse_response, ungrounded_numbers)
 
 CHANNELS = ("ссылки на мои каналы:\n"
             "Telegram: https://t.me/ilyamartynov_yourway\n"
@@ -61,3 +62,35 @@ def test_prompt_shows_every_fragment_numbered():
 
     assert "[1]" in prompt and "[2]" in prompt and "[3]" in prompt
     assert "какие у меня каналы" in prompt
+
+
+# ── число в ответе обязано быть в источнике ──────────────────────────────
+#
+# Живой ответ владельцу 07.09.2026: «Какой у меня холестерин был в
+# последний раз?» → «8.1 ммоль/л» с честно названным источником, в
+# котором этого значения нет вовсе (разведка 396: ближайшее «Холестерин
+# 6.2» от 07.10.2023). Заземление пропустило: «8.1» короче четырёх
+# символов и словом не считалось — самая ответственная часть ответа не
+# проверялась ничем.
+
+ANALYSIS = ["Холестерин общий 6,2 ммоль/л", "Давление 120/80 мм рт. ст."]
+
+
+def test_a_value_that_is_not_in_the_evidence_is_refused():
+    assert parse_response("Уровень холестерина 8.1 ммоль/л.", fragments=ANALYSIS) is None
+
+
+def test_the_same_value_written_with_a_comma_counts_as_present():
+    result = parse_response("Уровень холестерина 6.2 ммоль/л.", fragments=ANALYSIS)
+
+    assert result is not None and result.answered
+
+
+def test_a_compound_value_is_compared_whole():
+    assert ungrounded_numbers("Давление 120/80.", ANALYSIS) == set()
+    assert ungrounded_numbers("Давление 130/90.", ANALYSIS) == {"130/90"}
+
+
+def test_a_year_may_be_named_even_if_the_document_writes_it_shortly():
+    """«25.08.26» во фрагменте и «в 2026 году» в ответе — не выдумка."""
+    assert ungrounded_numbers("Осмотр был в 2026 году", ["Дата: 25.08.26"]) == set()

@@ -592,3 +592,70 @@ def test_dialogue_context_confines_the_search_to_the_named_document(session, mon
     assert all("хирург" not in f for f in seen["fragments"]), \
         "поиск вышел за пределы названного документа"
     assert [s["original_filename"] for s in result.sources] == ["терапевт.pdf"]
+
+
+# ── «в последний раз»: ответ обязан знать даты своих документов ──────────
+#
+# Живой ответ владельцу 07.09.2026: он сдавал анализ дважды за неделю,
+# спросил последний — получил первый. Про время вопроса система не знала
+# ничего: даты документов нигде не хранились, а весь корпус загружен
+# одной пачкой, и `created_at` их не различает.
+
+def test_the_newest_document_comes_first_when_asked_for_the_latest(session, monkeypatch):
+    _health_and_vector_off(monkeypatch)
+    ingest_text(session, domain="health",
+                text="Дата 07.10.2023\nБиохимический анализ. Холестерин общий 6,2 ммоль/л.",
+                original_filename="старый.pdf")
+    ingest_text(session, domain="health",
+                text="Дата 25.08.2026\nЛипидный профиль. Холестерин общий 8,4 ммоль/л.",
+                original_filename="свежий.pdf")
+    session.flush()
+
+    seen = {}
+
+    def fake_synthesis(question, fragments):
+        seen["fragments"] = fragments
+        return Synthesis(answered=True, text="Холестерин 8,4 ммоль/л.", used=(1,))
+
+    monkeypatch.setattr(probe_module, "synthesize_or_none", fake_synthesis)
+    result = probe(session, query="какой у меня холестерин был в последний раз")
+
+    assert "25.08.2026" in seen["fragments"][0], "первым в синтез ушёл не самый свежий документ"
+    assert result.sources[0]["original_filename"] == "свежий.pdf"
+
+
+def test_the_answer_names_the_date_of_its_source(session, monkeypatch):
+    """Владелец должен видеть, к какому числу относится значение, не
+    открывая документ."""
+    _health_and_vector_off(monkeypatch)
+    ingest_text(session, domain="health",
+                text="Дата 25.08.2026\nЛипидный профиль. Холестерин общий 8,4 ммоль/л.",
+                original_filename="свежий.pdf")
+    session.flush()
+    monkeypatch.setattr(probe_module, "synthesize_or_none",
+                        lambda q, f: Synthesis(answered=True, text="Холестерин 8,4.", used=(1,)))
+
+    result = probe(session, query="какой у меня холестерин")
+
+    assert "25.08.2026" in result.answer_text
+
+
+def test_a_document_without_a_date_is_not_dressed_up_as_dated(session, monkeypatch):
+    """«Дату определить не удалось» — это ответ, а не повод подставить
+    дату загрузки."""
+    _health_and_vector_off(monkeypatch)
+    ingest_text(session, domain="health",
+                text="Липидный профиль без даты. Холестерин общий 8,4 ммоль/л.",
+                original_filename="без-даты.pdf")
+    session.flush()
+    seen = {}
+
+    def fake_synthesis(question, fragments):
+        seen["fragments"] = fragments
+        return Synthesis(answered=True, text="Холестерин 8,4.", used=(1,))
+
+    monkeypatch.setattr(probe_module, "synthesize_or_none", fake_synthesis)
+    result = probe(session, query="какой у меня холестерин")
+
+    assert "дата документа неизвестна" in seen["fragments"][0]
+    assert result.answer_text.count("(") == 0 or "неизвестна" not in result.answer_text

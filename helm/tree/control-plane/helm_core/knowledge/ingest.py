@@ -38,6 +38,7 @@ from .health_schema import health_schema_configured, is_health_domain, write_ori
 from .quotas import check_and_record_ingest, check_queue_depth, record_entry_formed
 from .relations import note_id_for, store_relations
 from .semantic_jobs import enqueue_semantic
+from .temporal import content_date
 from .tenancy import bind_knowledge_user
 from .vault import frontmatter, scope_root, write_file
 
@@ -136,6 +137,9 @@ def ingest_text(session: Session, *, domain: str, text: str,
     # тем же `frontmatter()`. Сырой файл — байт-в-байт исходный текст:
     # по совпадению его sha256 с записанным §14.15 решает, отдавать ли
     # оригинал.
+    # Дата документа — из его же текста, до всякой семантики: по ней
+    # отвечается «в последний раз» и ею подписывается ответ.
+    source.content_date = content_date(text)
     write_file(source.raw_path, text.encode("utf-8"))
     write_file(source.source_path, (frontmatter(source) + text).encode("utf-8"))
 
