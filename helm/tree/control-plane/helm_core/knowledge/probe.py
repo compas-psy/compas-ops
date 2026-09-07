@@ -45,6 +45,8 @@ from .answer_format import (PERSONAL_NOT_FOUND, format_doctors, format_nearest_q
                             format_nothing_answered, format_with_sources, is_quotable)
 from .embeddings import embed_texts_or_none
 from .health_schema import health_schema_configured, health_session
+from .operations import (OP_COUNT, OP_ENUMERATE, OP_VALUE, run_count,
+                         run_enumerate)
 from .query_router import QuestionIntent, answer_doctors_visited, detect_intent
 from .query_spec import MODE_GENERAL, DialogueContext, build_query_spec
 from .recall import (
@@ -664,24 +666,19 @@ def probe(session: Session, *, query: str, domain: str | None = None,
             include_historical=is_historical_query(query))
         if hit.rank >= MIN_RANK_SCORE
     ]
-    # РАННИЙ ВОЗВРАТ ЗАМЕТКИ ПОКА ОСТАЁТСЯ, И ЭТО НЕ НЕДОСМОТР.
+    # ЗАМЕТКА ОТДАЁТСЯ ЦЕЛИКОМ ТОЛЬКО ТАМ, ГДЕ ЦЕЛИКОМ И ПРОСИЛИ.
     #
-    # Распоряжение владельца 07.09.2026, п.2 требует его убрать: находка
-    # в памяти должна участвовать в общем ответе «с учётом запрошенной
-    # детализации». Первая половина требования выполнима сегодня —
-    # добавить заметку в общий набор кандидатов, — вторая нет: чтобы
-    # отдать из списка ОДИН пункт, ЧИСЛО пунктов или весь список,
-    # исполнителю нужны операции (п.3), которых ещё нет.
+    # Распоряжение владельца 07.09.2026, п.2: «Убери безусловный ранний
+    # возврат всей быстрой заметки. Её совпадение должно участвовать в
+    # общем ответе с учётом запрошенной детализации».
     #
-    # Половина этого требования, взятая отдельно, ломает уже принятое
-    # владельцем поведение: дословную выдачу сохранённого значения
-    # («Ссылка на ваш канал B17: …»). Без операций ответ по заметке
-    # начинает собирать модель, и байтовая точность перестаёт быть
-    # гарантией — проверено, шесть тестов памяти краснеют ровно на этом.
-    #
-    # Поэтому снятие раннего возврата идёт вместе с операциями, а не
-    # раньше их. Названо здесь, чтобы не выглядело забытым.
-    if memory_hits:
+    # «С учётом детализации» — это и есть операция. На вопрос о значении
+    # заметка и есть ответ, и отдаётся дословно: байтовая точность
+    # сохранённого («Ссылка на ваш канал B17: …») — принятое владельцем
+    # поведение, и терять её нельзя. А на «сколько» и «все» дословный
+    # текст ответом не является: там нужен пересчёт и обход набора,
+    # и заметка идёт в общий набор кандидатов наравне с документами.
+    if memory_hits and spec.operation == OP_VALUE:
         answer_text, mode = compose_memory_answer(memory_hits)
         run_id = uuid.uuid4()
         session.add(KnowledgeAnswerRun(
@@ -772,7 +769,17 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     # пять строк бланка так и продолжали бы вытеснять шестого кандидата,
     # который и есть текст.
     considered_ids = {e.chunk_id for e in lexical}
-    quotable = [e for e in lexical if is_quotable(e.chunk_text)]
+    # Заметки памяти впереди документов (§14.12 "strong exact boost"),
+    # но теперь В ОБЩЕМ наборе, а не вместо него — см. выше. Отбраковка
+    # `is_quotable` к ним не применяется: владелец записал этот текст
+    # сам, и «слишком короткий, чтобы цитировать» к его собственной
+    # заметке отношения не имеет.
+    memory_evidence = [
+        Evidence(chunk_id=f"memory:{hit.memory_id}", source_id=hit.source_id or "",
+                 chunk_text=hit.canonical_text, original_filename=None, rank=hit.rank)
+        for hit in memory_hits
+    ] if spec.operation != OP_VALUE else []
+    quotable = memory_evidence + [e for e in lexical if is_quotable(e.chunk_text)]
 
     # РАВНЫЕ ПО РАНГУ РАЗЛИЧАЮТСЯ ДАТОЙ. Несколько документов совпадают
     # с вопросом одинаково («липидный профиль» есть и в самом анализе, и
@@ -824,6 +831,45 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     # Полный набор — и отдельно от него пятёрка, которая уйдёт в модель.
     candidates = _merge_branches(quotable, vector_hits)
     evidence = candidates[:MAX_EVIDENCE]
+
+    # ── ОПЕРАЦИЯ РЕШАЕТ, ЧТО ДЕЛАТЬ С НАЙДЕННЫМ ─────────────────────
+    #
+    # Распоряжение владельца 07.09.2026, п.3. Счёт и перечисление
+    # исполняются ДЕТЕРМИНИРОВАННО и по ПОЛНОМУ набору кандидатов, а не
+    # по пятёрке, ушедшей в модель: «„Сколько" возвращает количество,
+    # рассчитанное по найденному набору», «„Все" требует обхода полного
+    # подходящего набора либо явного указания неполноты».
+    #
+    # Модель здесь не участвует вовсе: число, полученное пересчётом,
+    # выдумать нельзя. Не получилось посчитать — честный отказ ниже по
+    # общему пути, а не ближайшее число из текста.
+    if spec.operation in (OP_COUNT, OP_ENUMERATE) and candidates:
+        _attach_dates(session, candidates)
+        texts = [item.chunk_text for item in candidates]
+        if spec.operation == OP_COUNT:
+            done = run_count(spec.question, texts)
+        else:
+            done = run_enumerate(spec.question, texts,
+                                 complete=len(candidates) < CANDIDATE_LIMIT)
+        if done is not None:
+            used = [candidates[i - 1] for i in done.used]
+            run_id = uuid.uuid4()
+            session.add(KnowledgeAnswerRun(
+                id=run_id, knowledge_user_id=knowledge_user_id,
+                query_hash=query_hash(query), domain=domain,
+                mode=KnowledgeAnswerMode.Z2, paid_ai_used=False,
+                evidence_count=len(used),
+            ))
+            return ProbeResult(
+                outcome="LOCAL_ANSWER", mode=KnowledgeAnswerMode.Z2,
+                answer_text=format_with_sources(
+                    done.text, [_source_label(e) for e in used],
+                    unsupported_period=spec.time.unsupported),
+                evidence=used, candidates=candidates, answer_run_id=str(run_id),
+                sources=[{"kind": "chunk", "source_id": e.source_id,
+                          "chunk_id": e.chunk_id,
+                          "original_filename": e.original_filename}
+                         for e in used])
 
     # ДАТЫ КАНДИДАТОВ. Одним запросом на всех, а не по одному на чанк:
     # дата нужна и чтобы ответить «в последний раз», и чтобы подписать

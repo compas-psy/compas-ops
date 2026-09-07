@@ -33,6 +33,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date
 
+from .operations import OP_VALUE, detect_operation
 from .query_scope import _RECORD_WORD_RE, is_personal_data_question, is_question
 
 #: Что вопрос просит сделать. Не тема и не домен: домен решает, ГДЕ
@@ -165,6 +166,12 @@ class QuerySpec:
     time: TimeConstraint
     #: `MODE_MEMORY` | `MODE_GENERAL`. Решает право уйти в платную модель.
     mode: str
+    #: ЧТО СДЕЛАТЬ с найденным: показать значение, посчитать, перечислить
+    #: (`operations.py`). Отличается от `intent` тем, что управляет
+    #: исполнением, а не описывает ожидаемый ответ — распоряжение
+    #: владельца 07.09.2026, п.3: «В общем пути тип операции фактически
+    #: не управляет ответом».
+    operation: str = OP_VALUE
     #: Чего не хватает, чтобы вопрос вообще имел ответ. Не `None` —
     #: исполнять нечего, надо спрашивать.
     clarification: str | None = None
@@ -293,6 +300,7 @@ def build_query_spec(question: str, *, tenant_id: uuid.UUID,
         question=question,
         tenant_id=tenant_id,
         intent=intent,
+        operation=detect_operation(question),
         time=parse_time(question, today=today),
         mode=classify_mode(question, context=context, intent=intent),
         clarification=clarification,
