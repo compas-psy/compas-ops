@@ -820,15 +820,33 @@ def probe(session: Session, *, query: str, domain: str | None = None,
                                answer_text=format_unknown_source(spec.source_hint),
                                answer_run_id=str(run_id))
 
+    # ПОЛНОТА РЕШАЕТСЯ ЗДЕСЬ, ДО ВСЯКОЙ ФИЛЬТРАЦИИ.
+    #
+    # Разбор владельца 07.09.2026: «полноту нельзя определять только
+    # числом кандидатов после фильтрации». Раньше `run_enumerate` брал
+    # `complete=len(candidates) < CANDIDATE_LIMIT`, где `candidates` —
+    # то, что осталось ПОСЛЕ отбраковки `is_quotable` и переупорядочивания.
+    # Набор, обрезанный запросом на пятнадцатой записи, но похудевший
+    # отбраковкой до девяти, выглядел полным — и «все» становилось
+    # утверждением, которого у нас нет.
+    #
+    # Честный признак один: упёрлась ли хоть одна ветка поиска в свой
+    # LIMIT. Упёрлась — значит за границей могло остаться ещё.
+    branch_sizes: list[int] = []
+
+    def _branch(hits: list) -> list:
+        branch_sizes.append(len(hits))
+        return hits
+
     lexical_hits: list[Evidence] = []
     if search_public:
-        lexical_hits += _lexical_search(session, query=spec.retrieval_question, domain=domain,
-                                        knowledge_user_id=knowledge_user_id,
-                                        source_ids=focus_source_ids)
+        lexical_hits += _branch(_lexical_search(
+            session, query=spec.retrieval_question, domain=domain,
+            knowledge_user_id=knowledge_user_id, source_ids=focus_source_ids))
     if search_health:
-        lexical_hits += _health_lexical_search(query=spec.retrieval_question,
-                                               knowledge_user_id=knowledge_user_id,
-                                               source_ids=focus_source_ids)
+        lexical_hits += _branch(_health_lexical_search(
+            query=spec.retrieval_question, knowledge_user_id=knowledge_user_id,
+            source_ids=focus_source_ids))
     lexical = sorted(lexical_hits, key=lambda e: e.rank, reverse=True)
     # ОТБРАКОВКА ЛЕКСИКИ ДО РЕШЕНИЯ «КОЛЧАН ПОЛОН». Переставлено
     # 06.09.2026 по живому прогону 365: на «что там прописал врач?»
@@ -893,16 +911,16 @@ def probe(session: Session, *, query: str, domain: str | None = None,
         # прошедшее отбраковку: отбракованный чанк не должен вернуться
         # вторым путём.
         if search_public:
-            vector_hits += _vector_search(
+            vector_hits += _branch(_vector_search(
                 session, query_embedding=query_embedding, domain=domain,
                 knowledge_user_id=knowledge_user_id, exclude_chunk_ids=considered_ids,
                 source_ids=focus_source_ids,
-            )
+            ))
         if search_health:
-            vector_hits += _health_vector_search(
+            vector_hits += _branch(_health_vector_search(
                 query_embedding=query_embedding, knowledge_user_id=knowledge_user_id,
                 exclude_chunk_ids=considered_ids, source_ids=focus_source_ids,
-            )
+            ))
         # Отбраковка по векторным находкам: они тоже бывают шапкой
         # документа. Лексика к этому месту уже чистая (см. выше).
         vector_hits = [e for e in vector_hits if is_quotable(e.chunk_text)]
@@ -944,8 +962,9 @@ def probe(session: Session, *, query: str, domain: str | None = None,
         if spec.operation == OP_COUNT:
             done = run_count(spec.question, texts)
         else:
-            done = run_enumerate(spec.question, texts,
-                                 complete=len(candidates) < CANDIDATE_LIMIT)
+            done = run_enumerate(
+                spec.question, texts,
+                complete=not any(size >= CANDIDATE_LIMIT for size in branch_sizes))
         if done is not None:
             used = [candidates[i - 1] for i in done.used]
             run_id = uuid.uuid4()

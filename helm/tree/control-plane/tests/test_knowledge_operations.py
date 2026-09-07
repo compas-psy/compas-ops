@@ -6,6 +6,8 @@
 и тесты детерминированные, без подмены синтеза.
 """
 
+import uuid
+
 from sqlalchemy import select
 
 from helm_core.knowledge import probe as probe_module
@@ -15,7 +17,14 @@ from helm_core.knowledge.operations import (
     find_enumeration, run_count, run_enumerate, select_for_operation,
 )
 from helm_core.knowledge.probe import probe
+from helm_core.knowledge.tenancy import bind_knowledge_user
 from helm_core.models import KnowledgeAnswerRun
+
+
+def _lexical_of(module):
+    """Настоящая лексическая ветка до подмены — фикстура должна
+    находиться ею же, иначе тест проверяет собственную выдумку."""
+    return module._lexical_search
 
 KIT = "В дорожную аптечку кладу: ибупрофен, лоперамид, пластырь и антисептик."
 
@@ -240,3 +249,100 @@ def test_operations_without_a_required_form_keep_the_search_order():
         selection = select_for_operation(operation, "любой вопрос", texts)
         assert selection.order == (0, 1, 2)
         assert selection.found is True
+
+
+# ── «сколько» по нескольким источникам ────────────────────────────────
+#
+# Разбор владельца 07.09.2026: run_count() возвращал первое найденное
+# перечисление. Это закрывало подсчёт по одной заметке и не закрывало
+# общий вопрос — врачи из двух выписок считались по одной из них, а
+# число приходило уверенное.
+
+#: По три пункта в каждой записи: меньше трёх `_items_of()` списком не
+#: считает — граница перечисления должна быть видна, а не угадана.
+DOCTORS = ["В марте посещал врачей: Петров, Сидорова, Кузнецов.",
+           "В июне посещал врачей: Сидорова, Кузнецов, Волкова."]
+
+
+def test_count_merges_every_matching_source():
+    answer = run_count("сколько врачей я посещал", DOCTORS)
+    assert answer is not None
+    assert "Насчитал 4" in answer.text, answer.text
+    assert answer.used == (1, 2), "источник половины подсчёта потерян"
+
+
+def test_count_removes_duplicates_by_entity_not_by_string():
+    """«Сидорова» и «Кузнецов» повторяются в обеих записях.
+
+    Строгое сравнение строк дало бы шесть врачей вместо четырёх.
+    """
+    answer = run_count("сколько врачей я посещал", DOCTORS)
+    assert "Насчитал 6" not in answer.text
+
+
+def test_a_fuller_record_of_the_same_entity_wins():
+    fragments = ["Посещал врачей: Петров, Сидорова, Волкова.",
+                 "Посещал врачей: врач Петров Иван, Кузнецов, Волкова."]
+    answer = run_count("сколько врачей", fragments)
+    assert "Насчитал 4" in answer.text, answer.text
+    assert "Петров Иван" in answer.text, "осталась менее полная запись сущности"
+
+
+def test_a_single_source_answer_keeps_its_verbatim_quote():
+    answer = run_count("сколько врачей я посещал", [DOCTORS[0]])
+    assert "Дословно из записи" in answer.text
+    assert answer.used == (1,)
+
+
+def test_no_enumeration_anywhere_is_still_an_honest_none():
+    assert run_count("сколько врачей", ["Погода была хорошая."]) is None
+
+
+def test_completeness_is_decided_by_retrieval_not_by_what_survived_filtering(
+        session, monkeypatch):
+    """Полнота решается ДО фильтрации — по тому, упёрся ли поиск в лимит.
+
+    Разбор владельца 07.09.2026: «полноту нельзя определять только
+    числом кандидатов после фильтрации». Прежний признак —
+    `len(candidates) < CANDIDATE_LIMIT`, где candidates это остаток
+    ПОСЛЕ отбраковки `is_quotable` и переупорядочивания.
+
+    Ситуация ставится прямо: ветка поиска возвращает ровно свой лимит,
+    и почти всё в ней нецитируемо (меньше четырёх слов — шапки, метки).
+    До подсчёта доходят два фрагмента. Прежний признак назвал бы такой
+    ответ полным, потому что смотрел на эти два, а не на пятнадцать.
+    """
+    from helm_core.knowledge.probe import CANDIDATE_LIMIT, Evidence
+
+    ingest_text(session, domain="personal", text=KIT, original_filename="аптечка.md")
+    session.flush()
+    # Привязка тенанта — как это делает сам probe: без неё RLS не пустит
+    # прямой вызов ветки, и тест проверял бы пустоту.
+    tenant = bind_knowledge_user(session, None)
+    real = _lexical_of(probe_module)(session, query="все пункты дорожной аптечки",
+                                     domain=None, knowledge_user_id=tenant, source_ids=())
+    assert real, "фикстура не нашлась лексикой — тест проверял бы не то"
+
+    padding = [Evidence(chunk_id=str(uuid.uuid4()), source_id=real[0].source_id,
+                        chunk_text=f"Метка {i}", original_filename="метка.md",
+                        rank=0.001)
+               for i in range(CANDIDATE_LIMIT - len(real))]
+    monkeypatch.setattr(probe_module, "_lexical_search",
+                        lambda *a, **kw: list(real) + padding)
+
+    result = probe(session, query="все пункты дорожной аптечки")
+
+    assert result.outcome == "LOCAL_ANSWER"
+    assert "Показал не всё" in result.answer_text, (
+        "поиск упёрся в лимит, а ответ выдан за полный")
+
+
+def test_a_corpus_that_fits_is_not_declared_incomplete(session):
+    """Вторая половина того же правила: лишней оговорки быть не должно."""
+    ingest_text(session, domain="personal", text=KIT, original_filename="аптечка.md")
+    session.flush()
+
+    result = probe(session, query="все пункты дорожной аптечки")
+
+    assert result.outcome == "LOCAL_ANSWER"
+    assert "Показал не всё" not in result.answer_text

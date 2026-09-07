@@ -294,19 +294,87 @@ class OperationAnswer:
     used: tuple[int, ...]
 
 
+def _entity_key(item: str) -> frozenset[str]:
+    """Смысл элемента списка — набор корней его слов.
+
+    Падежи и регистр не создают новой сущности: «Аэрофлот»,
+    «Аэрофлота» и «аэрофлот» — одно и то же.
+    """
+    return frozenset(stem for stem in _stems(item) if len(stem) >= 3)
+
+
+def merge_items(groups: list[tuple[int, Enumeration]]) -> tuple[list[str], tuple[int, ...]]:
+    """Объединить перечисления нескольких источников, убрав дубли.
+
+    ДУБЛЬ ПО СМЫСЛУ, А НЕ ПО СТРОКЕ. Один элемент считается повтором
+    другого, если набор его корней ВХОДИТ в набор корней другого:
+    «Петров» и «врач Петров» — одна сущность, и остаётся более полная
+    запись. Строгое сравнение строк не убрало бы ни того, ни другого, и
+    ответ на «сколько» вырос бы вдвое на ровном месте.
+
+    ЧЕГО ПРАВИЛО НЕ ДЕЛАЕТ. Не различает однофамильцев и не знает
+    синонимов: два разных Петрова сольются в одного, а «Аэрофлот» и
+    «Победа» останутся разными, даже если это один перелёт. Ограничение
+    названное; различение личностей — работа R6, а не этой функции.
+    """
+    kept: list[tuple[frozenset[str], str]] = []
+    used: set[int] = set()
+    for index, found in groups:
+        contributed = False
+        for item in found.items:
+            key = _entity_key(item)
+            if not key:
+                continue
+            duplicate = None
+            for position, (known, text) in enumerate(kept):
+                if key <= known or known <= key:
+                    duplicate = position
+                    break
+            if duplicate is None:
+                kept.append((key, item))
+                contributed = True
+            elif len(kept[duplicate][0]) < len(key):
+                # Остаётся более полная запись той же сущности.
+                kept[duplicate] = (key, item)
+        if contributed:
+            used.add(index)
+    return [item for _key, item in kept], tuple(sorted(used))
+
+
 def run_count(question: str, fragments: list[str]) -> OperationAnswer | None:
     """«Сколько» — число, полученное пересчётом, а не пересказом.
+
+    СЧИТАЕТСЯ ВЕСЬ ПОДХОДЯЩИЙ НАБОР, А НЕ ПЕРВАЯ НАХОДКА. До 07.09.2026
+    здесь стоял `for ... : if found: return` — первый фрагмент, в котором
+    нашлось хоть какое-то перечисление, и был ответом. Это закрывало
+    подсчёт по одной заметке и не закрывало общий вопрос: врачи из двух
+    выписок, каналы из двух записей считались по одной из них, а число
+    приходило уверенное.
 
     `None` — перечисления в найденном нет, считать нечего; вызывающий
     честно говорит об этом, а не выдаёт ближайшее число из текста.
     """
+    groups = []
     for index, text in enumerate(fragments, start=1):
         found = find_enumeration(question, text)
         if found is not None:
-            return OperationAnswer(
-                text=f"Насчитал {found.count}. Дословно из записи: «{found.sentence}»",
-                used=(index,))
-    return None
+            groups.append((index, found))
+    if not groups:
+        return None
+
+    items, used = merge_items(groups)
+    if not items:
+        return None
+    if len(used) == 1:
+        index = used[0]
+        sentence = next(found.sentence for i, found in groups if i == index)
+        return OperationAnswer(
+            text=f"Насчитал {len(items)}. Дословно из записи: «{sentence}»",
+            used=used)
+    listed = "; ".join(items)
+    return OperationAnswer(
+        text=f"Насчитал {len(items)} по {len(used)} записям: {listed}",
+        used=used)
 
 
 def run_enumerate(question: str, fragments: list[str], *,
