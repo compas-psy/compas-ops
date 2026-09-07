@@ -42,8 +42,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .answer_format import (PERSONAL_NOT_FOUND, format_doctors, format_nearest_quote,
-                            format_nothing_answered, format_unverified,
-                            format_with_sources, is_quotable)
+                            format_nothing_answered, format_unknown_source,
+                            format_unverified, format_with_sources, is_quotable)
 from .embeddings import embed_texts_or_none
 from .health_schema import health_schema_configured, health_session
 from .operations import (OP_COUNT, OP_ENUMERATE, OP_VALUE, run_count,
@@ -366,6 +366,62 @@ def _vector_search(session: Session, *, query_embedding: list[float], domain: st
                 original_filename=src.original_filename, rank=float(sim))
         for chunk, src, sim in session.execute(stmt).all()
     ]
+
+
+#: По скольким первым фрагментам документ «представляется». Название и
+#: автор стоят в начале: у fb2 — строкой «# Название» и «Автор: …», у
+#: PDF — шапкой бланка. Дальше по тексту то же имя встречается в
+#: ссылках и цитатах, и считать это представлением нельзя: книга,
+#: цитирующая Фрейда, книгой Фрейда не становится.
+SOURCE_TITLE_CHUNKS = 2
+
+
+def _like(hint: str) -> str:
+    """Подстрока для ILIKE. `%` и `_` из вопроса экранируются: иначе
+    название с процентом стало бы шаблоном по всему корпусу."""
+    escaped = hint.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _sources_named(session: Session, *, hint: str, domain: str | None,
+                   knowledge_user_id: uuid.UUID) -> tuple[str, ...]:
+    """Источники, которые САМИ СЕБЯ так называют — по имени файла или по
+    началу текста.
+
+    Не по всему тексту: иначе «по книге Линде» нашло бы каждый документ,
+    где Линде упомянут. Не по словарю названий: его пришлось бы вести
+    руками, и он устаревал бы с каждой загрузкой.
+    """
+    like = _like(hint)
+    found: set[str] = set()
+    search_health = domain in (None, KnowledgeDomain.HEALTH) and health_schema_configured()
+    search_public = domain != KnowledgeDomain.HEALTH or not health_schema_configured()
+
+    if search_public:
+        found |= {str(sid) for sid in session.scalars(
+            select(KnowledgeSource.id).where(
+                KnowledgeSource.knowledge_user_id == knowledge_user_id,
+                KnowledgeSource.original_filename.ilike(like, escape="\\"))).all()}
+        found |= {str(sid) for sid in session.scalars(
+            select(KnowledgeChunk.source_id).where(
+                KnowledgeChunk.knowledge_user_id == knowledge_user_id,
+                KnowledgeChunk.ordinal < SOURCE_TITLE_CHUNKS,
+                KnowledgeChunk.text.ilike(like, escape="\\"))).all()}
+
+    if search_health:
+        with health_session(knowledge_user_id) as health:
+            found |= {str(sid) for sid in health.scalars(
+                select(HealthKnowledgeSourcePrivate.source_id).where(
+                    HealthKnowledgeSourcePrivate.knowledge_user_id == knowledge_user_id,
+                    HealthKnowledgeSourcePrivate.original_filename.ilike(
+                        like, escape="\\"))).all()}
+            found |= {str(sid) for sid in health.scalars(
+                select(HealthKnowledgeChunk.source_id).where(
+                    HealthKnowledgeChunk.knowledge_user_id == knowledge_user_id,
+                    HealthKnowledgeChunk.ordinal < SOURCE_TITLE_CHUNKS,
+                    HealthKnowledgeChunk.text.ilike(like, escape="\\"))).all()}
+
+    return tuple(sorted(found))
 
 
 def _health_lexical_search(*, query: str, knowledge_user_id: uuid.UUID,
@@ -741,15 +797,38 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     search_health = domain in (None, KnowledgeDomain.HEALTH) and health_schema_configured()
     search_public = domain != KnowledgeDomain.HEALTH or not health_schema_configured()
 
+    # ИСТОЧНИК, НАЗВАННЫЙ В САМОМ ВОПРОСЕ (п.3 распоряжения 07.09.2026:
+    # контракт запроса обязан доходить до исполнителя). Ограничение по
+    # документу в системе было, но заполнялось только из контекста
+    # разговора — «по книге Линде что такое ЭОТ?» условием не считалось
+    # вовсе и получило в ответ случайную главу той же книги.
+    #
+    # Разговор имеет приоритет: он указывает на конкретные документы
+    # прошлого ответа, а название из вопроса ещё нужно разрешить.
+    focus_source_ids = spec.focus_source_ids
+    if spec.source_hint and not focus_source_ids:
+        focus_source_ids = _sources_named(session, hint=spec.source_hint, domain=domain,
+                                          knowledge_user_id=knowledge_user_id)
+        if not focus_source_ids:
+            run_id = uuid.uuid4()
+            session.add(KnowledgeAnswerRun(
+                id=run_id, knowledge_user_id=knowledge_user_id,
+                query_hash=query_hash(query), domain=domain,
+                mode=KnowledgeAnswerMode.N0, paid_ai_used=False, evidence_count=0,
+            ))
+            return ProbeResult(outcome="LOCAL_NOT_FOUND", mode=KnowledgeAnswerMode.N0,
+                               answer_text=format_unknown_source(spec.source_hint),
+                               answer_run_id=str(run_id))
+
     lexical_hits: list[Evidence] = []
     if search_public:
         lexical_hits += _lexical_search(session, query=spec.retrieval_question, domain=domain,
                                         knowledge_user_id=knowledge_user_id,
-                                        source_ids=spec.focus_source_ids)
+                                        source_ids=focus_source_ids)
     if search_health:
         lexical_hits += _health_lexical_search(query=spec.retrieval_question,
                                                knowledge_user_id=knowledge_user_id,
-                                               source_ids=spec.focus_source_ids)
+                                               source_ids=focus_source_ids)
     lexical = sorted(lexical_hits, key=lambda e: e.rank, reverse=True)
     # ОТБРАКОВКА ЛЕКСИКИ ДО РЕШЕНИЯ «КОЛЧАН ПОЛОН». Переставлено
     # 06.09.2026 по живому прогону 365: на «что там прописал врач?»
@@ -817,12 +896,12 @@ def probe(session: Session, *, query: str, domain: str | None = None,
             vector_hits += _vector_search(
                 session, query_embedding=query_embedding, domain=domain,
                 knowledge_user_id=knowledge_user_id, exclude_chunk_ids=considered_ids,
-                source_ids=spec.focus_source_ids,
+                source_ids=focus_source_ids,
             )
         if search_health:
             vector_hits += _health_vector_search(
                 query_embedding=query_embedding, knowledge_user_id=knowledge_user_id,
-                exclude_chunk_ids=considered_ids, source_ids=spec.focus_source_ids,
+                exclude_chunk_ids=considered_ids, source_ids=focus_source_ids,
             )
         # Отбраковка по векторным находкам: они тоже бывают шапкой
         # документа. Лексика к этому месту уже чистая (см. выше).

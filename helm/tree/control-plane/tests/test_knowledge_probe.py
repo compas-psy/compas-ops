@@ -792,3 +792,83 @@ def test_the_executor_sees_more_than_the_model_does(session, monkeypatch):
     assert len(result.evidence) <= MAX_EVIDENCE, "модель видит свой бюджет"
     assert len(result.candidates) > MAX_EVIDENCE, (
         "исполнителю доступно только показанное модели — «сколько» и «все» неисполнимы")
+
+
+# ── источник, названный в самом вопросе (п.3, замер 07.09.2026) ──────────
+#
+# Живой прогон владельца: «По книге Линде что такое ЭОТ?» вернуло «Глава
+# 8. Зависть» — историю про детскую книжку о принцессе. Ограничение по
+# документу в системе было, но заполнялось только из контекста разговора.
+
+def test_a_source_named_in_the_question_confines_the_search(session, monkeypatch):
+    _health_and_vector_off(monkeypatch)
+    ingest_text(session, domain="work",
+                text="# Психологическое консультирование\nАвтор: Николай Дмитриевич Линде\n\n"
+                     "Эмоционально-образная терапия работает с образом чувства.",
+                original_filename="книга.fb2")
+    ingest_text(session, domain="work",
+                text="Эмоционально-образная терапия упоминается в конспекте семинара, "
+                     "который к книге отношения не имеет.",
+                original_filename="конспект.md")
+    session.flush()
+
+    seen = {}
+
+    def fake_synthesis(question, fragments, **_):
+        seen["fragments"] = fragments
+        return Synthesis(answered=True, text="Работа с образом чувства.", used=(1,))
+
+    monkeypatch.setattr(probe_module, "synthesize_or_none", fake_synthesis)
+    result = probe(session, query="По книге Линде что такое эмоционально-образная терапия?")
+
+    assert seen.get("fragments"), "поиск не дошёл до синтеза"
+    assert all("конспект" not in f and "семинара" not in f for f in seen["fragments"]), \
+        "поиск вышел за пределы названного источника"
+    assert [s["original_filename"] for s in result.sources] == ["книга.fb2"]
+
+
+def test_a_source_is_matched_by_how_the_document_names_itself():
+    """«Линде» нет в имени файла — оно есть в начале текста, строкой
+    «Автор: …». Документ опознаётся по тому, как он представляется."""
+    from helm_core.knowledge.query_spec import detect_source_hint
+
+    assert detect_source_hint("По книге Линде что такое ЭОТ?") == "Линде"
+    assert detect_source_hint("в книге «Психологическое консультирование» о зависти") \
+        == "Психологическое консультирование"
+    assert detect_source_hint("Какой у меня был холестерин в последний раз?") == ""
+
+
+def test_a_named_source_that_does_not_exist_is_not_answered_from_another(session, monkeypatch):
+    """Поиск по всем записям здесь хуже отказа: владелец назвал документ,
+    и ответ из другого документа — тот самый дефект, ради которого
+    ограничение и заводится."""
+    _health_and_vector_off(monkeypatch)
+    ingest_text(session, domain="health",
+                text="Приём кардиолога. Дислипидемия, рекомендована диета.",
+                original_filename="кардиолог.pdf")
+    session.flush()
+
+    # paid_allowed=True намеренно: вопрос назвал источник, значит он о
+    # данных владельца, и платный переход обязан остаться закрытым даже
+    # при разрешении вызывающего (п.5 распоряжения).
+    result = probe(session, paid_allowed=True, query="По книге Фрейда что сказано о диете?")
+
+    assert result.outcome == "LOCAL_NOT_FOUND"
+    assert "Фрейда" in result.answer_text
+    assert not result.sources
+
+
+def test_a_mentioned_author_does_not_make_the_document_theirs(session, monkeypatch):
+    """Книга, цитирующая Фрейда, книгой Фрейда не становится: имя ищется
+    в начале документа, а не по всему тексту."""
+    _health_and_vector_off(monkeypatch)
+    ingest_text(session, domain="work",
+                text="# Психологическое консультирование\nАвтор: Николай Дмитриевич Линде\n\n"
+                     "Далее в главе подробно разбирается позиция, которую занимал Фрейд.",
+                original_filename="книга.fb2")
+    session.flush()
+
+    result = probe(session, query="По книге Фрейда что сказано о позиции?")
+
+    assert result.outcome == "LOCAL_NOT_FOUND"
+    assert "Фрейда" in result.answer_text
