@@ -140,7 +140,7 @@ HEALTH_MODELS = _Models(HealthKnowledgeNode, HealthKnowledgeNodeMention, HealthK
 #: который надо знать: в графе будут лежать оба поколения узлов, а
 #: отвечать будет только текущее; уборка старых — отдельное
 #: необратимое действие, не это.
-SEMANTIC_VERSION = 3
+SEMANTIC_VERSION = 4
 
 
 @dataclass

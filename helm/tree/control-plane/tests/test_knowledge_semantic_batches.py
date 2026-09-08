@@ -297,3 +297,38 @@ def test_an_unfinished_job_is_recorded_as_running_not_waiting(session, batched_j
 
     assert process_semantic_job(session, job) is False
     assert job.status == KnowledgeIngestStatus.RUNNING
+
+
+# ── неудавшееся извлечение не отнимает у источника поиск ──────────────
+
+def test_a_source_whose_extraction_failed_stays_searchable(session, source, monkeypatch):
+    """Пункт 3 распоряжения: «Сохраняй доступ к исходному тексту, если
+    семантическое извлечение не удалось. Такой источник должен
+    оставаться доступным поиску с честным статусом обработки».
+
+    L1 и L2 — разные слои, и провал второго не обязан отнимать первый.
+    Свойство закрепляется тестом: оно держится только на том, что поиск
+    ходит в чанки, а не в граф, и одна неосторожная правка ретривера
+    отнимет у владельца доступ к собственному тексту молча.
+    """
+    from helm_core.knowledge.probe import probe
+
+    tenant = source.knowledge_user_id
+    # Коммит до падения: `process_semantic_job` откатывает свою
+    # транзакцию, и незакоммиченный источник исчез бы вместе с ней —
+    # тест проверял бы не то.
+    session.commit()
+    bind_knowledge_user(session, tenant)
+    monkeypatch.setattr(semantic_jobs, "publish_semantic_run",
+                        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("извлечение упало")))
+    job = claim_next_semantic_job(session)
+    assert job is not None
+    assert process_semantic_job(session, job) is True
+    assert job.status == KnowledgeIngestStatus.FAILED
+    session.flush()
+
+    answer = probe(session, query="что сказано в заключении о повторном визите",
+                   knowledge_user_id=tenant)
+    assert answer.outcome in ("LOCAL_ANSWER", "NEEDS_CLARIFICATION"), (
+        f"источник с провалившимся извлечением выпал из поиска: {answer.outcome}")
+    assert answer.evidence, "текст источника перестал быть доступен"

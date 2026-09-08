@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .audio import is_audio_file, transcribe_audio
+from .tables import restore_table_rows
 
 #: Пустой/почти пустой результат — явный провал извлечения, не «короткий
 #: документ». 20 символов — заведомо меньше любого осмысленного факта.
@@ -195,9 +196,17 @@ def parse_file(path: Path) -> ParseResult:
         text = _parse_fb2(path)
         return ParseResult(text=text, parser="fb2", quality_ok=_quality_ok(text))
 
-    text = _parse_with_markitdown(path)
+    # ТАБЛИЦЫ ВОССТАНАВЛИВАЮТСЯ ЗДЕСЬ, А НЕ ПРИ ПРОВЕРКЕ ОТВЕТА.
+    #
+    # Разбор владельца 07.09.2026: «Проверка на выходе не восстановит
+    # отношения, потерянные при извлечении PDF». Извлекатель
+    # разворачивает лабораторный бланк по колонкам — название, значение,
+    # единица и диапазон становятся четырьмя отдельными строками, а
+    # чанкинг режет между ними. Дальше в чанке лежит число без имени, и
+    # никакая проверка ответа его владельцу уже не вернёт.
+    text = restore_table_rows(_parse_with_markitdown(path))
     if _quality_ok(text):
         return ParseResult(text=text, parser="markitdown", quality_ok=True)
 
-    text = _parse_with_docling(path)
+    text = restore_table_rows(_parse_with_docling(path))
     return ParseResult(text=text, parser="docling", quality_ok=_quality_ok(text))
