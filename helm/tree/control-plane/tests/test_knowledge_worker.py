@@ -552,3 +552,43 @@ def test_a_spoken_note_without_an_answer_is_still_offered_for_saving(
 
     text = session.scalars(select(OutboxMessage)).one().payload_reference["text"]
     assert "1. personal" in text
+
+
+# ── намерение решает фраза, а не удача поиска ────────────────────────
+#
+# Разбор владельца 07.09.2026: «Для голосового вопроса отсутствие ответа
+# не должно автоматически превращать вопрос в предложение сохранить
+# документ». Первая версия ветки звала probe и предлагала сохранить всё,
+# на что не нашлось ответа: не найденный ответ — факт о памяти, а не о
+# том, что человек хотел сказать.
+
+def test_a_spoken_question_without_an_answer_is_not_turned_into_a_note(
+    session, tmp_path, monkeypatch
+):
+    pending = _make_voice_pending(session, tmp_path, recipient="777")
+    monkeypatch.setattr(worker_module, "transcribe_audio",
+                        lambda path: "[0s] какой у меня был холестерин в последний раз")
+
+    process_voice_pending(session, pending)
+    session.flush()
+
+    assert session.get(KnowledgePendingAttachment, pending.id) is None, (
+        "вопрос остался висеть как документ, ждущий выбора домена")
+    message = session.scalars(select(OutboxMessage)).one()
+    text = message.payload_reference["text"]
+    assert "1. personal" not in text, "вопрос превратился в предложение сохранить"
+
+
+def test_a_spoken_note_is_still_offered_for_saving(session, tmp_path, monkeypatch):
+    """Вторая половина того же правила: заметка остаётся заметкой."""
+    pending = _make_voice_pending(session, tmp_path, recipient="777")
+    monkeypatch.setattr(worker_module, "transcribe_audio",
+                        lambda path: "[0s] купить молоко хлеб и сыр по дороге домой")
+
+    process_voice_pending(session, pending)
+    session.flush()
+
+    row = session.get(KnowledgePendingAttachment, pending.id)
+    assert row is not None, "надиктованная заметка обязана дождаться выбора домена"
+    message = session.scalars(select(OutboxMessage)).one()
+    assert "1. personal" in message.payload_reference["text"]

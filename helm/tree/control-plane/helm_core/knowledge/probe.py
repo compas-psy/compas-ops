@@ -57,6 +57,8 @@ from .recall import (
 from .rephrase import rephrase_or_none
 from .synthesis import synthesize_or_none
 from .temporal import fact_date
+from .documents import detect_document_request, document_reply
+from ..config import get_settings
 from .tenancy import bind_knowledge_user
 from ..models import (
     HealthKnowledgeChunk, HealthKnowledgeSourcePrivate, KnowledgeAnswerMode, KnowledgeAnswerRun,
@@ -682,6 +684,34 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     # существовало как факт, о котором можно спросить, и ответ не мог
     # честно перечислить, что применил, а что нет.
     spec = build_query_spec(query, tenant_id=knowledge_user_id, context=context)
+
+    # §14.15 В БОТЕ: «отдай сам файл» — просьба о документе, а не вопрос
+    # о его содержании, и отвечать на неё пересказом значит не ответить.
+    #
+    # Скриншоты владельца 07.09.2026: на «отдай сам pdf последнего
+    # клинического анализа крови» приходил текст, на «отдай сам файл, а
+    # не текст» — «не нашёл». Выдача оригинала существовала только в
+    # веб-панели: `documents.py` импортировал один `api/panel.py`.
+    #
+    # Проверяется РАНЬШЕ поиска: искать по такому вопросу нечего, его
+    # предмет — файл. Документ, не названный прямо, берётся из прошлого
+    # хода разговора — ровно так владелец и спрашивал, следом за ответом.
+    document_subject = detect_document_request(query)
+    if document_subject is not None:
+        run_id = uuid.uuid4()
+        session.add(KnowledgeAnswerRun(
+            id=run_id, knowledge_user_id=knowledge_user_id,
+            query_hash=query_hash(query), domain=domain,
+            mode=KnowledgeAnswerMode.Z2, paid_ai_used=False, evidence_count=0,
+        ))
+        return ProbeResult(
+            outcome="LOCAL_ANSWER", mode=KnowledgeAnswerMode.Z2,
+            answer_text=document_reply(
+                session, subject=document_subject,
+                knowledge_user_id=knowledge_user_id,
+                panel_origin=get_settings().panel_origin,
+                fallback_source_ids=tuple(context.source_ids) if context else ()),
+            answer_run_id=str(run_id))
 
     # Уточнение — не ошибка и не пустой ответ, а третий исход. «Что там
     # прописал врач?» не имеет ответа сам по себе: «там» указывает на

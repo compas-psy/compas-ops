@@ -42,6 +42,7 @@ from .health_schema import (
 )
 from .memory import try_remember
 from .probe import probe
+from .query_scope import is_information_request
 from .parsers import parse_file
 from .relations import note_id_for, store_relations
 from .temporal import content_date
@@ -84,6 +85,16 @@ VOICE_TRANSCRIBE_FAILED_NOTICE = (
 VOICE_SAVE_FAILED_NOTICE = (
     "Голосовое расшифровал, но сохранить в память не смог — записи не "
     "осталось. Пришлите ещё раз."
+)
+
+#: Голосовой ВОПРОС, на который в записях ответа нет. Отдельный текст,
+#: потому что это отдельный факт: вопрос остался вопросом, а не стал
+#: заметкой. Разбор владельца 07.09.2026 — «отсутствие ответа не должно
+#: автоматически превращать вопрос в предложение сохранить документ».
+VOICE_QUESTION_NOT_FOUND_NOTICE = (
+    "Расшифровал как вопрос, но в ваших записях ответа на него нет.\n"
+    "Если это была заметка, а не вопрос, — скажите «Запомни» и текст, "
+    "я сохраню."
 )
 
 
@@ -229,22 +240,33 @@ def process_voice_pending(session: Session, pending: KnowledgePendingAttachment)
                 # «Запомни» → команда → вопрос к памяти; у голоса была
                 # только первая ступень.
                 #
-                # Теперь ступени те же: не команда — значит вопрос, и
-                # ответ ищется до того, как предлагать сохранение.
-                # Сохранить остаётся тем, на что ответа не нашлось.
+                # Теперь ступени те же: не команда — значит смотрим,
+                # спрашивают или диктуют.
+                #
+                # НАМЕРЕНИЕ РЕШАЕТ ФРАЗА, А НЕ УДАЧА ПОИСКА. Первая
+                # версия этой ветки звала probe и предлагала сохранить
+                # всё, на что не нашлось ответа. Разбор владельца
+                # 07.09.2026: «отсутствие ответа не должно автоматически
+                # превращать вопрос в предложение сохранить документ».
+                # Он прав и по существу: не найденный ответ — это факт о
+                # памяти, а не о том, что человек хотел сказать.
                 #
                 # Платный переход закрыт по построению: голосовое — это
                 # обращение к памяти, `paid_allowed` остаётся ложью (см.
                 # probe(), распоряжение п.5).
-                answer = probe(session, query=stripped, knowledge_user_id=tenant_id)
-                if answer.outcome in ("LOCAL_ANSWER", "NEEDS_CLARIFICATION"):
-                    # Вопрос не сохраняется — ни голосом, ни текстом:
-                    # висящий pending перехватил бы следующее сообщение
-                    # как выбор домена (живой сбой того же дня).
+                if is_information_request(stripped):
+                    answer = probe(session, query=stripped, knowledge_user_id=tenant_id)
+                    # Вопрос не сохраняется ни в каком исходе: висящий
+                    # pending перехватил бы следующее сообщение как выбор
+                    # домена (живой сбой того же дня).
                     spool_path.unlink(missing_ok=True)
                     session.delete(pending)
-                    notice = answer.answer_text
-                    reference = f"voice-answered:{pending_id}"
+                    if answer.outcome in ("LOCAL_ANSWER", "NEEDS_CLARIFICATION"):
+                        notice = answer.answer_text
+                        reference = f"voice-answered:{pending_id}"
+                    else:
+                        notice = answer.answer_text or VOICE_QUESTION_NOT_FOUND_NOTICE
+                        reference = f"voice-unanswered:{pending_id}"
                 else:
                     pending.transcript = transcript
                     notice = voice_ready_menu_text(session, pending)

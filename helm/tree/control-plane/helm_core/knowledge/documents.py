@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -170,6 +171,19 @@ def find_sources(session: Session, *, query: str, knowledge_user_id: uuid.UUID |
     if by_name:
         return [_as_candidate(s) for s in by_name[:limit]]
 
+    # ПО СЛОВАМ, А НЕ ЦЕЛОЙ ФРАЗОЙ. Люди говорят «анализ крови», а файл
+    # называется «анализ-крови-2023.pdf»: дефис вместо пробела, и целая
+    # фраза не совпадает ни с чем. Каждое слово запроса должно найтись в
+    # имени — по началу слова, чтобы «анализа» нашло «анализ».
+    words = [word[:5] for word in re.findall(r"\w{3,}", query, re.UNICODE)]
+    if words:
+        by_words = list(session.scalars(
+            base.where(*[KnowledgeSource.original_filename.ilike(f"%{word}%")
+                         for word in words])
+            .order_by(KnowledgeSource.created_at.desc()).limit(limit)).all())
+        if by_words:
+            return [_as_candidate(source) for source in by_words[:limit]]
+
     tsquery = build_or_tsquery(query)
     rank = func.max(func.ts_rank(KnowledgeChunk.tsv, tsquery, 2)).label("rank")
     rows = session.execute(
@@ -256,3 +270,86 @@ def is_sensitive(session: Session, source_id: uuid.UUID, *,
         .where(KnowledgeSource.id == source_id,
                KnowledgeSource.knowledge_user_id == tenant_id))
     return level in SENSITIVE_LEVELS
+
+# ── §14.15 в боте: «отдай сам файл» ──────────────────────────────────
+#
+# ДЕФЕКТ (скриншоты владельца 07.09.2026). На «отдай сам pdf последнего
+# клинического анализа крови» бот отвечал пересказом, а на уточнение
+# «Отдай сам файл, а не текст, как он назывался» — «не нашёл». Выдача
+# оригинала существовала только в веб-панели: `documents.py` импортировал
+# один `api/panel.py`, и у бота пути к файлу не было вовсе.
+
+#: Чем в вопросе называют сам файл, а не его содержание.
+_DOCUMENT_NOUN = (r"оригинал\w*|исходник\w*|pdf|файл\w*|документ\w*|скан\w*")
+
+#: Просьба отдать файл — это ГЛАГОЛ ПЕРЕДАЧИ рядом с таким словом.
+#: Без глагола «в документе сказано» тоже попало бы сюда, а это вопрос о
+#: содержании, и отвечать на него файлом значит не ответить.
+_DOCUMENT_REQUEST_RE = re.compile(
+    r"\b(?:отдай|отдайте|пришли|пришлите|дай|дайте|скинь|скиньте|отправь|"
+    r"отправьте|скачать|выгрузи|нужен|нужна|нужно)\b"
+    r"[^.!?]{0,40}?\b(?:" + _DOCUMENT_NOUN + r")\b",
+    re.IGNORECASE)
+
+#: Отсечка уточнений: «отдай сам файл, а не текст» — про файл, а
+#: «а не текст» уже не название документа.
+_SUBJECT_CUT_RE = re.compile(r"[,;]|\bа\s+не\b|\bкак\s+он\b", re.IGNORECASE)
+
+
+def detect_document_request(text: str) -> str | None:
+    """Просьба отдать сам файл. Возвращает, о каком документе речь.
+
+    Пустая строка — просьба есть, а документ не назван («отдай сам
+    файл» после ответа): такой случай разрешается контекстом разговора,
+    а не поиском по пустому запросу.
+    """
+    match = _DOCUMENT_REQUEST_RE.search(text or "")
+    if match is None:
+        return None
+    tail = (text[match.end():] or "").strip(" \t:—–-")
+    return _SUBJECT_CUT_RE.split(tail, maxsplit=1)[0].strip(" \t.!?—–-")
+
+
+def document_reply(session: Session, *, subject: str,
+                   knowledge_user_id: uuid.UUID | None,
+                   panel_origin: str,
+                   fallback_source_ids: tuple[str, ...] = ()) -> str:
+    """Ответ на просьбу отдать файл: имя документа и как его получить.
+
+    ССЫЛКА, А НЕ БАЙТЫ, И ЭТО НЕ ПОЛУМЕРА. §14.15 требует passkey на
+    ЛЮБОЙ оригинал — не только на чувствительный. Отправить файл в чат
+    значило бы выдать исходные байты в обход того самого правила,
+    которое панель соблюдает. Поэтому бот называет документ точно и
+    ведёт туда, где ключ спросят.
+
+    Тенант и права — те же, что в панели: `find_sources`/`read_original`
+    сами привязываются к владельцу, отдельной проверки здесь нет именно
+    поэтому.
+    """
+    candidates = find_sources(session, query=subject,
+                              knowledge_user_id=knowledge_user_id) if subject else []
+    if not candidates and fallback_source_ids:
+        # Документ не назван или назван неточно — берём тот, о котором
+        # шла речь в прошлом ходе. Ровно этот случай у владельца и был:
+        # ответ по анализу, а следом «отдай сам файл».
+        tenant = bind_knowledge_user(session, knowledge_user_id)
+        candidates = [
+            _as_candidate(source) for source in session.scalars(
+                select(KnowledgeSource).where(
+                    KnowledgeSource.knowledge_user_id == tenant,
+                    KnowledgeSource.id.in_([uuid.UUID(sid) for sid in fallback_source_ids]))
+            ).all()]
+
+    if not candidates:
+        return ("Не нашёл, какой файл отдать. Назовите документ — по имени файла "
+                "или по тому, что в нём написано.")
+    if len(candidates) > 1:
+        listed = "; ".join(
+            candidate.original_filename or "без имени" for candidate in candidates[:5])
+        return f"Подходит несколько документов: {listed}. Какой из них?"
+
+    only = candidates[0]
+    name = only.original_filename or "без имени"
+    return (f"Оригинал: {name}\n"
+            f"{panel_origin}/knowledge/sources/{only.source_id}\n"
+            "Исходный файл выдаётся только с ключом доступа — он спросится на странице.")
