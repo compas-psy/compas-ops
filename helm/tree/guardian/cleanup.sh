@@ -54,23 +54,48 @@ run docker container prune -f --filter "label=helm.disposable=true"
 
 # 4. Неиспользуемые образы старше retention. Именно `image prune -a` с
 #    фильтром времени, НЕ `system prune -a --volumes`.
+#
+#    ОТКАТУ ЭТО НЕ МЕШАЕТ — проверено по самому механизму отката
+#    (08.09.2026, распоряжение п.5). Откат схемы в `deploy.yml` это
+#    `alembic downgrade` внутри УЖЕ ЗАПУЩЕННОГО контейнера; откат кода —
+#    обычный выкат прежней ревизии, который пересобирает образ из
+#    исходников. Ни то, ни другое не берёт старый образ с диска. Точки
+#    возврата (`local-rescue-checkpoint.sh`) хранят дамп Postgres и
+#    конфигурацию, образов в них нет вовсе. Плюс фильтр `-a` удаляет
+#    только то, на чём не стоит ни один контейнер.
 log "== неиспользуемые образы старше ${IMAGE_RETENTION} =="
 run docker image prune -af --filter "until=${IMAGE_RETENTION}"
 
 # 5. Просроченные workspace и temp Hermes.
+#
+# ЧЕРЕЗ ТУ ЖЕ ОБЁРТКУ, ЧТО И ОСТАЛЬНЫЕ ШАГИ. Раньше этот шаг звал `find`
+# напрямую, в обход `run()`: при `set -e` его сбой обрывал скрипт молча,
+# а заявленный контракт («провал шага виден, не обрывает остальные,
+# делает выход ненулевым») на него не распространялся. Один шаг из пяти
+# жил по своим правилам — ровно так и возвращаются молчаливые отказы.
 log "== просроченные workspaces/temp =="
 for dir in /opt/helm-state/workspaces /opt/helm-state/temp; do
   [[ -d "$dir" ]] || continue
-  if (( APPLY )); then
-    find "$dir" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} +
-  else
-    find "$dir" -mindepth 1 -maxdepth 1 -type d -mtime +7 -printf 'DRY-RUN: rm -rf %p\n'
-  fi
+  run find "$dir" -mindepth 1 -maxdepth 1 -type d -mtime +7 -delete
 done
 
 # Named volumes не трогаются никогда и ни при каком заполнении диска.
 log "named volumes не затрагиваются (§25.6)"
 log "готово$( ((APPLY)) || echo ' (dry-run; повторите с --apply)')"
+
+# ОТМЕТКА ДЛЯ МОНИТОРИНГА. Guardian смотрит на эти два файла
+# (`check_cleanup`): по свежести первого видно, что уборка идёт, по
+# существованию второго — что последняя попытка не удалась. Без отметки
+# о неисправности уборки узнают по заполненному диску, как 07.09.2026.
+STATE_DIR=/var/lib/helm-guardian
+if (( APPLY )) && [[ -d "$STATE_DIR" ]]; then
+  if (( FAILED )); then
+    touch "$STATE_DIR/last-cleanup-failed"
+  else
+    rm -f "$STATE_DIR/last-cleanup-failed"
+    touch "$STATE_DIR/last-cleanup"
+  fi
+fi
 
 if (( FAILED )); then
   log "уборка выполнена НЕ ПОЛНОСТЬЮ: см. строки ОШИБКА выше"

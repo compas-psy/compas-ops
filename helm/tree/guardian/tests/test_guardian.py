@@ -204,3 +204,80 @@ def test_install_script_carries_the_unit_verbatim(unit):
     expected = (CLEANUP.parent / unit).read_text(encoding="utf-8")
     assert expected in INSTALL.read_text(encoding="utf-8"), \
         f"{unit} в care-service-install.sh разошёлся с guardian/{unit}"
+
+
+# ── §25.6: пропуск уборки и её ошибка видны мониторингу ──────────────
+#
+# 07.09.2026 автоочистка не работала с самого начала — таймера у неё не
+# было вовсе, — и узнали мы об этом по диску на 84%, через десять дней.
+# Служба, о неисправности которой сообщает только заполненный диск,
+# ничем не лучше отсутствующей.
+
+def test_cleanup_that_never_ran_is_critical(tmp_path):
+    check = guardian.check_cleanup(tmp_path / "last-cleanup",
+                                   tmp_path / "last-cleanup-failed", 3, 24)
+    assert check.status == guardian.CRITICAL
+    assert "не выполнялась ни разу" in check.detail
+
+
+def test_a_fresh_cleanup_is_ok(tmp_path):
+    marker = tmp_path / "last-cleanup"
+    marker.touch()
+    check = guardian.check_cleanup(marker, tmp_path / "last-cleanup-failed", 3, 24)
+    assert check.status == guardian.OK
+
+
+def test_a_stale_cleanup_warns_then_fails(tmp_path):
+    import os
+    import time
+
+    marker = tmp_path / "last-cleanup"
+    marker.touch()
+    os.utime(marker, (time.time() - 4 * 3600, time.time() - 4 * 3600))
+    assert guardian.check_cleanup(marker, tmp_path / "x", 3, 24).status == guardian.WARN
+    os.utime(marker, (time.time() - 30 * 3600, time.time() - 30 * 3600))
+    assert guardian.check_cleanup(marker, tmp_path / "x", 3, 24).status == guardian.CRITICAL
+
+
+def test_a_failed_cleanup_is_critical_even_when_fresh(tmp_path):
+    """«Убирала час назад и не смогла» — свежая и неисправная разом.
+
+    Свежесть не должна закрывать провал: это разные неисправности с
+    разными причинами — расписание против самого скрипта.
+    """
+    import os
+    import time
+
+    marker = tmp_path / "last-cleanup"
+    failed = tmp_path / "last-cleanup-failed"
+    marker.touch()
+    os.utime(marker, (time.time() - 60, time.time() - 60))
+    failed.touch()
+
+    check = guardian.check_cleanup(marker, failed, 3, 24)
+    assert check.status == guardian.CRITICAL
+    assert "с ошибкой" in check.detail
+
+
+def test_cleanup_writes_the_marker_the_monitoring_reads(tmp_path, monkeypatch):
+    """Проверка стыка: скрипт пишет ровно тот файл, который читает Guardian.
+
+    Две половины механизма живут в разных языках и разных каталогах;
+    разъехавшееся имя файла означало бы вечное «уборка не выполнялась».
+    """
+    body = CLEANUP.read_text(encoding="utf-8")
+    assert "/var/lib/helm-guardian" in body
+    assert "last-cleanup-failed" in body
+    assert "last-cleanup\"" in body or "last-cleanup'" in body
+
+
+def test_the_workspace_step_goes_through_the_same_wrapper(tmp_path):
+    """Шаг workspaces обязан подчиняться общему контракту ошибок.
+
+    Раньше он звал `find` напрямую, в обход `run()`: при set -e его сбой
+    обрывал скрипт молча, а заявленный контракт на него не
+    распространялся. Один шаг из пяти жил по своим правилам.
+    """
+    for line in _executable_lines(CLEANUP):
+        if line.startswith("find "):
+            raise AssertionError(f"шаг вызывает find мимо run(): {line}")

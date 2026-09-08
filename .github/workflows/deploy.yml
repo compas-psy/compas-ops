@@ -286,10 +286,11 @@ jobs:
           cp config/Caddyfile "$stage/Caddyfile"
           cp scripts/backup.sh scripts/restore_test.sh "$stage/"
           cp guardian/cleanup.sh "$stage/cleanup.sh"
+          cp guardian/guardian.py "$stage/guardian.py"
           cp hermes/plugins/helm-control/__init__.py "$stage/helm-control-init.py"
           tar -czf - -C "$stage" \
               helm_core migrations panel-dist docker-compose.yml Caddyfile \
-              backup.sh restore_test.sh cleanup.sh helm-control-init.py \
+              backup.sh restore_test.sh cleanup.sh guardian.py helm-control-init.py \
             | ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" 'tar -xzf - -C /tmp'
           rm -rf "$stage"
 
@@ -310,10 +311,15 @@ jobs:
             # доставлялся вовсе: на сервере лежала копия от 29.08, и
             # исправления в репозитории до неё не доходили.
             sudo mv /tmp/cleanup.sh /opt/helm/guardian/cleanup.sh
+            # guardian.py тоже: до 08.09.2026 он не доставлялся выкатом,
+            # и новая проверка (например, «уборка не идёт») осталась бы
+            # в репозитории — ровно та дыра, из-за которой уборка
+            # молчала десять дней.
+            sudo mv /tmp/guardian.py /opt/helm/guardian/guardian.py
             sudo chown -R root:root /opt/helm/control-plane/helm_core /opt/helm/control-plane/migrations \
               /opt/helm/compose/docker-compose.yml /opt/helm/config/Caddyfile \
               /opt/helm/scripts/backup.sh /opt/helm/scripts/restore_test.sh \
-              /opt/helm/guardian/cleanup.sh
+              /opt/helm/guardian/cleanup.sh /opt/helm/guardian/guardian.py
             sudo chmod -R go-w /opt/helm/control-plane/helm_core /opt/helm/control-plane/migrations
             sudo chmod 755 /opt/helm/scripts/backup.sh /opt/helm/scripts/restore_test.sh \
               /opt/helm/guardian/cleanup.sh

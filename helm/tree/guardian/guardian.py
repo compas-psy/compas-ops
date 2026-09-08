@@ -225,6 +225,32 @@ def check_backup_age(marker: Path, warn_hours: int, critical_hours: int, name: s
     return Check(name, status, round(age_hours, 1), "hours", float(warn_hours))
 
 
+def check_cleanup(marker: Path, failed_marker: Path,
+                  warn_hours: int, critical_hours: int) -> Check:
+    """Идёт ли уборка §25.6 и не падает ли она.
+
+    ЗАЧЕМ ОТДЕЛЬНАЯ ПРОВЕРКА. 07.09.2026 автоочистка не работала с
+    самого начала — таймера у неё не было вовсе, — и узнали мы об этом
+    по диску на 84%, через десять дней. Служба, о неисправности которой
+    сообщает только заполненный диск, ничем не лучше отсутствующей.
+
+    ДВА ФАКТА, А НЕ ОДИН. «Давно не убирала» и «убирала и не смогла» —
+    разные неисправности с разными причинами: первая про расписание,
+    вторая про сам скрипт. Провал закрывает свежесть: уборка, которая
+    отработала час назад с ошибкой, свежая и неисправная одновременно.
+    """
+    if failed_marker.exists() and (
+            not marker.exists() or failed_marker.stat().st_mtime > marker.stat().st_mtime):
+        return Check("cleanup_age", CRITICAL,
+                     detail="последняя уборка §25.6 завершилась с ошибкой")
+    if not marker.exists():
+        return Check("cleanup_age", CRITICAL,
+                     detail=f"{marker} отсутствует — уборка §25.6 не выполнялась ни разу")
+    age_hours = (time.time() - marker.stat().st_mtime) / 3600
+    status = CRITICAL if age_hours >= critical_hours else WARN if age_hours >= warn_hours else OK
+    return Check("cleanup_age", status, round(age_hours, 1), "hours", float(warn_hours))
+
+
 # ── устойчивость порогов ────────────────────────────────────────────────────
 
 def load_recent(metric: str, samples: int) -> list[float]:
@@ -329,6 +355,12 @@ def run_once(targets: dict | None = None) -> Report:
         Path("/var/lib/helm-guardian/last-backup"), 26, 50, "backup_age"))
     report.checks.append(check_backup_age(
         Path("/var/lib/helm-guardian/last-restore-test"), 24 * 8, 24 * 14, "restore_test_age"))
+    # Таймер уборки ходит каждый час: три часа молчания — уже сбой
+    # расписания, сутки — отказ. Пороги те же по смыслу, что у бэкапа:
+    # кратно периоду, а не «на глаз».
+    report.checks.append(check_cleanup(
+        Path("/var/lib/helm-guardian/last-cleanup"),
+        Path("/var/lib/helm-guardian/last-cleanup-failed"), 3, 24))
     for host in targets.get("tls_hosts", []):
         report.checks.append(check_tls(host))
 
