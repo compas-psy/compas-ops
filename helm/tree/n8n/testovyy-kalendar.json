@@ -1,0 +1,48 @@
+{
+  "name": "Тестовый календарь",
+  "active": false,
+  "settings": { "executionOrder": "v1", "timezone": "Europe/Moscow" },
+  "nodes": [
+    {
+      "id": "b2000000-0000-4000-8000-000000000001",
+      "name": "Отдать тестовый ICS",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "test-calendar",
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "test-calendar",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "notes": "Существует ради проверки сценария плана дня без доступа к настоящему календарю. Выключается одним переключателем — тем и проверяется ветка «календарь недоступен»."
+    },
+    {
+      "id": "b2000000-0000-4000-8000-000000000002",
+      "name": "Прочитать файл",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "parameters": {
+        "jsCode": "// Даты подставляются на лету: календарь с зашитым числом\n// протух бы назавтра и проверял бы не то.\nconst pad = (n) => String(n).padStart(2, '0');\nconst now = new Date();\nconst d = (offset) => {\n  const x = new Date(now);\n  x.setDate(x.getDate() + offset);\n  return `${x.getFullYear()}${pad(x.getMonth() + 1)}${pad(x.getDate())}`;\n};\nconst ics = [\n  'BEGIN:VCALENDAR',\n  'VERSION:2.0',\n  'PRODID:-//HELM//Тестовый календарь//RU',\n  'BEGIN:VEVENT',\n  'UID:helm-test-1@cmpas.ru',\n  `DTSTART;TZID=Europe/Moscow:${d(0)}T100000`,\n  'SUMMARY:Созвон по проекту',\n  'END:VEVENT',\n  'BEGIN:VEVENT',\n  'UID:helm-test-2@cmpas.ru',\n  `DTSTART;TZID=Europe/Moscow:${d(0)}T150000`,\n  'SUMMARY:Забрать анализы',\n  'END:VEVENT',\n  'BEGIN:VEVENT',\n  'UID:helm-test-3@cmpas.ru',\n  `DTSTART;VALUE=DATE:${d(1)}`,\n  'SUMMARY:Завтрашнее событие — в сегодняшний план попасть не должно',\n  'END:VEVENT',\n  'END:VCALENDAR',\n].join('\\r\\n');\nreturn [{ json: { data: ics } }];\n"
+      }
+    },
+    {
+      "id": "b2000000-0000-4000-8000-000000000003",
+      "name": "Ответить",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [440, 0],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.data }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Отдать тестовый ICS": { "main": [[{ "node": "Прочитать файл", "type": "main", "index": 0 }]] },
+    "Прочитать файл": { "main": [[{ "node": "Ответить", "type": "main", "index": 0 }]] }
+  }
+}
