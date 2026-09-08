@@ -35,7 +35,7 @@ print(json.dumps({"update_type": "message_created", "message": {
     "body": {"mid": sys.argv[2], "seq": 1, "text": sys.argv[1]}}}))
 ' "$text" "$mid" "$(sudo cat /etc/helm/secrets/max_owner_id 2>/dev/null || echo 0)" "$CHAT_ID")
   sudo docker compose exec -T helm-core python3 - "$payload" "$secret" <<'PYEOF'
-import json, sys, urllib.request
+import sys, urllib.request
 payload, secret = sys.argv[1], sys.argv[2]
 req = urllib.request.Request("http://127.0.0.1:8080/hooks/max",
                              data=payload.encode(), method="POST",
@@ -43,22 +43,49 @@ req = urllib.request.Request("http://127.0.0.1:8080/hooks/max",
                                       "X-Max-Bot-Api-Secret": secret})
 try:
     with urllib.request.urlopen(req, timeout=180) as resp:
-        print(f"    исход: {resp.read().decode()[:120]}")
+        print(resp.read().decode()[:300])
 except Exception as exc:  # noqa: BLE001 — диагностика приёмки
-    print(f"    ОШИБКА: {type(exc).__name__}: {exc}")
+    print(f'{{"status": "ОШИБКА", "detail": "{type(exc).__name__}: {exc}"}}')
 PYEOF
+}
+
+# СВЯЗЬ «ЗАПРОС → ОТВЕТ» СТРОИТСЯ ПО ССЫЛКЕ, А НЕ ПО ВРЕМЕНИ.
+#
+# Прогон 467: отчёт брал из очереди последнюю строку по `next_attempt_at`
+# и подставил ОДИН И ТОТ ЖЕ текст под пять разных запросов. Это время
+# следующей попытки доставки, его двигает доставщик; колонки времени
+# создания у `outbox` нет вовсе. Ссылка (`hooks.py`) несёт `task_id`
+# ответа или `message_id` запроса — по ней строка находится точно.
+reference_for() {
+  local response="$1" mid="$2"
+  local status task_id
+  status=$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null)
+  task_id=$(printf '%s' "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("task_id",""))' 2>/dev/null)
+  case "$status" in
+    local_answer|local_not_found|needs_clarification) echo "knowledge-probe:$task_id" ;;
+    remember_*) echo "remember-${status#remember_}:$mid" ;;
+    chat_mode)  echo "chat-mode:$mid" ;;
+    *)          echo "" ;;
+  esac
 }
 
 ask() {
   local text="$1"
+  local mid="ua.$(date +%s%N)"
   echo
   echo "── ЗАПРОС: $text"
   local start; start=$(date +%s)
-  post_max "$text" "ua.$(date +%s%N)"
+  local response; response=$(post_max "$text" "$mid" | tr -d '\r')
+  echo "    исход: $response"
   echo "    заняло: $(( $(date +%s) - start )) с"
+  local reference; reference=$(reference_for "$response" "$mid")
   echo "    ОТВЕТ, который увидит владелец:"
+  if [ -z "$reference" ]; then
+    echo "     (исход не порождает исходящего сообщения)"
+    return
+  fi
   sudo docker compose exec -T helm-core \
-    python3 -m helm_core.knowledge.acceptance_probe outbox 1
+    python3 -m helm_core.knowledge.acceptance_probe outbox "$CHAT_ID" "$reference"
 }
 
 echo
@@ -77,9 +104,9 @@ for marker in last-cleanup last-cleanup-failed; do
   fi
 done
 sudo docker compose exec -T helm-core python3 -c "
-import json, urllib.request
-with urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=10) as r:
-    print('  health:', r.read().decode()[:200])
+import urllib.request
+with urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=10) as r:
+    print('  healthz:', r.read().decode()[:200])
 " 2>&1 | tail -2
 
 echo

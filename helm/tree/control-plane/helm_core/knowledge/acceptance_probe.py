@@ -22,6 +22,7 @@ from ..models import (
     KnowledgeAnswerRun, KnowledgeSemanticJob, KnowledgeSemanticRun,
     KnowledgeSemanticWindow, KnowledgeSource, OutboxMessage,
 )
+from ..outbox import dedup_key
 from .semantic_jobs import request_rederivation
 from .semantic_publish import SEMANTIC_VERSION
 from .tenancy import bind_knowledge_user
@@ -138,7 +139,7 @@ def paid() -> None:
 
 
 def outbox() -> None:
-    """ЧТО ИМЕННО БОТ ОТПРАВИЛ ВЛАДЕЛЬЦУ — дословно.
+    """ЧТО ИМЕННО БОТ ОТПРАВИЛ В ОТВЕТ НА ЭТОТ ЗАПРОС — дословно.
 
     Распоряжение владельца 07.09.2026, п.7: «Показывай фактический
     запрос, ответ, источник». Код ответа HTTP этого не показывает: в
@@ -146,20 +147,32 @@ def outbox() -> None:
     там нет вовсе. Настоящий ответ — тот, что лёг в очередь исходящих:
     его и увидит владелец в боте.
 
-    Второй аргумент — сколько последних сообщений напечатать.
+    СТРОКА ИЩЕТСЯ ПО КЛЮЧУ ДЕДУПЛИКАЦИИ, А НЕ ПО ВРЕМЕНИ. Прогон 467:
+    отчёт брал последние строки очереди с сортировкой по
+    `next_attempt_at` — и подставил ОДИН И ТОТ ЖЕ текст под пять разных
+    запросов. `next_attempt_at` — время СЛЕДУЮЩЕЙ попытки доставки, его
+    двигает доставщик; к порядку появления ответов оно отношения не
+    имеет, а колонки времени создания у `outbox` нет вовсе.
+
+    Ключ дедупликации считается ровно от того, чем сообщение и
+    поставлено в очередь: канал, получатель и ссылка (`hooks.py`).
+    Ссылка несёт `task_id` ответа или `message_id` запроса, то есть
+    связь «запрос → ответ» получается точной, а не вероятной.
+
+    Аргументы: получатель и ссылка (например
+    `knowledge-probe:<task_id>` или `remember-stored:<mid>`).
     """
-    limit = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+    recipient, reference = sys.argv[2], sys.argv[3]
     session = _session()
-    rows = session.scalars(
-        select(OutboxMessage).order_by(OutboxMessage.next_attempt_at.desc()).limit(limit)).all()
-    if not rows:
-        print("  исходящих нет")
-    for row in reversed(rows):
-        text = (row.payload_reference or {}).get("text", "")
-        print(f"  ── {row.next_attempt_at} · {row.channel} → {row.recipient} "
-              f"· {row.status}")
-        for line in (text or "(пусто)").splitlines():
-            print(f"     {line}")
+    key = dedup_key("max", recipient, reference)
+    row = session.scalars(
+        select(OutboxMessage).where(OutboxMessage.dedup_key == key)).one_or_none()
+    if row is None:
+        print(f"     (в очереди нет строки по ссылке {reference})")
+        return
+    text = (row.payload_reference or {}).get("text") or "(пусто)"
+    for line in text.splitlines():
+        print(f"     {line}")
 
 
 if __name__ == "__main__":
