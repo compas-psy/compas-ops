@@ -27,3 +27,4 @@ for fingerprint, count in rows:
     mark = "НЫНЕШНИЙ" if fingerprint == current else ("НЕ РАЗБИРАЛСЯ" if fingerprint is None else "прежний")
     shown = (fingerprint or "NULL")[:16]
     print(f"  {shown:20} {mark:15} источников {count}")
+PYEOF
