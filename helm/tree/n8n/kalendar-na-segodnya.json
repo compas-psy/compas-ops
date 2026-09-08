@@ -1,0 +1,66 @@
+{
+  "name": "Календарь на сегодня",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Moscow",
+    "saveManualExecutions": true
+  },
+  "nodes": [
+    {
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "Спросили события",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "calendar-today",
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "calendar-today",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "notes": "Спрашивает HELM, а не n8n сам присылает. Так секрет HELM в n8n не попадает вовсе."
+    },
+    {
+      "id": "a1000000-0000-4000-8000-000000000002",
+      "name": "Забрать календарь",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "url": "={{ $env.HELM_CALENDAR_ICS_URL }}",
+        "options": {
+          "timeout": 15000,
+          "response": { "response": { "responseFormat": "text" } }
+        }
+      },
+      "notes": "Единственное место, где нужен настоящий доступ. Пока его нет — сюда ставится файл тестового календаря (см. ранбук). Ошибка не обрывает сценарий: план дня без календаря лучше отсутствия плана."
+    },
+    {
+      "id": "a1000000-0000-4000-8000-000000000003",
+      "name": "События на сегодня",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0],
+      "parameters": {
+        "jsCode": "// Разбор ICS без библиотек: формат построчный, а тянуть зависимость\n// ради него — лишнее (§2 CLAUDE.md).\n//\n// ЧЕСТНЫЙ ОТКАЗ ВМЕСТО ПУСТОГО СПИСКА. Календарь не ответил — это НЕ\n// «сегодня ничего нет». Разница видна владельцу: пустой день и\n// недоступный календарь — разные сообщения.\nconst input = $input.first().json;\nconst body = typeof input.data === 'string' ? input.data : (input.body || '');\nif (!body || input.error) {\n  return [{ json: { ok: false, reason: 'календарь недоступен', events: [] } }];\n}\n\nconst today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' });\nconst unfolded = body.replace(/\\r\\n[ \\t]/g, '').split(/\\r?\\n/);\nconst events = [];\nlet current = null;\nfor (const line of unfolded) {\n  if (line === 'BEGIN:VEVENT') { current = {}; continue; }\n  if (line === 'END:VEVENT') {\n    if (current && current.date === today) {\n      events.push({ time: current.time || '', summary: current.summary || '(без названия)' });\n    }\n    current = null;\n    continue;\n  }\n  if (!current) continue;\n  const colon = line.indexOf(':');\n  if (colon < 0) continue;\n  const name = line.slice(0, colon).split(';')[0];\n  const value = line.slice(colon + 1);\n  if (name === 'SUMMARY') current.summary = value;\n  if (name === 'DTSTART') {\n    current.date = `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;\n    current.time = value.length > 8 ? `${value.slice(9, 11)}:${value.slice(11, 13)}` : '';\n  }\n}\nevents.sort((a, b) => a.time.localeCompare(b.time));\nreturn [{ json: { ok: true, date: today, events } }];\n"
+      }
+    },
+    {
+      "id": "a1000000-0000-4000-8000-000000000004",
+      "name": "Ответить HELM",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [660, 0],
+      "parameters": { "respondWith": "allIncomingItems", "options": {} }
+    }
+  ],
+  "connections": {
+    "Спросили события": { "main": [[{ "node": "Забрать календарь", "type": "main", "index": 0 }]] },
+    "Забрать календарь": { "main": [[{ "node": "События на сегодня", "type": "main", "index": 0 }]] },
+    "События на сегодня": { "main": [[{ "node": "Ответить HELM", "type": "main", "index": 0 }]] }
+  }
+}
