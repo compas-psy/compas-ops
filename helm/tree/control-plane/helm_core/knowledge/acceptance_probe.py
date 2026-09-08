@@ -20,7 +20,7 @@ from sqlalchemy.orm import sessionmaker
 from ..config import get_settings
 from ..models import (
     KnowledgeAnswerRun, KnowledgeSemanticJob, KnowledgeSemanticRun,
-    KnowledgeSemanticWindow, KnowledgeSource,
+    KnowledgeSemanticWindow, KnowledgeSource, OutboxMessage,
 )
 from .semantic_jobs import request_rederivation
 from .semantic_publish import SEMANTIC_VERSION
@@ -137,5 +137,31 @@ def paid() -> None:
     print(f"  ИТОГО платных вызовов за час: {total_paid}")
 
 
+def outbox() -> None:
+    """ЧТО ИМЕННО БОТ ОТПРАВИЛ ВЛАДЕЛЬЦУ — дословно.
+
+    Распоряжение владельца 07.09.2026, п.7: «Показывай фактический
+    запрос, ответ, источник». Код ответа HTTP этого не показывает: в
+    нём только исход (`local_answer`), а текста, источников и оговорок
+    там нет вовсе. Настоящий ответ — тот, что лёг в очередь исходящих:
+    его и увидит владелец в боте.
+
+    Второй аргумент — сколько последних сообщений напечатать.
+    """
+    limit = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+    session = _session()
+    rows = session.scalars(
+        select(OutboxMessage).order_by(OutboxMessage.next_attempt_at.desc()).limit(limit)).all()
+    if not rows:
+        print("  исходящих нет")
+    for row in reversed(rows):
+        text = (row.payload_reference or {}).get("text", "")
+        print(f"  ── {row.next_attempt_at} · {row.channel} → {row.recipient} "
+              f"· {row.status}")
+        for line in (text or "(пусто)").splitlines():
+            print(f"     {line}")
+
+
 if __name__ == "__main__":
-    {"state": state, "rederive": rederive, "paid": paid}[sys.argv[1]]()
+    {"state": state, "rederive": rederive, "paid": paid,
+     "outbox": outbox}[sys.argv[1]]()
