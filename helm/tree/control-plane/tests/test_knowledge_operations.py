@@ -13,10 +13,12 @@ from sqlalchemy import select
 from helm_core.knowledge import probe as probe_module
 from helm_core.knowledge.ingest import ingest_text
 from helm_core.knowledge.operations import (
-    OP_COUNT, OP_DEFINE, OP_ENUMERATE, OP_EXAMPLE, OP_VALUE, detect_operation,
-    find_enumeration, run_count, run_enumerate, select_for_operation,
+    OP_COMPARE, OP_COUNT, OP_DEFINE, OP_ENUMERATE, OP_EXAMPLE, OP_VALUE,
+    comparison_sides, detect_operation, find_enumeration,
+    missing_comparison_side, run_count, run_enumerate, select_for_operation,
 )
 from helm_core.knowledge.probe import probe
+from helm_core.knowledge.synthesis import Synthesis
 from helm_core.knowledge.tenancy import bind_knowledge_user
 from helm_core.models import KnowledgeAnswerRun
 
@@ -346,3 +348,139 @@ def test_a_corpus_that_fits_is_not_declared_incomplete(session):
 
     assert result.outcome == "LOCAL_ANSWER"
     assert "Показал не всё" not in result.answer_text
+
+
+# ── ТИП СВЕДЕНИЙ: СРАВНЕНИЕ ─────────────────────────────────────────
+#
+# Распоряжение владельца 07.09.2026, п.3: «Для определения, сравнения
+# или примера проверяй, что источник действительно содержит требуемый
+# тип сведений». Определение закрыто `undefined_subjects`, пример —
+# отбором формы. Сравнение до этой правки не распознавалось операцией
+# вовсе: «чем отличается А от Б» шло как обычный вопрос о значении.
+
+STRAHOVKA = (
+    "Страховка поездки. Страховщик Бета, полис 77-1234, "
+    "стоимость 4300 рублей, срок до 30.09.2026."
+)
+
+
+def test_comparison_is_its_own_operation():
+    assert detect_operation("чем отличается страховка поездки от страховки квартиры") \
+        == OP_COMPARE
+    assert detect_operation("сравни страховку поездки и страховку квартиры") == OP_COMPARE
+    assert detect_operation("в чём разница между полисом и договором") == OP_COMPARE
+    # Определение сравнением не становится.
+    assert detect_operation("что такое страховка поездки") == OP_DEFINE
+
+
+def test_comparison_sides_are_split_by_connector():
+    assert comparison_sides("чем отличается страховка поездки от страховки квартиры") \
+        == ("страховка поездки", "страховки квартиры")
+    # Сторон не видно — и придумывать их нечем.
+    assert comparison_sides("сравни эти документы") is None
+    assert comparison_sides("какой у меня был холестерин") is None
+
+
+def test_missing_side_is_named(session):
+    """Сторона, которой в найденном нет ни одним словом, названа."""
+    absent = missing_comparison_side(
+        "чем отличается страховка поездки от страховки квартиры", [STRAHOVKA])
+    assert absent == "страховки квартиры"
+
+
+def test_present_side_is_not_reported_missing():
+    """Правило намеренно слабое: совпало хоть одно слово — сторона есть."""
+    assert missing_comparison_side(
+        "чем отличается страховка поездки от страховки квартиры",
+        [STRAHOVKA, "Страховка квартиры. Страховщик Альфа."]) is None
+
+
+def test_probe_says_which_side_is_missing(session):
+    """Живой путь: сравнивать не с чем — и владелец видит, чего нет.
+
+    Проверяется именно ЭТОТ исход, а не «ничего не нашёл»: записи по
+    первой стороне есть, и отправлять владельца искать всё сравнение
+    заново было бы неправдой о состоянии памяти.
+    """
+    ingest_text(session, domain="personal", text=STRAHOVKA,
+                original_filename="страховка-поездки.md")
+    session.flush()
+
+    result = probe(session,
+                   query="чем отличается страховка поездки от страховки квартиры")
+
+    assert result.outcome == "LOCAL_NOT_FOUND"
+    assert "Сравнить не могу" in result.answer_text
+    assert "квартиры" in result.answer_text
+    assert not result.answer_text.startswith("Ответа на этот вопрос")
+
+
+# ── ТИП СВЕДЕНИЙ: ПРИМЕР ────────────────────────────────────────────
+#
+# У определения проверка на выходе есть с прогона 445
+# (`synthesis.undefined_subjects`): ответ, поданный как определение,
+# засчитывается, только если то же определяемое определяет и источник.
+# У примера такой проверки не было — только примечание, которое ничему
+# не мешало. Здесь она и закрывается, ТЕМ ЖЕ способом: судят по
+# утверждению ответа, а не по тому, какие слова нашлись в источнике.
+#
+# Почему не входным запретом («формы нет — модель не зовём»): он
+# отбрасывал бы и законные ответы. «Эмоционально-образная терапия
+# работает с образом чувства» отвечает на «что такое ЭОТ», хотя
+# определительного оборота в нём нет; тест
+# `test_a_source_named_in_the_question_confines_the_search` держит
+# ровно этот случай.
+
+MENTION = "Работа с неуверенностью описана в третьей главе книги подробно."
+EXAMPLED = ("Например, клиентка представила свою неуверенность "
+            "в виде серого тумана над головой.")
+
+
+def _fake_synthesis(monkeypatch, text):
+    monkeypatch.setattr(
+        probe_module, "synthesize_or_none",
+        lambda *a, **kw: Synthesis(answered=True, text=text, used=(1,)))
+
+
+def test_an_example_absent_from_sources_is_rejected(session, monkeypatch):
+    """Пример спрошен, в источниках примера нет, а ответ подан как пример."""
+    ingest_text(session, domain="personal", text=MENTION,
+                original_filename="конспект.md")
+    session.flush()
+    _fake_synthesis(monkeypatch, "Например, автор советует начать с малого.")
+
+    result = probe(session, query="дай примеры работы с неуверенностью")
+
+    assert result.outcome == "LOCAL_NOT_FOUND"
+    # Отклонение, а не «данных нет»: записи есть, подтвердить не смогли.
+    assert "подтвердить ответ по ним не смог" in result.answer_text
+
+
+def test_an_example_present_in_sources_is_kept(session, monkeypatch):
+    """Вторая половина правила: пример в источнике есть — ответ проходит."""
+    ingest_text(session, domain="personal", text=EXAMPLED,
+                original_filename="разбор.md")
+    session.flush()
+    _fake_synthesis(monkeypatch, "Например, неуверенность предстала серым туманом.")
+
+    result = probe(session, query="дай примеры работы с неуверенностью")
+
+    assert result.outcome == "LOCAL_ANSWER"
+    assert "серым туманом" in result.answer_text
+
+
+def test_the_word_example_outside_an_example_question_is_left_alone(session, monkeypatch):
+    """«Например» в пересказе — оборот речи, а не утверждение о типе.
+
+    Проверка привязана к СПРОШЕННОМУ примеру намеренно: без этого
+    условия под неё попал бы любой ответ, где модель перечисляет через
+    «например», и правило отбирало бы законные ответы.
+    """
+    ingest_text(session, domain="personal", text=MENTION,
+                original_filename="конспект.md")
+    session.flush()
+    _fake_synthesis(monkeypatch, "Например, третья глава книги.")
+
+    result = probe(session, query="где описана работа с неуверенностью")
+
+    assert result.outcome == "LOCAL_ANSWER"

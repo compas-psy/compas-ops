@@ -41,13 +41,16 @@ from typing import Any, Literal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .answer_format import (PERSONAL_NOT_FOUND, format_doctors, format_nearest_quote,
-                            format_nothing_answered, format_unknown_source,
-                            format_unverified, format_with_sources, is_quotable)
+from .answer_format import (PERSONAL_NOT_FOUND, format_doctors, format_missing_comparison_side,
+                            format_nearest_quote, format_nothing_answered,
+                            format_unknown_source, format_unverified,
+                            format_with_sources, is_quotable)
 from .embeddings import embed_texts_or_none
 from .health_schema import health_schema_configured, health_session
-from .operations import (FORM_MISSING_NOTICE, OP_COUNT, OP_ENUMERATE, OP_VALUE,
-                         run_count, run_enumerate, select_for_operation)
+from .operations import (FORM_MISSING_NOTICE, OP_COMPARE, OP_COUNT, OP_ENUMERATE,
+                         OP_EXAMPLE, OP_VALUE, claims_example,
+                         missing_comparison_side, run_count, run_enumerate,
+                         select_for_operation)
 from .query_router import QuestionIntent, answer_doctors_visited, detect_intent
 from .query_spec import MODE_GENERAL, DialogueContext, build_query_spec
 from .recall import (
@@ -55,7 +58,7 @@ from .recall import (
     is_historical_query, search_memories,
 )
 from .rephrase import rephrase_or_none
-from .synthesis import synthesize_or_none
+from .synthesis import Synthesis, synthesize_or_none
 from .temporal import fact_date
 from .documents import detect_document_request, document_reply
 from ..config import get_settings
@@ -975,6 +978,43 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     form_note = None if selection.found else FORM_MISSING_NOTICE.get(spec.operation)
     evidence = candidates[:MAX_EVIDENCE]
 
+    # СРАВНЕНИЕ БЕЗ ВТОРОЙ СТОРОНЫ СРАВНЕНИЕМ НЕ БУДЕТ.
+    #
+    # Распоряжение владельца 07.09.2026, п.3: «Для определения,
+    # сравнения или примера проверяй, что источник действительно
+    # содержит требуемый тип сведений». У определения и примера тип
+    # виден по форме фрагмента, и её проверяет `select_for_operation`
+    # выше. У сравнения формы нет — оно законно собирается из двух
+    # документов, где ни в одном сравнения не написано. Требуемые
+    # сведения для сравнения — обе стороны, и проверяется их наличие.
+    #
+    # Проверка идёт по ПОЛНОМУ набору кандидатов: вторая сторона могла
+    # найтись шестой, и судить о ней по пятёрке значило бы отказывать
+    # по недосмотру.
+    if spec.operation == OP_COMPARE and candidates:
+        absent = missing_comparison_side(
+            spec.question, [item.chunk_text for item in candidates])
+        if absent is not None:
+            run_id = uuid.uuid4()
+            session.add(KnowledgeAnswerRun(
+                id=run_id, knowledge_user_id=knowledge_user_id,
+                query_hash=query_hash(query), domain=domain,
+                mode=KnowledgeAnswerMode.N0, paid_ai_used=False,
+                evidence_count=len(evidence),
+            ))
+            return ProbeResult(
+                # LOCAL_NOT_FOUND, а не LOCAL_ANSWER: сравнения нет и не
+                # будет, и платный переход эта строка обязана закрыть —
+                # платная модель второй стороны тоже не знает.
+                outcome="LOCAL_NOT_FOUND", mode=KnowledgeAnswerMode.N0,
+                answer_text=format_missing_comparison_side(
+                    absent, [_source_label(e) for e in evidence]),
+                answer_run_id=str(run_id), candidates=candidates,
+                sources=[{"kind": "chunk", "source_id": item.source_id,
+                          "chunk_id": item.chunk_id,
+                          "original_filename": item.original_filename}
+                         for item in evidence])
+
     # ── ОПЕРАЦИЯ РЕШАЕТ, ЧТО ДЕЛАТЬ С НАЙДЕННЫМ ─────────────────────
     #
     # Распоряжение владельца 07.09.2026, п.3. Счёт и перечисление
@@ -1075,6 +1115,32 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     synthesis = synthesize_or_none(spec.question,
                                    [_dated_fragment(e) for e in evidence],
                                    sources=[e.chunk_text for e in evidence])
+
+    # ПРИМЕР, КОТОРОГО В ИСТОЧНИКАХ НЕТ.
+    #
+    # Распоряжение владельца 07.09.2026, п.3, третий тип сведений.
+    # Определение уже проверяется на выходе (`undefined_subjects`):
+    # ответ, поданный как определение, засчитывается, только если то же
+    # определяемое определяет и источник. У примера такой проверки не
+    # было вовсе — только примечание, которое ничему не мешало.
+    #
+    # Проверяется здесь, а не входным запретом синтеза. Входной запрет
+    # («формы нет — модель не зовём») отбрасывал бы и законные ответы:
+    # «Эмоционально-образная терапия работает с образом чувства» —
+    # ответ на «что такое ЭОТ», хотя определительного оборота в нём
+    # нет. Тип сведений решается по УТВЕРЖДЕНИЮ ответа, а не по тому,
+    # какие слова нашлись в источнике.
+    #
+    # Три условия вместе: пример СПРОШЕН, в источниках примера нет
+    # (`form_note`), и ответ всё-таки подан как пример. «Например» в
+    # пересказе перечисления под это не попадает — там пример не
+    # спрашивали.
+    if (synthesis is not None and synthesis.answered
+            and spec.operation == OP_EXAMPLE and form_note is not None
+            and claims_example(synthesis.text)):
+        # `verified=False` — это ОТКЛОНЁННЫЙ ответ, а не «данных нет»:
+        # записи по вопросу есть, и владелец увидит именно это.
+        synthesis = Synthesis(answered=False, verified=False)
 
     if synthesis is not None and not synthesis.answered:
         # НАЙДЕННОЕ ЕСТЬ — ЗНАЧИТ, ВОПРОС О ДАННЫХ ВЛАДЕЛЬЦА, и платить
