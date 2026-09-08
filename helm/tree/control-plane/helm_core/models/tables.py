@@ -417,6 +417,22 @@ class KnowledgeSource(Base):
     mime_type: Mapped[str | None] = mapped_column(String(128))
     #: markitdown | docling | gigaam | fb2 | manual — чем получен source_path.
     parser: Mapped[str | None] = mapped_column(String(32))
+    #: Отпечаток КОДА, которым получен `source_path` (`derivation.py`).
+    #:
+    #: ЗАЧЕМ. Распоряжение владельца 07.09.2026: «одинаковые байты файла
+    #: после исправления парсера должны получать новую производную
+    #: ревизию». Одного `sha256` для этого мало: он про байты файла, а
+    #: разбор тех же байтов сломанным и починенным парсером даёт разный
+    #: текст. Повторная загрузка отсекается по `sha256` и ничего не
+    #: переразбирает; семантическое задание читает уже разобранный
+    #: `source_path`, а не файл. Без этого поля исправление парсера не
+    #: доходило до уже загруженных документов ВООБЩЕ (измерено прогоном
+    #: 469: «Биохимический анализ крови.pdf» остался с порванной
+    #: таблицей, и вопрос про холестерин не отвечался).
+    #:
+    #: NULL — источник разобран до появления поля; такой считается
+    #: устаревшим и переразбирается наравне с несовпавшими.
+    derivation_fingerprint: Mapped[str | None] = mapped_column(String(64))
     sensitivity: Mapped[str] = mapped_column(String(32), default="internal", nullable=False)
     trust: Mapped[str] = mapped_column(String(32), default="extracted", nullable=False)
     status: Mapped[str] = mapped_column(String(16), default=KnowledgeStatus.ACTIVE, nullable=False)

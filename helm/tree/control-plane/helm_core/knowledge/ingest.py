@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 from ..models import KnowledgeIngestJob, KnowledgeIngestStatus, KnowledgeSource, KnowledgeStatus
 from .atomizer import atomize_and_store
 from .chunking import store_chunks
+from .derivation import derivation_fingerprint
 from .health_schema import health_schema_configured, is_health_domain, write_original_filename
 from .quotas import check_and_record_ingest, check_queue_depth, record_entry_formed
 from .relations import note_id_for, store_relations
@@ -107,6 +108,11 @@ def ingest_text(session: Session, *, domain: str, text: str,
         source_path=f"{root}/sources/{sha256}.md",
         original_filename=original_filename, mime_type="text/plain", parser="manual",
         sensitivity=sensitivity, trust=trust, status=KnowledgeStatus.ACTIVE,
+        # Текст пришёл текстом — парсер к нему не применялся, но нарезка
+        # применялась, а она входит в отпечаток. Без отметки такой
+        # источник считался бы устаревшим сразу и уходил бы в переразбор
+        # первым же циклом воркера (`reparse.stale_source`).
+        derivation_fingerprint=derivation_fingerprint(),
     )
     session.add(source)
     session.flush()  # source.id нужен ДО вызова ниже — sidecar ссылается на него по значению, не по FK.

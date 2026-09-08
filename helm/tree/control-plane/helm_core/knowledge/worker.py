@@ -43,8 +43,10 @@ from .health_schema import (
 from .memory import try_remember
 from .probe import probe
 from .query_scope import is_information_request
+from .derivation import derivation_fingerprint
 from .parsers import parse_file
 from .relations import note_id_for, store_relations
+from .reparse import reparse_one_stale
 from .temporal import content_date
 from .tenancy import bind_knowledge_user
 from .vault import frontmatter
@@ -390,6 +392,11 @@ def process_job(session: Session, job: KnowledgeIngestJob) -> None:
         chunk_count = store_chunks(session, source_id=source.id,
                                    knowledge_user_id=tenant_id,
                                    domain=source.domain, text=result.text)
+        # Чем именно разобран этот текст — записывается здесь, где
+        # разбор и произошёл. Без отметки источник считался бы
+        # устаревшим сразу после загрузки и попал бы в переразбор
+        # первым же циклом (`reparse.stale_source`).
+        source.derivation_fingerprint = derivation_fingerprint()
         job.status = KnowledgeIngestStatus.DONE
     except Exception as exc:
         job.status = KnowledgeIngestStatus.FAILED
@@ -519,6 +526,22 @@ def run_forever(session_factory) -> None:  # pragma: no cover — процесс
                     in_progress = None if finished else semantic.id
                     if finished:
                         logger.info("semantic job %s -> %s", semantic.id, semantic.status)
+                    continue
+
+                # ПЕРЕРАЗБОР — САМОЕ ПОСЛЕДНЕЕ ДЕЛО.
+                #
+                # Ниже семантики намеренно: семантика догоняет уже
+                # принятый документ, а переразбор трогает документ,
+                # который и так ищется и отвечает. Спешить с ним некуда,
+                # уступать ему — нельзя.
+                #
+                # По одному источнику за цикл: правка парсера, задевшая
+                # весь корпус, обязана растечься на часы, а не встать
+                # стеной между владельцем и его памятью.
+                done = reparse_one_stale(session)
+                if done is not None:
+                    session.commit()
+                    logger.info("переразбор источника %s -> %s", *done)
                     continue
 
                 in_progress = None
