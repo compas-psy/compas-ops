@@ -68,13 +68,30 @@ def state() -> None:
         print(f"    задание: {job.status} попыток={job.attempts} "
               f"аренда={job.lease_expires_at} ошибка={job.error or '—'}")
 
+    # ТЕКУЩАЯ РЕВИЗИЯ ПОКАЗЫВАЕТСЯ ВСЕГДА, а не только для объявленной
+    # версии. Прогон 463: под v3 книга дошла до конца и стала текущей, а
+    # отчёт, смотревший лишь на v4, сказал «ревизии нет» — правда про
+    # версию и неправда про источник.
+    if source.current_semantic_run_id:
+        current = session.get(KnowledgeSemanticRun, source.current_semantic_run_id)
+        if current is not None:
+            done = session.scalar(
+                select(func.count()).select_from(KnowledgeSemanticWindow)
+                .where(KnowledgeSemanticWindow.semantic_run_id == current.id,
+                       KnowledgeSemanticWindow.parent_window_id.is_(None))) or 0
+            print(f"    ТЕКУЩАЯ: {current.status} v{current.semantic_version}, "
+                  f"окон верхнего уровня {done}, всего окон {current.windows_total}, "
+                  f"провалено {current.windows_failed}, покрытие {current.coverage_ratio}, "
+                  f"узлов {current.nodes_created}, рёбер {current.edges_created}")
+            print(f"    начата {current.started_at}, закончена {current.finished_at}")
+
     run = session.scalars(
         select(KnowledgeSemanticRun)
         .where(KnowledgeSemanticRun.source_id == source.id,
                KnowledgeSemanticRun.semantic_version == SEMANTIC_VERSION)
         .order_by(KnowledgeSemanticRun.created_at.desc()).limit(1)).first()
     if run is None:
-        print("    ревизии нет")
+        print(f"    ревизии версии {SEMANTIC_VERSION} нет")
         return
     top = session.scalar(
         select(func.count()).select_from(KnowledgeSemanticWindow)
