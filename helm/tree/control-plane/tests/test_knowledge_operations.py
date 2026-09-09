@@ -15,7 +15,8 @@ from helm_core.knowledge.ingest import ingest_text
 from helm_core.knowledge.operations import (
     OP_COMPARE, OP_COUNT, OP_DEFINE, OP_ENUMERATE, OP_EXAMPLE, OP_VALUE,
     comparison_sides, detect_operation, find_enumeration,
-    missing_comparison_side, run_count, run_enumerate, select_for_operation,
+    missing_comparison_side, run_count, run_enumerate, run_measurements,
+    select_for_operation,
 )
 from helm_core.knowledge.probe import probe
 from helm_core.knowledge.synthesis import Synthesis
@@ -484,3 +485,53 @@ def test_the_word_example_outside_an_example_question_is_left_alone(session, mon
     result = probe(session, query="где описана работа с неуверенностью")
 
     assert result.outcome == "LOCAL_ANSWER"
+
+
+# --- Несколько строк одного семейства (прогоны 494, 496) ----------------
+#
+# После починки разбора таблиц запись владельца от 23.08.2026 несёт
+# четыре строки холестерина. Модель выбрала одну и ошиблась (ЛПНП
+# вместо общего); проверка принадлежности её остановила, и владелец
+# получил отказ — при том что число лежит в его записях и читается
+# дословно. Выбирать за него нечем, показать всё — можно.
+
+LIPID_ROWS = ("Холестерин общий: ↑ 8.4 ммоль/л (см. комментарий)\n"
+              "Холестерин-ЛПВП (липопротеины высокой плотности): 1.77 ммоль/л\n"
+              "Холестерин-ЛПНП (липопротеины низкой плотности): ↑ 5.7 ммоль/л\n"
+              "Триглицериды: 1.04 ммоль/л")
+
+
+def test_every_matching_measurement_row_is_shown():
+    done = run_measurements("какой у меня был холестерин в последний раз?",
+                            [LIPID_ROWS])
+    assert done is not None
+    assert "8.4 ммоль/л" in done.text
+    assert "5.7 ммоль/л" in done.text
+    assert "1.77 ммоль/л" in done.text
+
+
+def test_rows_about_something_else_are_left_out():
+    """Триглицериды измерены в той же таблице и к вопросу не относятся."""
+    done = run_measurements("какой у меня был холестерин?", [LIPID_ROWS])
+    assert done is not None
+    assert "Триглицериды" not in done.text
+
+
+def test_a_single_row_is_left_to_the_synthesiser():
+    """Одна подходящая строка — не выписка, а обычный связный ответ."""
+    assert run_measurements("какой холестерин",
+                            ["Холестерин общий: 6.2 ммоль/л"]) is None
+
+
+def test_lines_without_a_measurement_are_not_rows():
+    """Упоминание без числа с единицей строкой таблицы не является."""
+    text = ("Жалобы: на повышение холестерина\n"
+            "Диета: гипохолестериновая\n"
+            "Рекомендован расчет риска по шкале SCORE")
+    assert run_measurements("какой у меня холестерин", [text]) is None
+
+
+def test_the_answer_says_plainly_that_it_did_not_choose():
+    """Выписка не выдаётся за ответ на вопрос: сказано, что выбора не было."""
+    done = run_measurements("какой у меня был холестерин?", [LIPID_ROWS])
+    assert "по вопросу не видно" in done.text
