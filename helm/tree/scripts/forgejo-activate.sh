@@ -15,7 +15,23 @@ echo "выкачено: $(sudo cat /opt/helm/DEPLOYED_SHA 2>/dev/null || echo un
 
 echo
 echo "############ ДО ############"
-sudo docker compose exec -T -u git forgejo sh -c 'ls -1 /data/git/repositories 2>&1' | sed 's/^/  /'
+# ГДЕ ЛЕЖАТ РЕПОЗИТОРИИ НА САМОМ ДЕЛЕ. Прогон 497: путь
+# /data/git/repositories, зашитый в скрипт миграции, на этом сервере не
+# существует. Проверка целостности refs читает bare-репозиторий по
+# этому пути, значит без верного корня она сломается даже при удачной
+# миграции. Спрашиваем сам Forgejo, а не догадываемся.
+echo "— ROOT из конфигурации Forgejo:"
+sudo docker compose exec -T -u git forgejo sh -c \
+  'grep -is "^ROOT" /data/gitea/conf/app.ini /etc/gitea/app.ini 2>/dev/null' | sed 's/^/    /'
+echo "— каталоги верхнего уровня /data:"
+sudo docker compose exec -T -u git forgejo sh -c 'ls -1 /data 2>&1' | sed 's/^/    /'
+echo "— где лежат bare-репозитории:"
+sudo docker compose exec -T -u git forgejo sh -c \
+  'find /data -maxdepth 4 -type d -name "*.git" 2>/dev/null | head -20; \
+   find /data -maxdepth 3 -type d -name repositories 2>/dev/null' | sed 's/^/    /'
+echo "— версия скрипта миграции на сервере:"
+sudo grep -c "PAT НЕОБЯЗАТЕЛЕН" /opt/helm/scripts/forgejo-migrate.py 2>/dev/null \
+  | sed 's/^/    строк «PAT НЕОБЯЗАТЕЛЕН»: /'
 
 echo
 echo "############ МИГРАЦИЯ ############"

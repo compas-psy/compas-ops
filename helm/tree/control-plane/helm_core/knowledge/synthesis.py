@@ -229,7 +229,10 @@ def ungrounded_words(answer: str, fragments: list[str]) -> set[str]:
 _UNITS = (r"ммоль/л|мкмоль/л|мкг/л|мг/дл|мг/л|г/л|ме/л|ед/мл|"
           r"мм\s*рт\.?\s*ст\.?|уд/мин|ккал|"
           r"мг|мкг|кг|мл|см|мм|%")
-_MEASUREMENT_RE = re.compile(
+#: Измерение: число с единицей. Публичное имя — им пользуется и
+#: `operations.run_measurements()`: «значение» одинаково опознаётся и
+#: когда проверяют ответ модели, и когда собирают ответ без модели.
+MEASUREMENT_RE = re.compile(
     r"(\d+(?:[.,]\d+)?(?:\s*/\s*\d+(?:[.,]\d+)?)?)\s*(" + _UNITS + r")",
     re.IGNORECASE)
 
@@ -275,7 +278,7 @@ def _claim_values(answer: str):
       «Поездка: страховщик Бета» и «Квартира: страховщик Альфа» давали
       подтверждённое «Страховщик поездки Альфа».
     """
-    for match in _MEASUREMENT_RE.finditer(answer):
+    for match in MEASUREMENT_RE.finditer(answer):
         yield " ".join(match.group(0).split()), match.start(), _numbers(match.group(1)), set()
     for word, position in _name_matches(answer):
         yield word, position, set(), {word.lower()[:_STEM_LEN]}
@@ -357,7 +360,7 @@ def unbound_claims(answer: str, fragments: list[str]) -> set[str]:
     Ограничения названные, не закрытые.
     """
     lines = [line for fragment in fragments for line in _labelled_lines(fragment)]
-    indexed = [(_stems(line), _numbers(line), bool(_MEASUREMENT_RE.search(line)))
+    indexed = [(_stems(line), _numbers(line), bool(MEASUREMENT_RE.search(line)))
                for line in lines]
     known = set()
     for fragment in fragments:

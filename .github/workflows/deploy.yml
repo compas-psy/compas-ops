@@ -194,7 +194,7 @@ jobs:
           ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
             set -e
             for f in backup.sh restore_test.sh local-rescue-checkpoint.sh backup-seed.sh \
-                     setup-health-role.sh; do
+                     setup-health-role.sh forgejo-migrate.py; do
               sudo mv "/tmp/$f" "/opt/helm/scripts/$f"
               sudo chown root:root "/opt/helm/scripts/$f"
               sudo chmod 755 "/opt/helm/scripts/$f"

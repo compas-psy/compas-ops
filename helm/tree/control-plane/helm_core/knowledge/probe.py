@@ -50,6 +50,7 @@ from .health_schema import health_schema_configured, health_session
 from .operations import (FORM_MISSING_NOTICE, OP_COMPARE, OP_COUNT, OP_ENUMERATE,
                          OP_EXAMPLE, OP_VALUE, claims_example,
                          missing_comparison_side, run_count, run_enumerate,
+                         run_measurements,
                          select_for_operation)
 from .query_router import QuestionIntent, answer_doctors_visited, detect_intent
 from .query_spec import MODE_GENERAL, DialogueContext, build_query_spec
@@ -1141,6 +1142,42 @@ def probe(session: Session, *, query: str, domain: str | None = None,
         # `verified=False` — это ОТКЛОНЁННЫЙ ответ, а не «данных нет»:
         # записи по вопросу есть, и владелец увидит именно это.
         synthesis = Synthesis(answered=False, verified=False)
+
+    # ОТКЛОНЁННЫЙ ОТВЕТ ПРИ НЕСКОЛЬКИХ ПОДХОДЯЩИХ СТРОКАХ — НЕ ОТКАЗ.
+    #
+    # Измерено прогонами 494 и 496. После починки разбора таблиц запись
+    # от 23.08.2026 несёт четыре строки холестерина. Модель выбрала одну
+    # и ошиблась (выдала ЛПНП вместо общего), проверка принадлежности её
+    # остановила — и владелец получил отказ, хотя число лежит в его
+    # записях и читается дословно.
+    #
+    # Выбирать за него нечем: словаря показателей нет. Показать все
+    # подходящие строки — можно, и это не догадка, а перенос текста
+    # источника. Ветка стоит ТОЛЬКО на отклонённом ответе (`verified` —
+    # ложь): там, где модель честно сказала «здесь ответа нет», выписка
+    # была бы спором с ней.
+    if (synthesis is not None and not synthesis.answered
+            and not synthesis.verified and spec.operation == OP_VALUE):
+        rows = run_measurements(spec.question, [e.chunk_text for e in evidence])
+        if rows is not None:
+            used = [evidence[i - 1] for i in rows.used]
+            run_id = uuid.uuid4()
+            session.add(KnowledgeAnswerRun(
+                id=run_id, knowledge_user_id=knowledge_user_id,
+                query_hash=query_hash(query), domain=domain,
+                mode=KnowledgeAnswerMode.Z2, paid_ai_used=False,
+                evidence_count=len(used),
+            ))
+            return ProbeResult(
+                outcome="LOCAL_ANSWER", mode=KnowledgeAnswerMode.Z2,
+                answer_text=format_with_sources(
+                    rows.text, [_source_label(e) for e in used],
+                    unsupported_period=spec.time.unsupported, form_note=form_note),
+                evidence=used, candidates=candidates, answer_run_id=str(run_id),
+                sources=[{"kind": "chunk", "source_id": e.source_id,
+                          "chunk_id": e.chunk_id,
+                          "original_filename": e.original_filename}
+                         for e in used])
 
     if synthesis is not None and not synthesis.answered:
         # НАЙДЕННОЕ ЕСТЬ — ЗНАЧИТ, ВОПРОС О ДАННЫХ ВЛАДЕЛЬЦА, и платить

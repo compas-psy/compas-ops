@@ -30,6 +30,8 @@ QuerySpec опережает возможности исполнителя. В �
 from __future__ import annotations
 
 import re
+
+from .synthesis import MEASUREMENT_RE
 from dataclasses import dataclass
 
 #: Значение, пункт, дата — то, что исполнялось и раньше: показать
@@ -497,3 +499,58 @@ def run_enumerate(question: str, fragments: list[str], *,
         body += ("\n\nПоказал не всё: найденного больше, чем помещается в один "
                  "просмотр. Уточните вопрос, чтобы сузить.")
     return OperationAnswer(text=body, used=tuple(used))
+
+
+def run_measurements(question: str, texts: list[str]) -> OperationAnswer | None:
+    """Все строки-измерения, отвечающие вопросу, — дословно.
+
+    ЗАЧЕМ (измерено прогонами 494 и 496). После починки разбора таблиц в
+    записи владельца от 23.08.2026 встали рядом четыре строки
+    холестерина: общий, ЛПВП, ЛПНП, неЛПВП. На «какой у меня был
+    холестерин» модель выбрала одну — и ошиблась: выдала ЛПНП. Проверка
+    принадлежности это поймала, и исход стал честным отказом. Но отказ
+    при наличии числа в записях — не ответ на вопрос владельца.
+
+    ВЫБИРАТЬ НЕЧЕМ, ПОКАЗАТЬ МОЖНО ВСЁ. Знать, что «холестерин» без
+    уточнения означает общий, системе неоткуда: словаря показателей нет
+    и не будет. Зато можно не выбирать: показать каждую подходящую
+    строку дословно, с её названием и единицей. Ни одного нового
+    утверждения здесь не появляется — только перенос строк источника.
+
+    ГРАНИЦЫ. Строка берётся, только если несёт измерение (число с
+    единицей) и хоть одно содержательное слово вопроса. Одна строка —
+    `None`: с одной справляется синтез, и подменять связный ответ
+    выпиской незачем. Дубли по строке убираются, порядок сохраняется:
+    он идёт от свежести источника, а не от нашего мнения.
+    """
+    wanted = {stem for stem in _stems(question)
+              if len(stem) >= 4 and stem not in _FUNCTION_STEMS}
+    if not wanted:
+        return None
+
+    found: list[str] = []
+    seen: set[str] = set()
+    used: list[int] = []
+    for index, text in enumerate(texts, start=1):
+        contributed = False
+        for line in text.splitlines():
+            row = line.strip()
+            if not row or row in seen:
+                continue
+            if not MEASUREMENT_RE.search(row):
+                continue
+            if not (wanted & _stems(row)):
+                continue
+            seen.add(row)
+            found.append(row)
+            contributed = True
+        if contributed:
+            used.append(index)
+    if len(found) < 2:
+        return None
+
+    listed = "\n".join(f"— {row}" for row in found)
+    return OperationAnswer(
+        text=("Нашёл несколько подходящих строк — какая из них нужна, "
+              f"по вопросу не видно, поэтому вот все:\n{listed}"),
+        used=tuple(used))
