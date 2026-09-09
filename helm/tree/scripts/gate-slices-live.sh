@@ -77,7 +77,12 @@ session = sessionmaker(bind=create_engine(get_settings().database_url,
                                           pool_pre_ping=True))()
 answer = answer_structural(session, DOCTORS, question="каких врачей я посещал?")
 session.rollback()
-print(json.dumps(answer.as_public_dict(), ensure_ascii=False, indent=2))
+
+# Пункты поимённо (пусть и обезличенно) в отчёт НЕ идут: прогон 513
+# напечатал их все, и настоящий ответ бота утонул в перечне из шестидесяти
+# записей — отчёт, в котором не видно ответа, не отчёт. Остаются итоги.
+summary = {k: v for k, v in answer.as_public_dict().items() if k != "by_item"}
+print(json.dumps(summary, ensure_ascii=False, indent=2))
 PYEOF
 
 echo
