@@ -281,6 +281,19 @@ def _claim_values(answer: str):
         yield word, position, set(), {word.lower()[:_STEM_LEN]}
 
 
+def _distinctive(line_stems: set[str], rival: set[str]) -> set[str]:
+    """Слова, которыми одна строка таблицы отличается от другой.
+
+    ТОЛЬКО СЛОВА, НЕ ЦИФРЫ, И ЭТО НЕ ПРИДИРКА. Первая редакция правила
+    брала любую разницу корней — а туда попадает само значение: «5.7»
+    отличает строку ЛПНП от строки общего холестерина и стоит в ответе
+    всегда, потому что ответ его и называет. Проверка получалась
+    тождеством и не срабатывала ни разу.
+    """
+    return {stem for stem in line_stems - rival
+            if len(stem) >= 4 and any(ch.isalpha() for ch in stem)}
+
+
 def unbound_claims(answer: str, fragments: list[str]) -> set[str]:
     """Значения ответа, стоящие в источнике при ДРУГОМ объекте.
 
@@ -314,16 +327,42 @@ def unbound_claims(answer: str, fragments: list[str]) -> set[str]:
     ответ. Без этой оговорки правило отвергало бы и «Уровень
     холестерина 6.2 ммоль/л», где значение своё.
 
+    СОСЕДНЯЯ СТРОКА ТОГО ЖЕ СЕМЕЙСТВА — ТРЕТИЙ ИЗМЕРЕННЫЙ ДЕФЕКТ
+    (09.09.2026, прогон 494). После починки разбора таблиц в записи от
+    23.08.2026 встали рядом четыре строки: «Холестерин общий: ↑ 8.4
+    ммоль/л», «Холестерин-ЛПВП …», «Холестерин-ЛПНП (липопротеины
+    низкой плотности): ↑ 5.7 ммоль/л», «Холестерин-неЛПВП …». На вопрос
+    «какой у меня был холестерин» пришло «У вас холестерин 5.7 ммоль/л»
+    — значение ЛПНП, поданное как холестерин, с честно названным
+    источником. Правило выше это пропускало: слово «холестерин» есть и в
+    той строке, требуемые слова совпали.
+
+    ОТВЕТ ОБЯЗАН НАЗВАТЬ ОБЪЕКТ НЕ МЕНЕЕ ТОЧНО, ЧЕМ ИСТОЧНИК. Если во
+    фрагментах есть другая строка с тем же требуемым словом, но ДРУГИМ
+    измеренным значением, ответ обязан нести хоть одно слово, отличающее
+    выбранную строку от соперницы. «Холестерин-ЛПНП 5.7» — несёт,
+    «холестерин 5.7» — нет, и это отбраковка. Родня механизма —
+    `operations.missing_comparison_side()`: там тоже сравниваются
+    РАЗЛИЧАЮЩИЕ слова, а не все.
+
+    Соперницей считается только строка с измерением (число плюс
+    единица): номер услуги и год соперницами показателя не бывают.
+
     ЧЕГО ПРАВИЛО НЕ ДЕЛАЕТ. Не проверяет числа без единицы измерения —
     даты, счёт, коды: единицы нет, и отличить значение от номера нечем.
     Не понимает отрицания и уступки («не Альфа, а Бета» на строке с
-    Альфой пройдёт). Ограничения названные, не закрытые.
+    Альфой пройдёт). Не знает, что «холестерин» без уточнения означает
+    общий: словаря показателей здесь нет и не будет. Когда соперница
+    есть, а ответ не уточняет, исход — отказ, а не догадка.
+    Ограничения названные, не закрытые.
     """
     lines = [line for fragment in fragments for line in _labelled_lines(fragment)]
-    indexed = [(_stems(line), _numbers(line)) for line in lines]
+    indexed = [(_stems(line), _numbers(line), bool(_MEASUREMENT_RE.search(line)))
+               for line in lines]
     known = set()
     for fragment in fragments:
         known |= _stems(fragment)
+    answer_stems = _stems(answer)
 
     unbound = set()
     for value, position, numbers, stems in _claim_values(answer):
@@ -331,12 +370,23 @@ def unbound_claims(answer: str, fragments: list[str]) -> set[str]:
                     if len(stem) >= 4 and stem in known and stem not in stems}
         if not required:
             continue
-        carrying = [line_stems for line_stems, line_numbers in indexed
+        carrying = [line_stems for line_stems, line_numbers, _measured in indexed
                     if (numbers and line_numbers & numbers)
                     or (stems and stems <= line_stems)]
         if not carrying:
             continue  # значения нет вовсе — это ловят проверки выше
-        if not any(required <= line_stems for line_stems in carrying):
+        supporting = [line_stems for line_stems in carrying
+                      if required <= line_stems]
+        if not supporting:
+            unbound.add(value)
+            continue
+        rivals = [line_stems for line_stems, line_numbers, measured in indexed
+                  if measured and required <= line_stems
+                  and line_numbers and not (line_numbers & numbers)]
+        if rivals and not any(
+                all(_distinctive(line_stems, rival) & answer_stems
+                    for rival in rivals)
+                for line_stems in supporting):
             unbound.add(value)
     return unbound
 
