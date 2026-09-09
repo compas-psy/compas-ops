@@ -20,12 +20,12 @@ from helm_core.models import KnowledgeSource
 s = sessionmaker(bind=create_engine(get_settings().database_url, future=True))()
 bind_knowledge_user(s, None)
 src = s.scalars(select(KnowledgeSource).where(
-    KnowledgeSource.title.like("%иохими%"))).first()
+    KnowledgeSource.original_filename.like("%иохими%"))).first()
 if src is None:
     print("источник не найден")
     raise SystemExit
 
-print(f"источник: {src.title}")
+print(f"источник: {src.original_filename}")
 print(f"парсер: {src.parser}  путь: {src.source_path}")
 from pathlib import Path
 text = Path(src.source_path).read_text(encoding="utf-8")
