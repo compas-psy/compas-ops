@@ -21,7 +21,8 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from helm_core.config import get_settings
 from helm_core.models import (KnowledgeChunk, KnowledgeIngestJob, KnowledgeSemanticJob,
-                              KnowledgeSemanticWindow, KnowledgeSource)
+                              KnowledgeSemanticRun, KnowledgeSemanticWindow,
+                              KnowledgeSource)
 from helm_core.knowledge.tenancy import bind_knowledge_user
 
 session = sessionmaker(bind=create_engine(get_settings().database_url, pool_pre_ping=True))()
@@ -50,6 +51,22 @@ for name in ("MASTER_TZ.md",):
         ) if job.semantic_run_id else 0
         print(f"    семантика: {job.status}  попыток: {job.attempts}  окон: {windows}"
               f"  ошибка: {job.error or '—'}")
+        # Ревизия печатается отдельно от задания. Задание отвечает на
+        # вопрос «работа выполнялась», ревизия — «что получилось», и
+        # `current_semantic_run_id` переключается ТОЛЬКО на READY
+        # (semantic_publish.py). Разбор `done` при пустой текущей
+        # ревизии значит, что прогон вышел не READY, и структурный
+        # исполнитель этого источника не видит вовсе.
+        run = (session.get(KnowledgeSemanticRun, job.semantic_run_id)
+               if job.semantic_run_id else None)
+        if run is None:
+            print("    ревизия: задание не оставило ревизии")
+        else:
+            print(f"    ревизия: {run.status}  код ошибки: {run.error_code or '—'}")
+            print(f"      окон всего: {run.windows_total}  обработано: "
+                  f"{run.windows_processed}  провалено: {run.windows_failed}")
+            print(f"      узлов: {run.nodes_created}  рёбер: {run.edges_created}"
+                  f"  покрытие: {run.coverage_ratio}")
 
 print()
 print("  очередь семантики целиком:")
