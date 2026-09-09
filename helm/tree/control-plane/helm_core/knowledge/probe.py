@@ -1156,11 +1156,19 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     # источника. Ветка стоит ТОЛЬКО на отклонённом ответе (`verified` —
     # ложь): там, где модель честно сказала «здесь ответа нет», выписка
     # была бы спором с ней.
+    # ПО ПОЛНОМУ НАБОРУ КАНДИДАТОВ, А НЕ ПО ПЯТЁРКЕ. Прогон 500: выписка
+    # читала только фрагменты, ушедшие в модель, и строка «Холестерин
+    # общий: ↑ 8.4 ммоль/л» в них не попала — хотя лежит в том же
+    # документе. По той же причине, что у счёта и перечисления выше,
+    # детерминированная операция обязана видеть весь найденный набор.
     if (synthesis is not None and not synthesis.answered
-            and not synthesis.verified and spec.operation == OP_VALUE):
-        rows = run_measurements(spec.question, [e.chunk_text for e in evidence])
+            and not synthesis.verified and spec.operation == OP_VALUE
+            and candidates):
+        _attach_dates(session, candidates)
+        rows = run_measurements(spec.question,
+                                [item.chunk_text for item in candidates])
         if rows is not None:
-            used = [evidence[i - 1] for i in rows.used]
+            used = [candidates[i - 1] for i in rows.used]
             run_id = uuid.uuid4()
             session.add(KnowledgeAnswerRun(
                 id=run_id, knowledge_user_id=knowledge_user_id,
