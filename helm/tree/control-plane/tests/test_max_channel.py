@@ -709,6 +709,29 @@ def test_webhook_remember_rejects_forbidden_secret(app, client):
         assert message.payload_reference["text"] == FORBIDDEN_SECRET_NOTICE
 
 
+def test_webhook_forgets_memory_without_any_pending_dialog(app, client):
+    """§14.16: «Забудь …» — самостоятельная команда, а не ответ в диалоге.
+
+    Приёмка #26 (прогон 507): без незакрытого диалога сообщение не
+    доходило до `try_admin_command()` и уходило в обычный поиск — бот
+    отвечал самой заметкой вместо того, чтобы её забыть.
+    """
+    post_hook(client, _update(text="Запомни: контрольное слово приёмки — ЛАНДЫШ",
+                              mid="mid.remember-before-forget"))
+
+    response = post_hook(client, _update(text="Забудь контрольное слово приёмки",
+                                         mid="mid.forget-1"))
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "admin_forgotten"
+    assert app.state.hermes_bridge.calls == []
+    with app.state.session_factory() as session:
+        from helm_core.models import KnowledgeMemory, KnowledgeMemoryStatus
+        bind_knowledge_user(session, None)
+        memory = session.scalars(select(KnowledgeMemory)).one()
+        assert memory.status == KnowledgeMemoryStatus.DISABLED
+
+
 def test_webhook_remember_takes_priority_over_pending_domain_reply(app, client):
     """"Запомни ..." не должно попасть в resolve_pending_domain() как
     "неверный ответ на вопрос о домене" — приоритет отдан Remember."""

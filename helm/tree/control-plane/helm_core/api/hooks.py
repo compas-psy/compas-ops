@@ -201,6 +201,15 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
     # для условия входа ниже (Remember — не про attachment/pending
     # state), сам try_remember() определит команду заново внутри себя.
     remember_payload = detect_remember_command(inbound.text) if inbound.text else None
+    # §14.16: команда управления памятью — такая же самостоятельная
+    # команда, как «Запомни», и приходит таким же обычным текстом без
+    # всякого предшествующего состояния. Её разбор стоял ВНУТРИ ветки
+    # вложений и pending-диалогов, но в условие входа в эту ветку не
+    # попал: без незакрытого диалога «Забудь …» до `try_admin_command()`
+    # не доходило и уходило в обычный поиск. Найдено приёмкой #26
+    # (прогон 507): на «Забудь контрольное слово приёмки» бот ответил
+    # самой заметкой вместо того, чтобы её забыть.
+    admin_payload = detect_admin_command(inbound.text) if inbound.text else None
 
     # Переключение режима оплаты — команда, а не задача и не вопрос.
     # ВЫШЕ ветки вложений/pending-диалогов, а не внутри неё: команда
@@ -217,7 +226,8 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
         session.commit()
         return {"status": "chat_mode"}
 
-    if inbound.attachments or has_pending or has_pending_batch or remember_payload is not None:
+    if (inbound.attachments or has_pending or has_pending_batch
+            or remember_payload is not None or admin_payload is not None):
         if record_channel_event_once(session, channel="max",
                                      external_message_id=inbound.message_id,
                                      owner_id=request.app.state.owner_id):
@@ -295,7 +305,7 @@ async def max_webhook(request: Request, response: Response, background: Backgrou
         # управления памятью не должна попадать в диалог выбора домена
         # как неверный ответ, и не должна уходить в поиск («Забудь про
         # код домофона» иначе было бы понято как просьба его НАЙТИ).
-        if detect_admin_command(inbound.text) is not None:
+        if admin_payload is not None:
             admin_outcome = try_admin_command(session, text=inbound.text)
             enqueue(session, channel="max", recipient=inbound.chat_id,
                     reference=f"admin-{admin_outcome.status}:{inbound.message_id}",
