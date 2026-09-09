@@ -35,7 +35,11 @@ print(json.dumps({"update_type": "message_created", "message": {
   echo
   echo "── ЗАПРОС: $text"
   start=$(date +%s)
-  response=$(timeout 200 dc python3 - "$payload" "$secret" <<'PYEOF'
+  # `timeout` запускает КОМАНДУ, а не функцию оболочки: `timeout 200 dc`
+  # падало с «No such file or directory», вопрос в бот не уходил вовсе,
+  # и в отчёте оставался один внутренний слой (прогоны 513 и 514).
+  response=$(timeout 200 sudo docker compose exec -T helm-core \
+      python3 - "$payload" "$secret" <<'PYEOF'
 import sys, urllib.request
 payload, secret = sys.argv[1], sys.argv[2]
 req = urllib.request.Request("http://127.0.0.1:8080/hooks/max",
