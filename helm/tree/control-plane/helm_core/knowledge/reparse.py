@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Collection
 from pathlib import Path
 
 from sqlalchemy import or_, select
@@ -54,14 +55,20 @@ QUALITY = "quality"          # парсер снова не справился �
 MISSING = "missing"          # исходного файла нет на диске
 
 
-def stale_source(session: Session) -> KnowledgeSource | None:
+def stale_source(session: Session,
+                 skip: Collection[uuid.UUID] = ()) -> KnowledgeSource | None:
     """Один живой источник, разобранный не нынешним кодом.
 
     Порядок — по `created_at`: самые старые документы разобраны самыми
     старыми парсерами, и польза от их переразбора больше.
+
+    `skip` — источники, за которые нынешний код уже брался и не смог
+    (файла нет, парсер не справился). Отметку они не получают намеренно,
+    поэтому без этого списка выборка возвращала бы ОДИН И ТОТ ЖЕ
+    источник бесконечно.
     """
     current = derivation_fingerprint()
-    return session.scalars(
+    query = (
         select(KnowledgeSource)
         .where(
             KnowledgeSource.status == KnowledgeStatus.ACTIVE,
@@ -70,7 +77,10 @@ def stale_source(session: Session) -> KnowledgeSource | None:
                 KnowledgeSource.derivation_fingerprint != current),
         )
         .order_by(KnowledgeSource.created_at)
-        .limit(1)).first()
+        .limit(1))
+    if skip:
+        query = query.where(KnowledgeSource.id.not_in(list(skip)))
+    return session.scalars(query).first()
 
 
 def _stored_text(source: KnowledgeSource) -> str | None:
@@ -143,9 +153,15 @@ def reparse_source(session: Session, source: KnowledgeSource) -> str:
     return REPARSED
 
 
-def reparse_one_stale(session: Session) -> tuple[uuid.UUID, str] | None:
+#: Исходы, после которых источник нельзя выбирать снова в том же
+#: процессе: отметку он не получил, значит выборка вернёт его опять.
+UNFIXABLE = (MISSING, QUALITY)
+
+
+def reparse_one_stale(session: Session,
+                      skip: Collection[uuid.UUID] = ()) -> tuple[uuid.UUID, str] | None:
     """Взять один устаревший источник и переразобрать. `None` — нечего."""
-    source = stale_source(session)
+    source = stale_source(session, skip=skip)
     if source is None:
         return None
     return source.id, reparse_source(session, source)

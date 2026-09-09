@@ -232,3 +232,31 @@ def test_a_missing_raw_file_does_not_claim_the_source_is_current(session, tmp_pa
 
 def test_reparse_one_stale_returns_none_when_the_corpus_is_current(session):
     assert reparse_one_stale(session) is None
+
+
+def test_a_source_that_cannot_be_reparsed_is_not_offered_again(session, tmp_path, monkeypatch):
+    """ИЗМЕРЕННАЯ АВАРИЯ 09.09.2026, ЦЕЛИКОМ.
+
+    Источник, у которого пропал исходный файл, отметку не получает —
+    намеренно, файл может вернуться. Из-за этого выборка возвращала ЕГО
+    ЖЕ каждый раз, воркер крутился на нём по сорок раз в секунду, съедал
+    процессор и морил голодом локальную модель: в журнале helm-core
+    стояло «локальный синтез недоступен: timed out», и ВСЕ ответы
+    владельцу деградировали до ближайшей цитаты.
+
+    Дефект не в том, что отметки нет, а в том, что выборка не умела
+    пропускать уже испробованное.
+    """
+    _with_parser(monkeypatch, worker_module, BROKEN)
+    lost = _ingested(session, tmp_path, "пропал.pdf", BROKEN)
+    lost.derivation_fingerprint = None
+    Path(lost.raw_path).unlink()
+    session.flush()
+
+    source_id, outcome = reparse_one_stale(session)
+    assert (source_id, outcome) == (lost.id, MISSING)
+    # Без пропуска — тот же источник снова, и так до бесконечности.
+    assert stale_source(session) is lost
+    # С пропуском — выборка идёт дальше и на этом источнике не залипает.
+    assert stale_source(session, skip={lost.id}) is None
+    assert reparse_one_stale(session, skip={lost.id}) is None

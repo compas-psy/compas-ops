@@ -46,7 +46,7 @@ from .query_scope import is_information_request
 from .derivation import derivation_fingerprint
 from .parsers import parse_file
 from .relations import note_id_for, store_relations
-from .reparse import reparse_one_stale
+from .reparse import UNFIXABLE, reparse_one_stale
 from .temporal import content_date
 from .tenancy import bind_knowledge_user
 from .vault import frontmatter
@@ -480,6 +480,9 @@ def run_forever(session_factory) -> None:  # pragma: no cover — процесс
     #: от смерти этого — сама аренда, по истечении которой задание
     #: продолжится с последнего завершённого окна, а не с первого.
     in_progress: uuid.UUID | None = None
+    #: Источники, за которые переразбор брался и не смог. См. ниже —
+    #: без этого списка воркер крутится на одном источнике вечно.
+    unfixable: set[uuid.UUID] = set()
     while True:
         try:
             with session_factory() as session:
@@ -538,10 +541,30 @@ def run_forever(session_factory) -> None:  # pragma: no cover — процесс
                 # По одному источнику за цикл: правка парсера, задевшая
                 # весь корпус, обязана растечься на часы, а не встать
                 # стеной между владельцем и его памятью.
-                done = reparse_one_stale(session)
+                done = reparse_one_stale(session, skip=unfixable)
                 if done is not None:
+                    source_id, outcome = done
                     session.commit()
-                    logger.info("переразбор источника %s -> %s", *done)
+                    if outcome in UNFIXABLE:
+                        # ИЗМЕРЕННАЯ АВАРИЯ 09.09.2026. Отметку такой
+                        # источник не получает намеренно (файл может
+                        # вернуться, парсер может научиться) — и потому
+                        # выборка возвращала ЕГО ЖЕ каждый раз. Воркер
+                        # крутился на одном источнике по сорок раз в
+                        # секунду, съедал процессор и морил голодом
+                        # локальную модель: в журнале helm-core стояло
+                        # «локальный синтез недоступен: timed out», и
+                        # ВСЕ ответы владельцу деградировали до цитаты.
+                        #
+                        # Список живёт в процессе и очищается при
+                        # перезапуске: вернувшийся файл дождётся
+                        # следующего выката, а не бесконечного цикла.
+                        unfixable.add(source_id)
+                        logger.warning("переразбор источника %s -> %s, "
+                                       "больше не берём до перезапуска",
+                                       source_id, outcome)
+                    else:
+                        logger.info("переразбор источника %s -> %s", source_id, outcome)
                     continue
 
                 in_progress = None
