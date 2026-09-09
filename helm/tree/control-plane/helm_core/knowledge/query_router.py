@@ -41,6 +41,7 @@ import argparse
 import json
 import re
 import uuid
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from pathlib import Path
@@ -197,44 +198,64 @@ class Proof:
 
 
 @dataclass
-class DoctorItem:
+class SubjectItem:
+    """Один предмет ответа: кто или что, чем доказан признак, когда.
+
+    Назывался `SubjectItem`. Переименован по гейту универсальности
+    (`QUERY_LAYER_UNIVERSALITY_2026-09-05.md` §1.4: «`SubjectItem`/
+    `StructuralAnswer` не остаются шаблоном для копирования под каждый
+    следующий тип вопроса»). Поля стали общими; ни одно правило при
+    этом не ослабло — признак по-прежнему доказывается СОБСТВЕННОЙ
+    цитатой предмета, а не соседним текстом.
+    """
+
     identity_id: str
-    person: str
-    #: Пусто — «специальность не подтверждена». Список, а не строка:
-    #: две разные доказанные специальности это факт документов, а не
-    #: повод выбрать одну.
-    specialties: list[str] = field(default_factory=list)
-    #: Даты приёмов. Список, а не одно значение: два визита к одному
-    #: врачу — две даты, и выбрать из них одну значило бы соврать. На
-    #: пути доказательств список всегда пуст: у узла-сущности даты нет,
-    #: а дата документа — не дата приёма.
+    #: Каноническая подпись предмета: ФИО человека, название
+    #: организации, формулировка решения. Раньше — `person`.
+    subject: str
+    #: Доказанные признаки. Раньше — `specialties`. Список, а не строка:
+    #: два разных доказанных признака это факт документов, а не повод
+    #: выбрать один.
+    attributes: list[str] = field(default_factory=list)
+    #: Как сказать, что признак не подтверждён. Приходит из правила
+    #: вопроса: у врача «специальность не подтверждена», у другого
+    #: вопроса своё. Значения по умолчанию нет намеренно — врачебная
+    #: формулировка втихую и была бы тем самым шаблоном.
+    missing_attribute: str = ""
+    #: Даты. Список, а не одно значение: два визита к одному врачу —
+    #: две даты, и выбрать из них одну значило бы соврать. На пути
+    #: доказательств список всегда пуст: у узла-сущности даты нет, а
+    #: дата документа — не дата события.
     dates: list[str] = field(default_factory=list)
     proofs: list[Proof] = field(default_factory=list)
     path: str = AnswerPath.EVIDENCE
 
     def line(self) -> str:
-        if self.specialties:
-            return f"{self.person} — {', '.join(self.specialties)}"
-        return f"{self.person} — специальность не подтверждена"
+        if self.attributes:
+            return f"{self.subject} — {', '.join(self.attributes)}"
+        return f"{self.subject} — {self.missing_attribute}"
 
     def as_public_dict(self) -> dict:
-        """Без имени и без цитат: то, что можно печатать в лог."""
+        """Без подписи и без цитат: то, что можно печатать в лог."""
         return {"identity_id": self.identity_id,
-                "specialty_proven": bool(self.specialties),
+                "attribute_proven": bool(self.attributes),
                 "date_proven": bool(self.dates),
                 "proofs": len(self.proofs),
                 "path": self.path}
 
 
 @dataclass
-class DoctorsAnswer:
+class StructuralAnswer:
+    """Ответ структурного исполнителя целиком: пункты и всё, что их
+    ограничило. Назывался `StructuralAnswer` — см. `SubjectItem`."""
+
     question: str
     intent: str
     path_used: str = AnswerPath.NONE
     #: Сколько доказанных врачебных рёбер нашлось. Ноль — не ошибка, а
     #: измеренное состояние графа на этом корпусе (R5).
     graph_edges: int = 0
-    items: list[DoctorItem] = field(default_factory=list)
+    items: list[SubjectItem] = field(default_factory=list)
     #: Почему узел или личность не попали в ответ. Не «отладка», а часть
     #: ответа: «нашлось трое» без «двое отброшены за отсутствием
     #: доказательства» — неполная правда (§5.1).
@@ -251,14 +272,14 @@ class DoctorsAnswer:
     #: Год из вопроса, если он там был. `None` — вопрос без года, ответ
     #: по всему корпусу.
     year: int | None = None
-    #: Доказанные врачи, у которых даты приёма нет вовсе. При вопросе с
-    #: годом они НЕ попадают в ответ: отнести их к году нечем. Но и
-    #: промолчать о них нельзя — «не нашёл за 2014» звучало бы как «в
-    #: данных нет врачей», а они есть.
-    undated_doctors: int = 0
-    #: Доказанные врачи с датой приёма из ДРУГОГО года — отброшены по
-    #: делу, а не потеряны.
-    other_year_doctors: int = 0
+    #: Доказанные пункты, у которых даты нет вовсе. При вопросе с годом
+    #: они НЕ попадают в ответ: отнести их к году нечем. Но и промолчать
+    #: о них нельзя — «не нашёл за 2014» звучало бы как «в данных ничего
+    #: нет», а оно есть.
+    undated_items: int = 0
+    #: Доказанные пункты с датой из ДРУГОГО года — отброшены по делу, а
+    #: не потеряны.
+    other_year_items: int = 0
     #: Период из вопроса, который отбор применить не смог («в марте»,
     #: «за последний год»). Не `None` — ответ ОБЯЗАН сказать об этом:
     #: иначе он выглядит ответом на более узкий вопрос, чем на самом
@@ -279,8 +300,8 @@ class DoctorsAnswer:
         return {"question": self.question, "intent": self.intent,
                 "path_used": self.path_used, "year": self.year,
                 "unsupported_period": self.unsupported_period,
-                "undated_doctors": self.undated_doctors,
-                "other_year_doctors": self.other_year_doctors,
+                "undated_items": self.undated_items,
+                "other_year_items": self.other_year_items,
                 "graph_edges": self.graph_edges,
                 "items_from_graph": self.by_path(AnswerPath.GRAPH),
                 "items_from_evidence": self.by_path(AnswerPath.EVIDENCE),
@@ -293,13 +314,13 @@ class DoctorsAnswer:
         """То же без содержимого: числа и флаги."""
         return {"intent": self.intent, "path_used": self.path_used,
                 "year": self.year, "unsupported_period": self.unsupported_period,
-                "undated_doctors": self.undated_doctors,
-                "other_year_doctors": self.other_year_doctors,
+                "undated_items": self.undated_items,
+                "other_year_items": self.other_year_items,
                 "graph_edges": self.graph_edges, "items": len(self.items),
                 "items_from_graph": self.by_path(AnswerPath.GRAPH),
                 "items_from_evidence": self.by_path(AnswerPath.EVIDENCE),
                 "uncovered_identities": self.uncovered_identities,
-                "items_with_specialty": sum(1 for i in self.items if i.specialties),
+                "items_with_attribute": sum(1 for i in self.items if i.attributes),
                 "items_with_date": sum(1 for i in self.items if i.dates),
                 "proofs_total": sum(len(i.proofs) for i in self.items),
                 "considered": self.considered, "skipped": self.skipped,
@@ -320,7 +341,7 @@ def requested_year(question: str, *, today: date | None = None) -> int | None:
     return None
 
 
-def _split_by_year(items: list[DoctorItem], year: int) -> tuple[list[DoctorItem], int, int]:
+def _split_by_year(items: list[SubjectItem], year: int) -> tuple[list[SubjectItem], int, int]:
     """Разложить доказанных врачей на «в этом году», «без даты» и «в
     другом году».
 
@@ -330,7 +351,7 @@ def _split_by_year(items: list[DoctorItem], year: int) -> tuple[list[DoctorItem]
     нельзя, поэтому он считается отдельно.
     """
     prefix = f"{year}-"
-    matched: list[DoctorItem] = []
+    matched: list[SubjectItem] = []
     undated = 0
     other = 0
     for item in items:
@@ -411,6 +432,104 @@ def marker_follows_label(span_text: str, label: str) -> bool:
     return any(_DOCTOR_MARKER_RE.fullmatch(t) for t in after)
 
 
+@dataclass(frozen=True)
+class SubjectRule:
+    """Кто может быть предметом ответа.
+
+    Не «люди» по умолчанию: типы приходят из вопроса. Для «каких врачей»
+    это личности-люди, для вопроса о местах работы — организации.
+    """
+
+    entity_types: tuple[str, ...]
+    #: Как эта совокупность называется в счётчиках ответа. Без имени
+    #: «рассмотрено 60» не отличить от «60 чего».
+    counted_as: str
+
+
+@dataclass(frozen=True)
+class EdgeRule:
+    """Ребро графа, которое само по себе доказывает пункт ответа."""
+
+    relation_type: str
+    #: Роль на ребре; `None` — роль не проверяется.
+    role: str | None = None
+    #: Какой конец ребра — предмет ответа. `EVENT --INVOLVES--> PERSON`
+    #: даёт предмет на конце `to`; у других связей бывает наоборот, и
+    #: угадывать направление по типу связи нельзя.
+    subject_end: str = "to"
+    #: Несёт ли дату второй конец ребра (событие). `False` — даты у
+    #: этого правила нет вовсе, и подставлять её неоткуда.
+    date_on_other_end: bool = True
+
+
+@dataclass(frozen=True)
+class AttributeRule:
+    """Признак предмета, который обязан быть доказан его СОБСТВЕННОЙ цитатой.
+
+    `prove` — то самое доменное знание, ради выноса которого правила и
+    заведены: функция «цитата + подпись → (подходит ли, признак)».
+    Ничего, кроме неё, о домене исполнитель не знает.
+    """
+
+    prove: Callable[[str, str], tuple[bool, str | None]]
+    #: Как сказать, что признак не подтверждён.
+    missing: str
+    #: Связь, которую нельзя выдавать за этот признак. У врачей это
+    #: `HAS_ROLE`: та же связь описывает «руководителя проекта», и на
+    #: смешанном корпусе роль стала бы специальностью.
+    rival_relation: str | None = None
+    #: Что записать в `skipped`, когда соперничающая связь отброшена.
+    rival_skip: str = ""
+    #: Почему цитата не подошла. Только счётчики: ответ этих случаев не
+    #: получает, но «ноль» обязано иметь причину.
+    diagnose: Callable[[str, str, str, int], tuple[str, ...]] | None = None
+
+
+@dataclass(frozen=True)
+class StructuralSpec:
+    """Что именно спрашивают у структурного исполнителя.
+
+    Это и есть граница универсальности: различаться между вопросами
+    имеют право ТОЛЬКО поля этой спеки. Поиск, разрешение личности,
+    время, дедупликация и провенанс — общие. Появление второй копии
+    `_graph_items`/`_evidence_items` под новый вопрос означает, что
+    гейт не пройден (`QUERY_LAYER_UNIVERSALITY_2026-09-05.md` §4).
+    """
+
+    intent: str
+    subject: SubjectRule
+    attribute: AttributeRule
+    #: `None` — у вопроса нет ребра, которое доказывало бы пункт само
+    #: по себе; остаётся путь доказательств.
+    edge: EdgeRule | None = None
+
+
+def _doctor_diagnosis(span: str, label: str, source_text_: str,
+                      char_start: int) -> tuple[str, ...]:
+    """Почему врачебная цитата не подошла. Только счётчики."""
+    reasons: list[str] = []
+    if marker_precedes_span(source_text_, char_start):
+        reasons.append("маркер не в цитате, но стоит перед спаном в тексте источника")
+    if marker_follows_label(span, label):
+        reasons.append("маркер стоит после подписи, а не перед ней")
+    return tuple(reasons)
+
+
+#: Врачи — ОДНА спека, а не встроенный в исполнитель случай.
+DOCTORS = StructuralSpec(
+    intent=QuestionIntent.DOCTORS_VISITED,
+    subject=SubjectRule(entity_types=_PERSON_TYPES,
+                        counted_as="личности-люди с составом"),
+    attribute=AttributeRule(
+        prove=doctor_proof,
+        missing="специальность не подтверждена",
+        rival_relation=SemanticRelationType.HAS_ROLE.value,
+        rival_skip="роль из графа не подтверждена как медицинская специальность",
+        diagnose=_doctor_diagnosis),
+    edge=EdgeRule(relation_type=SemanticRelationType.INVOLVES.value, role="doctor"),
+)
+
+
 class _SourceTexts:
     """Тексты источников, читаемые по мере надобности.
 
@@ -421,7 +540,7 @@ class _SourceTexts:
     Нужны единицы — читаем единицы.
     """
 
-    def __init__(self, answer: DoctorsAnswer) -> None:
+    def __init__(self, answer: StructuralAnswer) -> None:
         self._sources: dict[uuid.UUID, object] = {}
         self._cache: dict[uuid.UUID, str | None] = {}
         self._answer = answer
@@ -440,8 +559,9 @@ class _SourceTexts:
         return default if text is None else text
 
 
-def _marker_specialty(spans: list[tuple[object, str]], label: str) -> list[str]:
-    """Специальности, подтверждённые дефисным маркером в СОБСТВЕННЫХ цитатах.
+def _proven_attributes(spans: list[tuple[object, str]], label: str,
+                       rule: AttributeRule) -> list[str]:
+    """Признаки, подтверждённые СОБСТВЕННЫМИ цитатами предмета.
 
     Одно правило на оба пути. Путь графа не получает своего, более
     мягкого: иначе один и тот же человек назывался бы урологом по ребру
@@ -450,15 +570,15 @@ def _marker_specialty(spans: list[tuple[object, str]], label: str) -> list[str]:
     """
     found: list[str] = []
     for _mention, span in spans:
-        is_doctor, specialty = doctor_proof(span, label)
-        if is_doctor and specialty and specialty not in found:
-            found.append(specialty)
+        matched, attribute = rule.prove(span, label)
+        if matched and attribute and attribute not in found:
+            found.append(attribute)
     return found
 
 
 def _spans_for(graph, models, *, tenant_id: uuid.UUID, node_id: uuid.UUID,
                text_by_source: dict[uuid.UUID, str],
-               answer: DoctorsAnswer) -> list[tuple[object, str]]:
+               answer: StructuralAnswer) -> list[tuple[object, str]]:
     """Упоминания узла с точным диапазоном и текстом этого диапазона."""
     spans: list[tuple[object, str]] = []
     mentions = graph.scalars(
@@ -480,14 +600,16 @@ def _spans_for(graph, models, *, tenant_id: uuid.UUID, node_id: uuid.UUID,
     return spans
 
 
-def _graph_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUID],
-                   identity_by_node: dict[uuid.UUID, uuid.UUID],
-                   text_by_source: dict[uuid.UUID, str],
-                   answer: DoctorsAnswer) -> list[DoctorItem]:
+def _graph_items(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUID],
+                 identity_by_node: dict[uuid.UUID, uuid.UUID],
+                 text_by_source: dict[uuid.UUID, str], spec: StructuralSpec,
+                 answer: StructuralAnswer) -> list[SubjectItem]:
     """Путь по графу: только уже доказанные рёбра, ничего не выводя.
 
-    `EVENT --INVOLVES(role=doctor)--> PERSON` даёт человека и дату
-    события. Рёбер может не быть — тогда путь пуст, и это не ошибка.
+    Ребро описано спекой (`EdgeRule`), а не зашито: у врачей это
+    `EVENT --INVOLVES(role=doctor)--> PERSON`, у другого вопроса будет
+    своя связь и свой конец. Рёбер может не быть — тогда путь пуст, и
+    это не ошибка.
 
     **Ответ считается по личностям, а не по рёбрам.** Два визита к
     одному врачу это два ребра и один врач; складывать их в два пункта
@@ -498,86 +620,101 @@ def _graph_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUI
     подпись, конфликт типа). Пропустить такой узел в ответ значило бы
     обойти решение R6 с другой стороны.
 
-    **`HAS_ROLE` специальностью сам по себе не является.** Реестр связей
-    §14.9 доменно-агностичен, и та же связь описывает «руководителя
-    проекта». На смешанном корпусе R10 врач легко окажется ещё и
-    руководителем, и это не должно стать его специальностью. Компилятор
-    при этом не трогается — фильтр стоит здесь, в слое запроса.
+    **Соперничающая связь признаком сама по себе не является.** Реестр
+    связей §14.9 доменно-агностичен: `HAS_ROLE` описывает и «врача», и
+    «руководителя проекта». На смешанном корпусе врач легко окажется ещё
+    и руководителем, и это не должно стать его специальностью.
+    Компилятор при этом не трогается — фильтр стоит здесь, в слое
+    запроса, и называется в спеке (`AttributeRule.rival_relation`).
     """
+    if spec.edge is None:
+        return []
+
+    subject_col = (models.edge.to_node_id if spec.edge.subject_end == "to"
+                   else models.edge.from_node_id)
+    other_col = (models.edge.from_node_id if spec.edge.subject_end == "to"
+                 else models.edge.to_node_id)
+    conditions = [models.edge.knowledge_user_id == tenant_id,
+                  models.edge.relation_type == spec.edge.relation_type,
+                  models.edge.semantic_run_id.in_(run_ids),
+                  models.node.status == SemanticNodeStatus.ACTIVE]
+    if spec.edge.role is not None:
+        conditions.append(models.edge.role == spec.edge.role)
+
     rows = graph.execute(
         select(models.edge, models.node)
-        .join(models.node, models.node.id == models.edge.to_node_id)
-        .where(models.edge.knowledge_user_id == tenant_id,
-               models.edge.relation_type == SemanticRelationType.INVOLVES.value,
-               models.edge.role == "doctor",
-               models.edge.semantic_run_id.in_(run_ids),
-               models.node.status == SemanticNodeStatus.ACTIVE)).all()
+        .join(models.node, models.node.id == subject_col)
+        .where(*conditions)).all()
     answer.graph_edges += len(rows)
     if not rows:
         return []
 
-    roles: dict[uuid.UUID, list[str]] = {}
-    for person_id, concept_label in graph.execute(
-            select(models.edge.from_node_id, models.node.canonical_label)
-            .join(models.node, models.node.id == models.edge.to_node_id)
-            .where(models.edge.knowledge_user_id == tenant_id,
-                   models.edge.relation_type == SemanticRelationType.HAS_ROLE.value,
-                   models.edge.semantic_run_id.in_(run_ids))).all():
-        roles.setdefault(person_id, []).append(concept_label)
+    rivals: dict[uuid.UUID, list[str]] = {}
+    if spec.attribute.rival_relation is not None:
+        for subject_id, concept_label in graph.execute(
+                select(models.edge.from_node_id, models.node.canonical_label)
+                .join(models.node, models.node.id == models.edge.to_node_id)
+                .where(models.edge.knowledge_user_id == tenant_id,
+                       models.edge.relation_type == spec.attribute.rival_relation,
+                       models.edge.semantic_run_id.in_(run_ids))).all():
+            rivals.setdefault(subject_id, []).append(concept_label)
 
-    by_identity: dict[str, DoctorItem] = {}
-    seen_roles: set[tuple[uuid.UUID, str]] = set()
+    by_identity: dict[str, SubjectItem] = {}
+    seen_rivals: set[tuple[uuid.UUID, str]] = set()
     #: Узлы, чьи цитаты уже прочитаны. Ключ группировки — личность, но
     #: доказательства собираются с КАЖДОГО её узла: один и тот же врач
     #: приходит двумя узлами из разных документов, и специальность
     #: вполне может быть доказана только во втором. Читать цитаты одного
     #: узла повторно (у него бывает несколько рёбер) при этом незачем.
     scanned: set[uuid.UUID] = set()
-    for edge, person in rows:
-        identity_id = identity_by_node.get(person.id)
+    for edge, subject in rows:
+        identity_id = identity_by_node.get(subject.id)
         if identity_id is None:
             answer.skip("узел графа без канонической личности")
             continue
         key = str(identity_id)
         item = by_identity.get(key)
         if item is None:
-            item = DoctorItem(identity_id=key, person=person.canonical_label,
-                              path=AnswerPath.GRAPH)
+            item = SubjectItem(identity_id=key, subject=subject.canonical_label,
+                               missing_attribute=spec.attribute.missing,
+                               path=AnswerPath.GRAPH)
             by_identity[key] = item
 
-        if person.id not in scanned:
-            scanned.add(person.id)
-            for specialty in _marker_specialty(
-                    _spans_for(graph, models, tenant_id=tenant_id, node_id=person.id,
+        if subject.id not in scanned:
+            scanned.add(subject.id)
+            for attribute in _proven_attributes(
+                    _spans_for(graph, models, tenant_id=tenant_id, node_id=subject.id,
                                text_by_source=text_by_source, answer=answer),
-                    person.canonical_label):
-                if specialty not in item.specialties:
-                    item.specialties.append(specialty)
-            for concept in roles.get(person.id, ()):
-                if concept.lower() in item.specialties:
+                    subject.canonical_label, spec.attribute):
+                if attribute not in item.attributes:
+                    item.attributes.append(attribute)
+            for concept in rivals.get(subject.id, ()):
+                if concept.lower() in item.attributes:
                     continue
-                if (person.id, concept) in seen_roles:
+                if (subject.id, concept) in seen_rivals:
                     continue
-                seen_roles.add((person.id, concept))
-                answer.skip("роль из графа не подтверждена как медицинская специальность")
+                seen_rivals.add((subject.id, concept))
+                answer.skip(spec.attribute.rival_skip)
 
-        event = graph.get(models.node, edge.from_node_id)
-        occurred = event.occurred_at_start if event is not None else None
-        if occurred is not None:
-            date = occurred.date().isoformat()
-            if date not in item.dates:
-                item.dates.append(date)
+        if spec.edge.date_on_other_end:
+            event = graph.get(models.node, getattr(edge, other_col.key))
+            occurred = event.occurred_at_start if event is not None else None
+            if occurred is not None:
+                date = occurred.date().isoformat()
+                if date not in item.dates:
+                    item.dates.append(date)
         item.proofs.append(Proof(source_id=str(edge.source_id), edge_id=str(edge.id)))
 
     for item in by_identity.values():
-        item.specialties.sort()
+        item.attributes.sort()
         item.dates.sort()
     return list(by_identity.values())
 
 
-def _evidence_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUID],
-                      text_by_source: dict[uuid.UUID, str], skip_identities: set[str],
-                      answer: DoctorsAnswer) -> tuple[list[DoctorItem], set[str]]:
+def _evidence_items(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUID],
+                    text_by_source: dict[uuid.UUID, str], skip_identities: set[str],
+                    spec: StructuralSpec,
+                    answer: StructuralAnswer) -> tuple[list[SubjectItem], set[str]]:
     """Путь по доказательствам: личность → состав → упоминание → спан.
 
     Личность без состава сюда не попадает по построению: выборка идёт от
@@ -589,7 +726,7 @@ def _evidence_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.
     Доказательство для них искать незачем: ребро сильнее, и повтор
     превратил бы одного человека в два пункта ответа.
 
-    Возвращает пункты И множество ВСЕХ личностей-людей с составом,
+    Возвращает пункты И множество ВСЕХ подходящих личностей с составом,
     которые попались. Второе нужно, чтобы посчитать непокрытых: без
     него «трое врачей» не отличить от «трое из троих».
     """
@@ -598,16 +735,16 @@ def _evidence_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.
         .join(models.member, models.member.identity_id == models.identity.id)
         .join(models.node, models.node.id == models.member.node_id)
         .where(models.identity.knowledge_user_id == tenant_id,
-               models.identity.entity_type.in_(_PERSON_TYPES),
+               models.identity.entity_type.in_(spec.subject.entity_types),
                models.node.kind == SemanticNodeKind.ENTITY,
                models.node.status == SemanticNodeStatus.ACTIVE,
                models.node.semantic_run_id.in_(run_ids))
         .order_by(models.identity.normalized_key, models.node.created_at)).all()
 
     known = {str(r[0].id) for r in rows}
-    answer.count("личности-люди с составом", len(known))
+    answer.count(spec.subject.counted_as, len(known))
     answer.count("узлы в их составе", len(rows))
-    by_identity: dict[str, DoctorItem] = {}
+    by_identity: dict[str, SubjectItem] = {}
     for identity, node in rows:
         if str(identity.id) in skip_identities:
             answer.skip("личность уже отвечена путём графа")
@@ -615,38 +752,39 @@ def _evidence_doctors(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.
         for mention, span in _spans_for(graph, models, tenant_id=tenant_id,
                                         node_id=node.id,
                                         text_by_source=text_by_source, answer=answer):
-            is_doctor, specialty = doctor_proof(span, node.canonical_label)
-            if not is_doctor:
-                answer.skip("в цитате нет врачебного маркера")
+            matched, attribute = spec.attribute.prove(span, node.canonical_label)
+            if not matched:
+                answer.skip("в цитате нет подтверждающего маркера")
                 # Замер, а не смягчение правила: ответ этот случай не
-                # получает. Нужен, чтобы «ноль врачей» имело причину, а
-                # не осталось числом. R5 стоил лишнего цикла ровно
-                # потому, что прогон сказал «0» и не сказал почему.
-                source_text_ = text_by_source.get(mention.source_id, "")
-                if marker_precedes_span(source_text_, mention.char_start):
-                    answer.skip("маркер не в цитате, но стоит перед спаном "
-                                "в тексте источника")
-                if marker_follows_label(span, node.canonical_label):
-                    answer.skip("маркер стоит после подписи, а не перед ней")
+                # получает. Нужен, чтобы «ноль» имело причину, а не
+                # осталось числом. R5 стоил лишнего цикла ровно потому,
+                # что прогон сказал «0» и не сказал почему.
+                if spec.attribute.diagnose is not None:
+                    for reason in spec.attribute.diagnose(
+                            span, node.canonical_label,
+                            text_by_source.get(mention.source_id, ""),
+                            mention.char_start):
+                        answer.skip(reason)
                 continue
             item = by_identity.get(str(identity.id))
             if item is None:
-                item = DoctorItem(identity_id=str(identity.id),
-                                  person=identity.canonical_label)
+                item = SubjectItem(identity_id=str(identity.id),
+                                   subject=identity.canonical_label,
+                                   missing_attribute=spec.attribute.missing)
                 by_identity[str(identity.id)] = item
-            if specialty and specialty not in item.specialties:
-                item.specialties.append(specialty)
+            if attribute and attribute not in item.attributes:
+                item.attributes.append(attribute)
             item.proofs.append(Proof(
                 source_id=str(mention.source_id), window_id=mention.window_id,
                 char_start=mention.char_start, char_end=mention.char_end, quote=span))
     for item in by_identity.values():
-        item.specialties.sort()
+        item.attributes.sort()
     return list(by_identity.values()), known
 
 
 def _answer_in(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUID],
-               text_by_source: dict[uuid.UUID, str],
-               answer: DoctorsAnswer) -> tuple[list[DoctorItem], str]:
+               text_by_source: dict[uuid.UUID, str], spec: StructuralSpec,
+               answer: StructuralAnswer) -> tuple[list[SubjectItem], str]:
     """Один ответ в одной схеме: граф, затем доказательства на остаток.
 
     Раньше выбирался ОДИН путь целиком: есть рёбра — отвечаем графом, нет
@@ -665,13 +803,14 @@ def _answer_in(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUID],
             select(models.member.identity_id, models.member.node_id)
             .where(models.member.knowledge_user_id == tenant_id)).all()}
 
-    graph_items = _graph_doctors(graph, models, tenant_id=tenant_id, run_ids=run_ids,
-                                 identity_by_node=identity_by_node,
-                                 text_by_source=text_by_source, answer=answer)
+    graph_items = _graph_items(graph, models, tenant_id=tenant_id, run_ids=run_ids,
+                               identity_by_node=identity_by_node,
+                               text_by_source=text_by_source, spec=spec, answer=answer)
     covered = {item.identity_id for item in graph_items if item.identity_id}
-    evidence_items, known = _evidence_doctors(
+    evidence_items, known = _evidence_items(
         graph, models, tenant_id=tenant_id, run_ids=run_ids,
-        text_by_source=text_by_source, skip_identities=covered, answer=answer)
+        text_by_source=text_by_source, skip_identities=covered, spec=spec,
+        answer=answer)
 
     items = graph_items + evidence_items
     answered = {item.identity_id for item in items if item.identity_id}
@@ -686,16 +825,20 @@ def _answer_in(graph, models, *, tenant_id: uuid.UUID, run_ids: set[uuid.UUID],
     return items, AnswerPath.EVIDENCE if known else AnswerPath.NONE
 
 
-def answer_doctors_visited(session: Session, *, question: str,
-                           knowledge_user_id: uuid.UUID | None = None) -> DoctorsAnswer:
-    """Ответ на «каких врачей я посещал» по обеим схемам.
+def answer_structural(session: Session, spec: StructuralSpec, *, question: str,
+                      knowledge_user_id: uuid.UUID | None = None) -> StructuralAnswer:
+    """Ответ по обеим схемам на вопрос, описанный спекой.
 
-    Разделение то же, что у публикации и у разрешения сущностей:
+    Спека приходит аргументом, а не выбирается внутри: исполнитель не
+    знает ни одного вопроса «по умолчанию». Врачи — такой же вызов, как
+    любой другой (`answer_doctors_visited` ниже).
+
+    Разделение схем то же, что у публикации и у разрешения сущностей:
     health-источник писал узлы в зеркало отдельной ролью, значит и
     ответ по ним собирается там же, своим соединением.
     """
-    answer = DoctorsAnswer(question=question, intent=detect_intent(question))
-    if answer.intent != QuestionIntent.DOCTORS_VISITED:
+    answer = StructuralAnswer(question=question, intent=detect_intent(question))
+    if answer.intent != spec.intent:
         return answer
 
     tenant_id = bind_knowledge_user(session, knowledge_user_id)
@@ -714,12 +857,12 @@ def answer_doctors_visited(session: Session, *, question: str,
 
     items, path = _answer_in(session, PUBLIC_MODELS, tenant_id=tenant_id,
                              run_ids=public_runs, text_by_source=public_text,
-                             answer=answer)
+                             spec=spec, answer=answer)
     if health_runs and health_schema_configured():
         with health_session(tenant_id) as graph:
             health_items, health_path = _answer_in(
                 graph, HEALTH_MODELS, tenant_id=tenant_id, run_ids=health_runs,
-                text_by_source=health_text, answer=answer)
+                text_by_source=health_text, spec=spec, answer=answer)
         items = items + health_items
         if path == AnswerPath.NONE:
             path = health_path
@@ -729,12 +872,25 @@ def answer_doctors_visited(session: Session, *, question: str,
     answer.year = requested_year(question)
     answer.unsupported_period = unsupported_period(question)
     if answer.year is not None:
-        items, answer.undated_doctors, answer.other_year_doctors = _split_by_year(
+        items, answer.undated_items, answer.other_year_items = _split_by_year(
             items, answer.year)
 
     answer.items = items
     answer.path_used = path
     return answer
+
+
+def answer_doctors_visited(session: Session, *, question: str,
+                           knowledge_user_id: uuid.UUID | None = None) -> StructuralAnswer:
+    """«Каких врачей я посещал» — вызов общего исполнителя со спекой врачей.
+
+    Функция остаётся отдельной ровно потому, что доменное знание должно
+    быть видно как отдельная тонкая обёртка, а не растворяться в
+    исполнителе: тело — одна строка, и в нём нет ни одного правила
+    поиска.
+    """
+    return answer_structural(session, DOCTORS, question=question,
+                             knowledge_user_id=knowledge_user_id)
 
 
 def _cli(argv: list[str] | None = None) -> int:

@@ -24,7 +24,7 @@ from helm_core.knowledge import probe as probe_mod
 from helm_core.knowledge.answer_format import (
     NOT_FOUND, format_doctors, format_nearest_quote, is_quotable)
 from helm_core.knowledge.query_router import (
-    AnswerPath, DoctorItem, DoctorsAnswer, Proof, QuestionIntent,
+    DOCTORS, AnswerPath, Proof, QuestionIntent, StructuralAnswer, SubjectItem,
 )
 
 TENANT = uuid.UUID("00000000-0000-0000-0000-00000000beef")
@@ -35,17 +35,18 @@ BANNED = ("документ", "чанк", "фрагмент", "уверенно�
           "возможно", "вероятно", "похоже", "совпадений")
 
 
-def _answer(*items: DoctorItem) -> DoctorsAnswer:
-    a = DoctorsAnswer(question="каких врачей я посещал?",
+def _answer(*items: SubjectItem) -> StructuralAnswer:
+    a = StructuralAnswer(question="каких врачей я посещал?",
                       intent=QuestionIntent.DOCTORS_VISITED)
     a.items = list(items)
     a.path_used = AnswerPath.EVIDENCE if items else AnswerPath.NONE
     return a
 
 
-def _doctor(person, specialties=(), dates=()) -> DoctorItem:
-    return DoctorItem(identity_id=str(uuid.uuid4()), person=person,
-                      specialties=list(specialties), dates=list(dates),
+def _doctor(person, specialties=(), dates=()) -> SubjectItem:
+    return SubjectItem(identity_id=str(uuid.uuid4()), subject=person,
+                      attributes=list(specialties), dates=list(dates),
+                      missing_attribute=DOCTORS.attribute.missing,
                       proofs=[Proof(source_id="s")])
 
 
@@ -288,7 +289,7 @@ def test_undated_doctor_is_not_attributed_to_a_year():
 
     matched, no_date, other_year = _split_by_year([dated, other, undated], 2026)
 
-    assert [i.person for i in matched] == ["Иванов И. И."]
+    assert [i.subject for i in matched] == ["Иванов И. И."]
     assert no_date == 1
     assert other_year == 1
 
@@ -305,7 +306,7 @@ def test_year_without_proof_does_not_hide_that_doctors_exist():
     данных нет», а они есть — просто привязать их к году нечем."""
     answer = _answer()
     answer.year = 2014
-    answer.undated_doctors = 3
+    answer.undated_items = 3
     text = format_doctors(answer)
     assert text.splitlines()[0].endswith("за 2014 год.")
     assert "В данных есть 3 врача, дату приёма у которых подтвердить не удалось." in text
@@ -322,14 +323,14 @@ def test_undated_line_agrees_with_the_count(count, whom):
     владельцем в живом ответе прогона 301."""
     answer = _answer()
     answer.year = 2026
-    answer.undated_doctors = count
+    answer.undated_items = count
     assert whom in format_doctors(answer)
 
 
-def test_year_answer_mentions_undated_doctors_alongside_the_list():
+def test_year_answer_mentions_undated_items_alongside_the_list():
     answer = _answer(_doctor("Иванов И. И.", ["гастроэнтеролог"], ["2026-03-12"]))
     answer.year = 2026
-    answer.undated_doctors = 2
+    answer.undated_items = 2
     text = format_doctors(answer)
     assert text.splitlines()[0] == "Гастроэнтеролог."
     assert "Ещё 2 врача без подтверждённой даты приёма" in text

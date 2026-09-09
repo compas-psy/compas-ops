@@ -35,7 +35,7 @@ from helm_core.knowledge.probe import probe
 from helm_core.knowledge.synthesis import Synthesis
 from helm_core.knowledge import rephrase as rephrase_mod
 from helm_core.knowledge.query_router import (
-    AnswerPath, DoctorItem, DoctorsAnswer, Proof, QuestionIntent,
+    AnswerPath, SubjectItem, StructuralAnswer, Proof, QuestionIntent,
 )
 
 SOURCE_ONE = "11111111-1111-1111-1111-111111111111"
@@ -139,12 +139,12 @@ def test_structured_answer_carries_its_spans(monkeypatch):
     """S1 считал спаны и терял их: `format_doctors()` источники не
     печатает, а наружу они не выносились."""
     _stub_common(monkeypatch)
-    answer = DoctorsAnswer(question="каких врачей я посещал?",
+    answer = StructuralAnswer(question="каких врачей я посещал?",
                            intent=QuestionIntent.DOCTORS_VISITED)
     answer.path_used = AnswerPath.EVIDENCE
-    answer.items = [DoctorItem(
-        identity_id=str(uuid.uuid4()), person="Иванов И. И.",
-        specialties=["гастроэнтеролог"],
+    answer.items = [SubjectItem(
+        identity_id=str(uuid.uuid4()), subject="Иванов И. И.",
+        attributes=["гастроэнтеролог"],
         proofs=[Proof(source_id=SOURCE_ONE, window_id=4, char_start=10, char_end=42)])]
     monkeypatch.setattr(probe_mod, "answer_doctors_visited",
                         lambda session, *, question, knowledge_user_id: answer)
@@ -252,11 +252,11 @@ def test_graph_proof_is_reported_as_an_edge_not_an_empty_span(monkeypatch):
     путём графа и уехали наружу как `span` с тремя `None`, а `edge_id`,
     который там есть, терялся. Спан без границ — не спан."""
     _stub_common(monkeypatch)
-    answer = DoctorsAnswer(question="каких врачей я посещал?",
+    answer = StructuralAnswer(question="каких врачей я посещал?",
                            intent=QuestionIntent.DOCTORS_VISITED)
     answer.path_used = AnswerPath.GRAPH
-    answer.items = [DoctorItem(
-        identity_id=str(uuid.uuid4()), person="Иванов И. И.", specialties=[],
+    answer.items = [SubjectItem(
+        identity_id=str(uuid.uuid4()), subject="Иванов И. И.", attributes=[],
         proofs=[Proof(source_id=SOURCE_ONE, edge_id="edge-7")])]
     monkeypatch.setattr(probe_mod, "answer_doctors_visited",
                         lambda session, *, question, knowledge_user_id: answer)

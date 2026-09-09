@@ -114,11 +114,12 @@ class _FakeSession:
 
 
 def _evidence(session, text, answer=None, skip=()):
-    answer = answer or qr.DoctorsAnswer(question="каких врачей я посещал?",
+    answer = answer or qr.StructuralAnswer(question="каких врачей я посещал?",
                                         intent=qr.QuestionIntent.DOCTORS_VISITED)
-    items, _known = qr._evidence_doctors(
+    items, _known = qr._evidence_items(
         session, PUBLIC_MODELS, tenant_id=TENANT, run_ids={RUN},
-        text_by_source={SOURCE: text}, skip_identities=set(skip), answer=answer)
+        text_by_source={SOURCE: text}, skip_identities=set(skip), spec=qr.DOCTORS,
+        answer=answer)
     return items, answer
 
 
@@ -176,13 +177,14 @@ def test_специальность_из_другого_места_не_прип
 # --- формулировка ответа ---------------------------------------------------
 
 def test_недоказанная_специальность_названа_дословно():
-    item = qr.DoctorItem(identity_id="x", person="Иванов Пётр Сергеевич")
+    item = qr.SubjectItem(identity_id="x", subject="Иванов Пётр Сергеевич",
+                          missing_attribute=qr.DOCTORS.attribute.missing)
     assert item.line() == "Иванов Пётр Сергеевич — специальность не подтверждена"
 
 
 def test_доказанная_специальность_в_строке():
-    item = qr.DoctorItem(identity_id="x", person="Иванов Пётр Сергеевич",
-                         specialties=["уролог"])
+    item = qr.SubjectItem(identity_id="x", subject="Иванов Пётр Сергеевич",
+                          attributes=["уролог"])
     assert item.line() == "Иванов Пётр Сергеевич — уролог"
 
 
@@ -196,7 +198,7 @@ def test_личность_с_составом_и_спаном_попадает_�
                            mentions=[_Mention(node.id, 10, 46)])
     items, answer = _evidence(session, text)
     assert len(items) == 1
-    assert items[0].specialties == ["уролог"]
+    assert items[0].attributes == ["уролог"]
     assert items[0].proofs[0].char_start == 10
     assert answer.skipped == {}
 
@@ -225,7 +227,7 @@ def test_цитата_без_маркера_не_даёт_врача():
                            mentions=[_Mention(node.id, 0, len(text))])
     items, answer = _evidence(session, text)
     assert items == []
-    assert answer.skipped["в цитате нет врачебного маркера"] == 1
+    assert answer.skipped["в цитате нет подтверждающего маркера"] == 1
 
 
 def test_два_упоминания_одной_личности_дают_один_ответ_и_два_доказательства():
@@ -238,7 +240,7 @@ def test_два_упоминания_одной_личности_дают_оди
     items, _ = _evidence(session, text)
     assert len(items) == 1
     assert len(items[0].proofs) == 2
-    assert items[0].specialties == ["уролог"]
+    assert items[0].attributes == ["уролог"]
 
 
 def test_дата_на_пути_доказательств_не_придумывается():
@@ -258,9 +260,9 @@ def test_пустой_граф_переключает_на_доказатель�
     session = _FakeSession(pairs=[(_Identity("Иванов Пётр Сергеевич"), node)],
                            mentions=[_Mention(node.id, 0, len(text))],
                            doctor_edges=[])
-    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+    answer = qr.StructuralAnswer(question="каких врачей я посещал?",
                               intent=qr.QuestionIntent.DOCTORS_VISITED)
-    items, path = qr._answer_in(session, PUBLIC_MODELS, tenant_id=TENANT,
+    items, path = qr._answer_in(session, PUBLIC_MODELS, spec=qr.DOCTORS, tenant_id=TENANT,
                                 run_ids={RUN}, text_by_source={SOURCE: text},
                                 answer=answer)
     assert path == qr.AnswerPath.EVIDENCE
@@ -279,13 +281,13 @@ def test_доказанное_ребро_отвечает_графом():
                            role_edges=[(person.id, concept.canonical_label)],
                            nodes=[event], members=[(identity.id, person.id)],
                            mentions=[_Mention(person.id, 10, len(text) - 1)])
-    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+    answer = qr.StructuralAnswer(question="каких врачей я посещал?",
                               intent=qr.QuestionIntent.DOCTORS_VISITED)
-    items, path = qr._answer_in(session, PUBLIC_MODELS, tenant_id=TENANT,
+    items, path = qr._answer_in(session, PUBLIC_MODELS, spec=qr.DOCTORS, tenant_id=TENANT,
                                 run_ids={RUN}, text_by_source={SOURCE: text},
                                 answer=answer)
     assert path == qr.AnswerPath.GRAPH
-    assert items[0].specialties == ["уролог"]
+    assert items[0].attributes == ["уролог"]
     assert items[0].proofs[0].edge_id == str(edge.id)
 
 
@@ -303,7 +305,7 @@ def test_в_публичной_сводке_нет_ни_имён_ни_цитат
     public = json.dumps(answer.as_public_dict(), ensure_ascii=False)
     assert "Иванов" not in public
     assert "уролог" not in public
-    assert json.loads(public)["items_with_specialty"] == 1
+    assert json.loads(public)["items_with_attribute"] == 1
 
 
 # --- диагностика «почему ноль» --------------------------------------------
@@ -319,7 +321,7 @@ def test_маркер_перед_спаном_считается_но_в_отв�
                            mentions=[_Mention(node.id, start, len(text) - 1)])
     items, answer = _evidence(session, text)
     assert items == []
-    assert answer.skipped["в цитате нет врачебного маркера"] == 1
+    assert answer.skipped["в цитате нет подтверждающего маркера"] == 1
     assert answer.skipped["маркер не в цитате, но стоит перед спаном "
                           "в тексте источника"] == 1
 
@@ -377,9 +379,9 @@ def test_граф_и_доказательства_мержатся_а_не_вы�
                  (evidence_identity.id, by_evidence.id)],
         pairs=[(evidence_identity, by_evidence)],
         mentions=[_Mention(by_evidence.id, 0, len(text))])
-    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+    answer = qr.StructuralAnswer(question="каких врачей я посещал?",
                               intent=qr.QuestionIntent.DOCTORS_VISITED)
-    items, path = qr._answer_in(session, PUBLIC_MODELS, tenant_id=TENANT,
+    items, path = qr._answer_in(session, PUBLIC_MODELS, spec=qr.DOCTORS, tenant_id=TENANT,
                                 run_ids={RUN}, text_by_source={SOURCE: text},
                                 answer=answer)
     answer.items = items
@@ -401,9 +403,9 @@ def test_личность_отвеченная_графом_не_повторя�
         members=[(identity.id, person.id)],
         pairs=[(identity, person)],
         mentions=[_Mention(person.id, 0, len(text))])
-    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+    answer = qr.StructuralAnswer(question="каких врачей я посещал?",
                               intent=qr.QuestionIntent.DOCTORS_VISITED)
-    items, path = qr._answer_in(session, PUBLIC_MODELS, tenant_id=TENANT,
+    items, path = qr._answer_in(session, PUBLIC_MODELS, spec=qr.DOCTORS, tenant_id=TENANT,
                                 run_ids={RUN}, text_by_source={SOURCE: text},
                                 answer=answer)
     assert len(items) == 1
@@ -421,9 +423,9 @@ def test_непокрытые_личности_считаются():
     session = _FakeSession(pairs=[(identity, node)],
                            members=[(identity.id, node.id)],
                            mentions=[_Mention(node.id, 0, len(text))])
-    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+    answer = qr.StructuralAnswer(question="каких врачей я посещал?",
                               intent=qr.QuestionIntent.DOCTORS_VISITED)
-    items, _ = qr._answer_in(session, PUBLIC_MODELS, tenant_id=TENANT,
+    items, _ = qr._answer_in(session, PUBLIC_MODELS, spec=qr.DOCTORS, tenant_id=TENANT,
                              run_ids={RUN}, text_by_source={SOURCE: text},
                              answer=answer)
     assert items == []
@@ -437,10 +439,10 @@ def test_публичная_сводка_несёт_разбивку_по_пут
     session = _FakeSession(pairs=[(identity, node)],
                            members=[(identity.id, node.id)],
                            mentions=[_Mention(node.id, 0, len(text))])
-    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+    answer = qr.StructuralAnswer(question="каких врачей я посещал?",
                               intent=qr.QuestionIntent.DOCTORS_VISITED)
     items, answer.path_used = qr._answer_in(
-        session, PUBLIC_MODELS, tenant_id=TENANT, run_ids={RUN},
+        session, PUBLIC_MODELS, spec=qr.DOCTORS, tenant_id=TENANT, run_ids={RUN},
         text_by_source={SOURCE: text}, answer=answer)
     answer.items = items
     public = json.dumps(answer.as_public_dict(), ensure_ascii=False)
@@ -465,9 +467,9 @@ def test_два_визита_к_одному_врачу_это_один_врач
                       (_Edge(second.id, person.id, role="doctor"), person)],
         nodes=[first, second], members=[(identity.id, person.id)],
         mentions=[_Mention(person.id, 10, len(text) - 1)])
-    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+    answer = qr.StructuralAnswer(question="каких врачей я посещал?",
                               intent=qr.QuestionIntent.DOCTORS_VISITED)
-    items, _ = qr._answer_in(session, PUBLIC_MODELS, tenant_id=TENANT,
+    items, _ = qr._answer_in(session, PUBLIC_MODELS, spec=qr.DOCTORS, tenant_id=TENANT,
                              run_ids={RUN}, text_by_source={SOURCE: text},
                              answer=answer)
     assert len(items) == 1
@@ -486,9 +488,9 @@ def test_узел_графа_без_канонической_личности_в
                                           person)],
                            nodes=[event], members=[],
                            mentions=[_Mention(person.id, 0, len(text))])
-    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+    answer = qr.StructuralAnswer(question="каких врачей я посещал?",
                               intent=qr.QuestionIntent.DOCTORS_VISITED)
-    items, path = qr._answer_in(session, PUBLIC_MODELS, tenant_id=TENANT,
+    items, path = qr._answer_in(session, PUBLIC_MODELS, spec=qr.DOCTORS, tenant_id=TENANT,
                                 run_ids={RUN}, text_by_source={SOURCE: text},
                                 answer=answer)
     assert items == []
@@ -513,9 +515,9 @@ def test_число_пунктов_равно_объединению_канон�
                  (evidence_identity.id, only_evidence.id)],
         pairs=[(graph_identity, shared), (evidence_identity, only_evidence)],
         mentions=[_Mention(only_evidence.id, 0, len(text))])
-    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+    answer = qr.StructuralAnswer(question="каких врачей я посещал?",
                               intent=qr.QuestionIntent.DOCTORS_VISITED)
-    items, _ = qr._answer_in(session, PUBLIC_MODELS, tenant_id=TENANT,
+    items, _ = qr._answer_in(session, PUBLIC_MODELS, spec=qr.DOCTORS, tenant_id=TENANT,
                              run_ids={RUN}, text_by_source={SOURCE: text},
                              answer=answer)
     identities = {item.identity_id for item in items}
@@ -537,12 +539,12 @@ def test_немедицинская_роль_не_становится_спец�
         role_edges=[(person.id, "уролог"), (person.id, "руководитель проекта")],
         nodes=[event], members=[(identity.id, person.id)],
         mentions=[_Mention(person.id, 10, len(text) - 1)])
-    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+    answer = qr.StructuralAnswer(question="каких врачей я посещал?",
                               intent=qr.QuestionIntent.DOCTORS_VISITED)
-    items, _ = qr._answer_in(session, PUBLIC_MODELS, tenant_id=TENANT,
+    items, _ = qr._answer_in(session, PUBLIC_MODELS, spec=qr.DOCTORS, tenant_id=TENANT,
                              run_ids={RUN}, text_by_source={SOURCE: text},
                              answer=answer)
-    assert items[0].specialties == ["уролог"]
+    assert items[0].attributes == ["уролог"]
     assert answer.skipped[
         "роль из графа не подтверждена как медицинская специальность"] == 1
 
@@ -557,12 +559,12 @@ def test_только_немедицинская_роль_оставляет_с�
         role_edges=[(person.id, "руководитель проекта")],
         nodes=[event], members=[(identity.id, person.id)],
         mentions=[_Mention(person.id, 17, len(text) - 1)])
-    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+    answer = qr.StructuralAnswer(question="каких врачей я посещал?",
                               intent=qr.QuestionIntent.DOCTORS_VISITED)
-    items, _ = qr._answer_in(session, PUBLIC_MODELS, tenant_id=TENANT,
+    items, _ = qr._answer_in(session, PUBLIC_MODELS, spec=qr.DOCTORS, tenant_id=TENANT,
                              run_ids={RUN}, text_by_source={SOURCE: text},
                              answer=answer)
-    assert items[0].specialties == []
+    assert items[0].attributes == []
     assert items[0].line().endswith("специальность не подтверждена")
 
 
@@ -584,15 +586,15 @@ def test_специальность_собирается_со_всех_узло�
         nodes=[event_a, event_b],
         members=[(identity.id, node_a.id), (identity.id, node_b.id)],
         mentions=[_Mention(node_a.id, 16, len(text_a) - 1), mention_b])
-    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+    answer = qr.StructuralAnswer(question="каких врачей я посещал?",
                               intent=qr.QuestionIntent.DOCTORS_VISITED)
-    items, _ = qr._answer_in(session, PUBLIC_MODELS, tenant_id=TENANT,
+    items, _ = qr._answer_in(session, PUBLIC_MODELS, spec=qr.DOCTORS, tenant_id=TENANT,
                              run_ids={RUN},
                              text_by_source={SOURCE: text_a, source_b: text_b},
                              answer=answer)
     assert len(items) == 1
     assert len(items[0].proofs) == 2
-    assert items[0].specialties == ["уролог"]
+    assert items[0].attributes == ["уролог"]
 
 
 # --- врач без специальности не считается непокрытым -----------------------
@@ -615,15 +617,15 @@ def test_доказанный_врач_без_специальности_не_п
         pairs=[(identity, node)],
         mentions=[_Mention(node.id, start, len(text) - 1)],
         members=[(identity.id, node.id)])
-    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+    answer = qr.StructuralAnswer(question="каких врачей я посещал?",
                               intent=qr.QuestionIntent.DOCTORS_VISITED)
 
-    items, path = qr._answer_in(session, PUBLIC_MODELS, tenant_id=TENANT,
+    items, path = qr._answer_in(session, PUBLIC_MODELS, spec=qr.DOCTORS, tenant_id=TENANT,
                                 run_ids={RUN}, text_by_source={SOURCE: text},
                                 answer=answer)
 
     assert len(items) == 1
-    assert items[0].specialties == []
+    assert items[0].attributes == []
     assert items[0].line() == "Иванов И. И. — специальность не подтверждена"
     assert answer.uncovered_identities == 0
     assert path == qr.AnswerPath.EVIDENCE
@@ -640,10 +642,10 @@ def test_личность_без_врачебного_доказательств
         pairs=[(identity, node)],
         mentions=[_Mention(node.id, start, start + len("Петровым П. П."))],
         members=[(identity.id, node.id)])
-    answer = qr.DoctorsAnswer(question="каких врачей я посещал?",
+    answer = qr.StructuralAnswer(question="каких врачей я посещал?",
                               intent=qr.QuestionIntent.DOCTORS_VISITED)
 
-    items, _path = qr._answer_in(session, PUBLIC_MODELS, tenant_id=TENANT,
+    items, _path = qr._answer_in(session, PUBLIC_MODELS, spec=qr.DOCTORS, tenant_id=TENANT,
                                  run_ids={RUN}, text_by_source={SOURCE: text},
                                  answer=answer)
 

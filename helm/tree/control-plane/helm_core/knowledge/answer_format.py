@@ -1,6 +1,6 @@
 """Компактный форматтер ответа (контракт владельца 05.09.2026).
 
-Отдельный модуль, а не метод `DoctorsAnswer`, по одной причине: правила
+Отдельный модуль, а не метод `StructuralAnswer`, по одной причине: правила
 изложения и правила доказательства меняются с разной скоростью и по
 разным поводам. `query_router` отвечает за то, ЧТО доказано;
 этот файл — только за то, КАК это сказано. Модель тут не участвует
@@ -18,7 +18,7 @@
 Для вопроса о врачах порядок задан отдельно: СНАЧАЛА специальности,
 ФИО и даты — вторым планом. Перечисление документов, исследований и
 диагнозов — провал приёмки, поэтому их тут просто неоткуда взять:
-на вход подаётся уже собранный `DoctorsAnswer`, в котором ничего этого
+на вход подаётся уже собранный `StructuralAnswer`, в котором ничего этого
 нет.
 """
 
@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import re
 
-from .query_router import DoctorItem, DoctorsAnswer
+from .query_router import StructuralAnswer, SubjectItem
 
 #: Единственная форма отказа. Одна строка, без объяснений, почему не
 #: нашлось: объяснение — это и есть «перечислять ограничения поиска».
@@ -60,16 +60,16 @@ def _plural_doctors(count: int) -> str:
     return "врача"
 
 
-def _named(item: DoctorItem) -> str:
-    parts = [item.person]
-    if item.specialties:
-        parts.append(", ".join(item.specialties))
+def _named(item: SubjectItem) -> str:
+    parts = [item.subject]
+    if item.attributes:
+        parts.append(", ".join(item.attributes))
     if item.dates:
         parts.append(", ".join(item.dates))
     return " — ".join(parts) if len(parts) > 1 else parts[0]
 
 
-def format_doctors(answer: DoctorsAnswer) -> str:
+def format_doctors(answer: StructuralAnswer) -> str:
     """Текст ответа на «каких врачей я посещал».
 
     Врач с доказанной врачебной ролью, но без подтверждённой
@@ -83,12 +83,12 @@ def format_doctors(answer: DoctorsAnswer) -> str:
 
     specialties: list[str] = []
     for item in answer.items:
-        for specialty in item.specialties:
+        for specialty in item.attributes:
             if specialty not in specialties:
                 specialties.append(specialty)
     specialties.sort()
 
-    unnamed = sum(1 for item in answer.items if not item.specialties)
+    unnamed = sum(1 for item in answer.items if not item.attributes)
 
     lines: list[str] = []
     if specialties:
@@ -103,9 +103,9 @@ def format_doctors(answer: DoctorsAnswer) -> str:
         lines.append("; ".join(_named(item) for item in answer.items) + ".")
     else:
         lines.append(f"Всего {len(answer.items)} {_plural_doctors(len(answer.items))}.")
-    if answer.year is not None and answer.undated_doctors:
-        lines.append(f"Ещё {answer.undated_doctors} "
-                     f"{_plural_doctors(answer.undated_doctors)} без подтверждённой "
+    if answer.year is not None and answer.undated_items:
+        lines.append(f"Ещё {answer.undated_items} "
+                     f"{_plural_doctors(answer.undated_items)} без подтверждённой "
                      "даты приёма — отнести к году нечем.")
     period = _period_not_applied(answer)
     if period:
@@ -113,7 +113,7 @@ def format_doctors(answer: DoctorsAnswer) -> str:
     return "\n".join(lines)
 
 
-def _period_not_applied(answer: DoctorsAnswer) -> str | None:
+def _period_not_applied(answer: StructuralAnswer) -> str | None:
     """Сказать вслух, что период из вопроса не применён.
 
     До 06.09.2026 такой ответ выглядел ответом на заданный вопрос:
@@ -131,7 +131,7 @@ def _period_not_applied(answer: DoctorsAnswer) -> str | None:
             f"«{answer.unsupported_period}» я пока применять не умею.")
 
 
-def _nothing_found(answer: DoctorsAnswer) -> str:
+def _nothing_found(answer: StructuralAnswer) -> str:
     """Пусто — говорим это прямо и с указанием года, если он был.
 
     Если при этом врачи в данных есть, но без дат, об этом сказано
@@ -144,8 +144,8 @@ def _nothing_found(answer: DoctorsAnswer) -> str:
         return f"{NOT_FOUND}\n{period}" if period else NOT_FOUND
     text = ("Не нашёл в ваших данных подтверждённых посещений врачей "
             f"за {answer.year} год.")
-    if answer.undated_doctors:
-        count = answer.undated_doctors
+    if answer.undated_items:
+        count = answer.undated_items
         whom = "которого" if count % 10 == 1 and count % 100 != 11 else "которых"
         text += (f"\nВ данных есть {count} {_plural_doctors(count)}, "
                  f"дату приёма у {whom} подтвердить не удалось.")
