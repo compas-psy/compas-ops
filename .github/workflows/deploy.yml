@@ -189,6 +189,7 @@ jobs:
             helm/tree/scripts/local-rescue-checkpoint.sh \
             helm/tree/scripts/backup-seed.sh \
             helm/tree/scripts/setup-health-role.sh \
+            helm/tree/scripts/forgejo-migrate.py \
             "$VPS_USER@$VPS_HOST:/tmp/"
           ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" '
             set -e

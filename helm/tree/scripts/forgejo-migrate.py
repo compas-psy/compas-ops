@@ -179,7 +179,7 @@ def ensure_org(token: str) -> bool:
     return False
 
 
-def migrate_repo(repo: str, token: str, pat: str) -> bool:
+def migrate_repo(repo: str, token: str, pat: str | None) -> bool:
     say(f"\n=== {repo} ===")
 
     say("  [1] inventory")
@@ -219,6 +219,13 @@ def migrate_repo(repo: str, token: str, pat: str) -> bool:
     say(f"    совпадают, {len(fj)} refs")
 
     inventory_workflows_and_lfs(repo)
+
+    if pat is None:
+        # Шаги 7-9 требуют записи в GitHub, а писать туда нечем. Молчать
+        # об этом нельзя: «мигрирован» без зеркала и «мигрирован» с
+        # зеркалом — разные состояния, и §18.3 требует именно второго.
+        say("  [7-9] push mirror ПРОПУЩЕН: нет PAT для записи в GitHub")
+        return True
 
     say("  [7-8] push mirror → GitHub, sync_on_commit")
     remote = f"https://github.com/{GITHUB_ORG}/{repo}.git"
@@ -288,13 +295,23 @@ def migrate_repo(repo: str, token: str, pat: str) -> bool:
 def main() -> None:
     if os.geteuid() != 0:
         sys.exit("требуется root: sudo python3 /opt/helm/scripts/forgejo-migrate.py")
-    if not PAT_FILE.exists():
-        sys.exit(f"нет {PAT_FILE} — положи fine-grained PAT (Contents: Read "
-                 "and write, только выбранные репо) через sudo tee, 600 root:root")
-    pat = PAT_FILE.read_text(encoding="utf-8").strip()
+    # PAT НЕОБЯЗАТЕЛЕН, И ЭТО НЕ ПОСЛАБЛЕНИЕ. Он нужен ровно для двух
+    # вещей: клонировать ПРИВАТНЫЙ репозиторий и настроить обратное
+    # зеркало Forgejo → GitHub. Публичные репозитории Forgejo тянет сам,
+    # по URL, и проверка целостности refs от PAT не зависит вовсе.
+    #
+    # Распоряжение владельца 08.09.2026, п.6: «доделай всё, что доступно
+    # без нового секрета». Прежний выход по sys.exit делал недоступным
+    # ВСЁ, включая то, для чего секрет не нужен, — и Forgejo простоял
+    # десять дней пустым при полностью готовом скрипте.
+    pat = PAT_FILE.read_text(encoding="utf-8").strip() if PAT_FILE.exists() else None
 
     repos = sys.argv[1:] or REPOS_DEFAULT
     say(f"Миграция {datetime.now(timezone.utc).isoformat()}: {', '.join(repos)}")
+    if pat is None:
+        say(f"  БЕЗ PAT ({PAT_FILE} нет): публичные репозитории мигрируются "
+            "и проверяются, приватные не клонируются, обратное зеркало "
+            "Forgejo → GitHub НЕ настраивается.")
 
     token_name = f"migrate-{int(time.time())}"
     gen = run(["docker", "exec", "-u", "git", FORGEJO_CONTAINER,
