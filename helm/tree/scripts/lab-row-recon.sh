@@ -1,21 +1,17 @@
 #!/usr/bin/env bash
-# HELM · как на самом деле выглядит строка холестерина в хранимом тексте.
+# HELM · все строки корпуса, где назван холестерин, с датой источника.
 #
-# Прогон 486: модель выдала 8.4 ммоль/л, проверка отвергла его как
-# «значение при чужом объекте» — значит 8.4 в таблице есть, но у другого
-# показателя. Правильное значение 8.1. Чтобы читать таблицу
-# детерминированно, а не уговаривать модель, надо видеть РАЗМЕТКУ строк:
-# где название, где стрелка, где единица, где диапазон.
-#
-# ИСКАТЬ ПО ИМЕНИ ФАЙЛА НЕЛЬЗЯ (прогон 488 вернул «источник не найден»):
-# у health-источников `public.knowledge_sources.original_filename` пуст,
-# имя живёт в схеме health (P12). Ищем по содержимому разобранных
-# файлов — это не зависит от того, где лежит имя.
+# Прогон 489 показал формат лабораторной строки:
+#   «07.10.2023  Липидный профиль (ммоль/л) Холестерин общий: 6.2»
+# — дата в начале, раздел с единицей, дальше пары «показатель: значение
+# (диапазон)» через запятую. Но собственный `tail -90` срезал начало
+# вывода, и самый свежий источник в него не попал. Печатаем только
+# строки с холестерином — их немного, обрезать не придётся.
 set -uo pipefail
 cd /opt/helm/compose || exit 1
 echo "выкачено: $(sudo cat /opt/helm/DEPLOYED_SHA 2>/dev/null || echo unknown)"
 
-sudo docker compose exec -T helm-core python3 - <<'PYEOF' 2>&1 | tail -90
+sudo docker compose exec -T helm-core python3 - 2>&1 <<'PYEOF'
 from pathlib import Path
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -27,27 +23,20 @@ s = sessionmaker(bind=create_engine(get_settings().database_url, future=True))()
 bind_knowledge_user(s, None)
 sources = s.scalars(select(KnowledgeSource).where(
     KnowledgeSource.status == KnowledgeStatus.ACTIVE,
-    KnowledgeSource.source_path.is_not(None))).all()
+    KnowledgeSource.source_path.is_not(None))
+    .order_by(KnowledgeSource.content_date)).all()
 print(f"активных источников с текстом: {len(sources)}")
 
 for src in sources:
     path = Path(src.source_path)
     if not path.is_file():
         continue
-    text = path.read_text(encoding="utf-8")
-    if "олестерин" not in text.lower():
+    lines = path.read_text(encoding="utf-8").splitlines()
+    hits = [(i, l) for i, l in enumerate(lines) if "олестерин" in l.lower()]
+    if not hits:
         continue
-    lines = text.splitlines()
-    print(f"\n===== {src.id} домен={src.domain} парсер={src.parser} "
-          f"дата={src.content_date} строк={len(lines)} =====")
-    hits = [i for i, l in enumerate(lines)
-            if "олестерин" in l.lower() or "8.4" in l or "8,4" in l or "8.1" in l]
-    shown = set()
-    for i in hits:
-        for j in range(max(0, i - 2), min(len(lines), i + 3)):
-            if j not in shown:
-                shown.add(j)
-                mark = ">>" if j in hits else "  "
-                print(f"{mark} {j:4d} | {lines[j][:160]}")
-        print("   ....")
+    print(f"\n===== {str(src.id)[:8]} дата={src.content_date} "
+          f"парсер={src.parser} строк={len(lines)} =====")
+    for i, line in hits:
+        print(f"  {i:4d} | {line.strip()[:200]}")
 PYEOF
