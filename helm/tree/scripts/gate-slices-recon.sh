@@ -67,6 +67,20 @@ for name in ("MASTER_TZ.md",):
                   f"{run.windows_processed}  провалено: {run.windows_failed}")
             print(f"      узлов: {run.nodes_created}  рёбер: {run.edges_created}"
                   f"  покрытие: {run.coverage_ratio}")
+            # Какое именно окно провалилось и с каким кодом. Без этого
+            # «одно окно из 472» — число без причины, а чинить придётся
+            # вслепую: повтор помогает только если отказ случайный.
+            for window in session.scalars(
+                    select(KnowledgeSemanticWindow)
+                    .where(KnowledgeSemanticWindow.semantic_run_id == run.id,
+                           KnowledgeSemanticWindow.status == "failed")
+                    .order_by(KnowledgeSemanticWindow.ordinal)).all():
+                print(f"      ПРОВАЛЕНО окно {window.ordinal}: "
+                      f"символы {window.char_start}–{window.char_end} "
+                      f"({window.char_end - window.char_start}), "
+                      f"код {window.error_code or '—'}, "
+                      f"отброшено записей {window.rejected_count}, "
+                      f"деление: {'да' if window.parent_window_id else 'нет'}")
 
 print()
 print("  очередь семантики целиком:")
