@@ -18,26 +18,34 @@ import ast
 import pathlib
 
 from helm_core.knowledge.derivation import (
-    DERIVING_MODULES, RECORDED_FINGERPRINTS, derivation_fingerprint,
+    DERIVATION_REVISION, DERIVING_MODULES, RECORDED_FINGERPRINTS,
+    derivation_fingerprint,
 )
-from helm_core.knowledge.semantic_publish import SEMANTIC_VERSION
 
 
 def test_declared_version_matches_the_deriving_code():
-    """Отпечаток нынешнего кода обязан быть записан за нынешней версией.
+    """Отпечаток нынешнего кода обязан быть записан за нынешней ревизией.
 
     КРАСНЫЙ ТЕСТ ЧИНИТСЯ НЕ ЗДЕСЬ. Если он покраснел — изменился один из
     `DERIVING_MODULES`, то есть те же байты файла теперь дадут другой
-    вход для извлечения. Правильное действие: поднять `SEMANTIC_VERSION`
-    и ДОБАВИТЬ строку в `RECORDED_FINGERPRINTS`. Переписать существующую
-    строку — значит объявить, что корпус, разобранный прежним способом,
-    разобран нынешним.
+    вход для извлечения. Правильное действие: поднять
+    `DERIVATION_REVISION` и ДОБАВИТЬ строку в `RECORDED_FINGERPRINTS`.
+    Переписать существующую строку — значит объявить, что корпус,
+    разобранный прежним способом, разобран нынешним.
+
+    СЧЁТЧИК СВОЙ, А НЕ `SEMANTIC_VERSION`, И ЭТО НЕ КОСМЕТИКА (09.09.2026).
+    Реестр ключевался версией извлечения, и тест требовал поднимать её
+    на каждую правку парсера. Но версией ключуется семантическое
+    ЗАДАНИЕ: её подъём ставит в очередь пересчёт всего корпуса, включая
+    книгу на пятнадцать часов, — а до разбора файла не доходит вовсе.
+    Переразбор ведёт отпечаток, и заново поднимаются ровно те источники,
+    чей текст стал другим.
     """
-    assert SEMANTIC_VERSION in RECORDED_FINGERPRINTS, (
-        f"версия {SEMANTIC_VERSION} объявлена, но её отпечаток не записан")
-    assert RECORDED_FINGERPRINTS[SEMANTIC_VERSION] == derivation_fingerprint(), (
-        "код разбора изменился без подъёма версии: те же байты дадут другую "
-        "производную, а очередь сочтёт работу уже выполненной")
+    assert DERIVATION_REVISION in RECORDED_FINGERPRINTS, (
+        f"ревизия {DERIVATION_REVISION} объявлена, но её отпечаток не записан")
+    assert RECORDED_FINGERPRINTS[DERIVATION_REVISION] == derivation_fingerprint(), (
+        "код разбора изменился без подъёма производной ревизии: те же байты "
+        "дадут другую производную, а записано это нигде не будет")
 
 
 def test_a_change_in_the_parser_moves_the_fingerprint():

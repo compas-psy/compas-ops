@@ -20,6 +20,25 @@ PDF». Это верно буквально. `synthesis.unbound_claims()` уме
 отдельными строками. Дальше чанкинг может разрезать между ними, и тогда
 отношение теряется уже необратимо: в чанке остаётся число без имени.
 
+ВТОРАЯ ФОРМА, ИЗМЕРЕННАЯ ПРОГОНОМ 491. Тот же бланк другой вёрстки
+разворачивается с пустой строкой между колонками, с колонкой отклонения
+и с текстовой колонкой нормы, причём порядок колонок не тот:
+
+    Холестерин общий
+    см. комментарий
+
+    ммоль/л
+
+    8.4
+
+    ↑
+
+Прежние правила обрывались на первой же строке: «см. комментарий» не
+ячейка, пустая строка — конец. Из-за этого 8.4 оставалось числом без
+имени, и живой ответ владельцу 09.09.2026 был отклонён проверкой как
+«значение при чужом объекте» — при том что значение было ЕГО СОБСТВЕННОЕ
+и самое свежее. Отказ вместо верного ответа — та же цена, что выдумка.
+
 ЧТО ДЕЛАЕТСЯ. Строки, которые ВМЕСТЕ составляют одну строку таблицы,
 склеиваются обратно в одну текстовую строку с явными полями:
 
@@ -79,6 +98,10 @@ _VALUE_WITH_UNIT_RE = re.compile(
     r"\s*(?:[\(\[]\s*(?P<ref>\d+(?:[.,]\d+)?\s*[-–—]\s*\d+(?:[.,]\d+)?)\s*[\)\]])?"
     r"[\s.;|]*$")
 
+#: Колонка отклонения от нормы отдельной строкой. Только стрелки: «*»
+#: и «!» сюда не берутся, их формой уже занят распознаватель единиц.
+_FLAG_ONLY_RE = re.compile(r"^[\s|]*(?P<flag>[↑↓]{1,2})[\s|]*$")
+
 #: Сколько строк-ячеек подряд может относиться к одному названию.
 #: Четыре: значение, единица, диапазон и ещё одна на разнобой вёрстки.
 MAX_CELL_LINES = 4
@@ -115,6 +138,62 @@ def _is_unit(line: str) -> bool:
     return bool(match) and bool(_UNIT_SHAPE_RE.match(match.group("unit")))
 
 
+def _is_cell(cell: str) -> bool:
+    """Похожа ли строка на ячейку таблицы — любую из знакомых нам."""
+    if (_RANGE_ONLY_RE.match(cell) or _VALUE_ONLY_RE.match(cell)
+            or _FLAG_ONLY_RE.match(cell) or _is_unit(cell)):
+        return True
+    combined = _VALUE_WITH_UNIT_RE.match(cell)
+    return bool(combined) and bool(_UNIT_SHAPE_RE.match(combined.group("unit")))
+
+
+def _label_end(lines: list[str], index: int) -> int:
+    """Последняя строка названия: названия бывают перенесены.
+
+    ПРИЗНАК ПЕРЕНОСА — НЕЗАКРЫТАЯ СКОБКА, А НЕ РЕГИСТР. «Холестерин-ЛПНП
+    (липопротеины» / «низкой плотности)» — одно название в двух строках.
+    Соблазнительно ловить перенос по строчной букве в начале, но тогда
+    под правило попадёт и «см. комментарий» — а это ячейка колонки норм,
+    и приклеить её к названию значило бы переименовать показатель.
+    """
+    end = index
+    while (end - index < 2 and end + 1 < len(lines)
+           and lines[end + 1].strip()):
+        joined = " ".join(lines[index:end + 1])
+        if joined.count("(") <= joined.count(")"):
+            break
+        end += 1
+    return end
+
+
+def _is_reference_note(cell: str) -> bool:
+    """Текстовая норма («см. комментарий») — тоже ячейка колонки.
+
+    Со строчной буквы: названия показателей в бланке пишутся с
+    прописной, текстовые пометки — со строчной. Без этого различия
+    следующая строка таблицы была бы съедена как норма предыдущей.
+    """
+    stripped = cell.strip()
+    return bool(stripped) and stripped[:1].islower() and _is_label(stripped)
+
+
+def _note_belongs_to_row(lines: list[str], cursor: int) -> bool:
+    """За текстовой пометкой идёт ещё одна ячейка — значит это колонка.
+
+    Одной пометки мало: строка «Гемоглобин» тоже короткая и без чисел.
+    Ячейкой её делает то, что следом идёт значение, единица или флаг —
+    в связном тексте такого продолжения не бывает.
+    """
+    for offset in (1, 2):
+        position = cursor + offset
+        if position >= len(lines):
+            return False
+        following = lines[position].strip()
+        if following:
+            return _is_cell(following)
+    return False
+
+
 def restore_table_rows(text: str) -> str:
     """Склеить разорванные строки таблицы. Остальной текст не трогается.
 
@@ -130,13 +209,24 @@ def restore_table_rows(text: str) -> str:
             index += 1
             continue
 
-        value = unit = reference = None
+        label_end = _label_end(lines, index)
+        label = " ".join(part.strip() for part in lines[index:label_end + 1])
+
+        value = unit = reference = flag = None
         cells = 0
-        cursor = index + 1
+        consumed = label_end
+        cursor = label_end + 1
         while cursor < len(lines) and cells < MAX_CELL_LINES:
             cell = lines[cursor].strip()
             if not cell:
-                break
+                # ПУСТАЯ СТРОКА МЕЖДУ ЯЧЕЙКАМИ — РАЗДЕЛИТЕЛЬ КОЛОНОК.
+                # Вёрстка прогона 491 ставит по пустой строке между
+                # каждой парой колонок. Две пустые подряд — уже абзац,
+                # там строка таблицы кончилась.
+                if cursor + 1 >= len(lines) or not lines[cursor + 1].strip():
+                    break
+                cursor += 1
+                continue
             combined = _VALUE_WITH_UNIT_RE.match(cell) if value is None else None
             if combined is not None and not _UNIT_SHAPE_RE.match(combined.group("unit")):
                 # «1995» разбирается этим шаблоном как «199» и единица «5».
@@ -152,9 +242,20 @@ def restore_table_rows(text: str) -> str:
                 value = cell.strip(" \t:;|.-–—")
             elif unit is None and _is_unit(cell):
                 unit = _UNIT_ONLY_RE.match(cell).group("unit")
+            elif flag is None and _FLAG_ONLY_RE.match(cell):
+                flag = _FLAG_ONLY_RE.match(cell).group("flag")
+            elif (reference is None and value is None
+                  and _is_reference_note(cell)
+                  and _note_belongs_to_row(lines, cursor)):
+                # ТОЛЬКО ДО ЗНАЧЕНИЯ. После найденного значения короткая
+                # строка с буквами — это уже название следующей строки
+                # таблицы, и съесть его как норму значило бы потерять
+                # целую строку бланка.
+                reference = cell
             else:
                 break
             cells += 1
+            consumed = cursor
             cursor += 1
 
         # ОДНОГО ГОЛОГО ЧИСЛА НЕДОСТАТОЧНО. «Зависть» и следом «1995» —
@@ -166,11 +267,12 @@ def restore_table_rows(text: str) -> str:
             index += 1
             continue
 
-        restored = f"{line.strip().rstrip(':')}: {value}"
+        restored = f"{label.rstrip(':')}: "
+        restored += f"{flag} {value}" if flag else value
         if unit:
             restored += f" {unit}"
         if reference:
             restored += f" ({reference})"
         out.append(restored)
-        index = cursor
+        index = consumed + 1
     return "\n".join(out)
