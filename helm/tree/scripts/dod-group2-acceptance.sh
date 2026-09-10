@@ -172,22 +172,27 @@ try:
 
     from helm_core.models import KnowledgeMemory
 
-    stored = call("remember", {"text": f"Запомни: пароль от кладовки — {MARK}",
+    # Формулировка нарочно бытовая. Прогон 540 показал, почему это не
+    # мелочь: текст «пароль от кладовки» упёрся в отказ хранить секрет
+    # (§14.10), «Запомни» вернуло `rejected_secret`, и дальше проверять
+    # было нечего. Сам отказ теперь проверяется отдельно, ниже.
+    question = f"что лежит на полке в кладовке {MARK}"
+    stored = call("remember", {"text": f"Запомни: на полке в кладовке лежит {MARK}",
                                "channel": "telegram", "chat_id": CHAT})
     print(f"   «Запомни»: {stored.get('status')}")
-    after_store = MARK in (ask(f"какой пароль от кладовки {MARK}").get("answer_text") or "")
+    after_store = MARK in (ask(question).get("answer_text") or "")
 
     forgotten = call("admin", {"text": f"Забудь {MARK}"})
     print(f"   «Забудь»: {forgotten.get('status')}")
-    after_forget = MARK in (ask(f"какой пароль от кладовки {MARK}").get("answer_text") or "")
+    after_forget = MARK in (ask(question).get("answer_text") or "")
 
     restored = call("admin", {"text": f"Верни в память {MARK}"})
     print(f"   «Верни в память»: {restored.get('status')}")
-    after_restore = MARK in (ask(f"какой пароль от кладовки {MARK}").get("answer_text") or "")
+    after_restore = MARK in (ask(question).get("answer_text") or "")
 
     purged = call("admin", {"text": f"Удали навсегда {MARK}"})
     print(f"   «Удали навсегда»: {purged.get('status')}")
-    after_purge = MARK in (ask(f"какой пароль от кладовки {MARK}").get("answer_text") or "")
+    after_purge = MARK in (ask(question).get("answer_text") or "")
 
     session = db()
     left = session.scalars(select(KnowledgeMemory).where(
@@ -205,6 +210,33 @@ try:
 except Exception as exc:  # noqa: BLE001
     record("2.3", "запомнить, забыть, вернуть, удалить навсегда", None,
            f"сбой проверки: {exc!r}")
+
+# ── 2.5: секрет не попадает в память ─────────────────────────────────
+# §14.10: "Detect and refuse storing" — метка секрета рядом с текстом
+# достаточна для отказа. Проверка появилась не из спеки, а из прогона
+# 540: на ней сорвалась проверка 2.3, и стало видно, что запрет живой.
+print("############ 2.5. СЕКРЕТ НЕ ПОПАДАЕТ В ПАМЯТЬ ############")
+try:
+    from sqlalchemy import select
+
+    from helm_core.models import KnowledgeMemory
+
+    secret_mark = f"{MARK}-секрет"
+    attempt = call("remember", {"text": f"Запомни: пароль от кладовки — {secret_mark}",
+                                "channel": "telegram", "chat_id": CHAT})
+    print(f"   «Запомни» с меткой секрета: {attempt.get('status')}")
+    session = db()
+    left = session.scalars(select(KnowledgeMemory).where(
+        KnowledgeMemory.canonical_text.contains(secret_mark))).all()
+    print(f"   [внутренний слой] строк с этой меткой в базе: {len(left)}")
+    record("2.5", "секрет не записывается в память",
+           attempt.get("status") == "rejected_secret" and not left,
+           "запись отклонена и в базу не попала"
+           if attempt.get("status") == "rejected_secret" and not left
+           else f"исход {attempt.get('status')}, строк в базе {len(left)}")
+    session.rollback()
+except Exception as exc:  # noqa: BLE001
+    record("2.5", "секрет не записывается в память", None, f"сбой проверки: {exc!r}")
 
 # ── 2.4: MAX как независимый вход ────────────────────────────────────
 # Живьём не проверяется и не будет: подделанный апдейт от владельца
