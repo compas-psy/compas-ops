@@ -58,6 +58,26 @@ DETERMINISTIC_SEED = 0
 #: это делал `data[:MAX_ATOMS_PER_CALL]` в semantic-v1.
 MAX_ATOMS_PER_WINDOW = 40
 
+#: Потолок на ДЛИНУ ОТВЕТА модели. Второй способ упереться в то же самое:
+#: текста в окне больше, чем помещается в один ответ.
+#:
+#: Заведён владельцем 10.09.2026 по замерам 523/524. До него предела не
+#: было вовсе, и зациклившаяся модель писала, пока её не обрывал
+#: `REQUEST_TIMEOUT`: окно в 523 символа дало больше 2006 токенов подряд,
+#: две минуты ушли впустую, а наверх не поднялось НИЧЕГО — ни куска, ни
+#: признака обрыва, только «извлекатель недоступен».
+#:
+#: Почему потолка атомов не хватало: генерация идёт 18–21 токен/с, за 120
+#: секунд успевает около 2280 токенов, а сорок атомов с цитатами — заметно
+#: больше. Время кончалось раньше атомов, поэтому штатное деление окна
+#: (§14.4.1) не запускалось ни разу: недостижимый потолок не срабатывает.
+#: Предел обязан лежать НИЖЕ временного, иначе он такой же мёртвый.
+#:
+#: 1600 — с запасом под самый медленный замеренный темп (18 т/с это 89
+#: секунд) и заведомо выше обычного окна. Окно, которому честно нужно
+#: больше, теперь делится, а не пропадает по таймауту.
+MAX_GENERATION_TOKENS = 1600
+
 #: Сколько раз чинить невалидный ответ, прежде чем признать окно
 #: провалившимся. Три — не магия: первая попытка обычная, вторая с
 #: явным указанием на ошибку, третья последняя. Больше означало бы
@@ -80,7 +100,13 @@ class ExtractionTimedOut(ExtractionFailed):
 
 
 class WindowTruncated(RuntimeError):
-    """Окно упёрлось в потолок атомов — его надо разделить, а не обрезать."""
+    """Окно упёрлось в потолок — его надо разделить, а не обрезать.
+
+    Потолков два, и оба значат одно: содержимого больше, чем влезает в
+    один разбор. `MAX_ATOMS_PER_WINDOW` — по числу атомов в разобранном
+    ответе; `MAX_GENERATION_TOKENS` — по длине самого ответа, когда модель
+    не успела дописать. Не наследует `ExtractionFailed` намеренно: это не
+    сбой, который чинится повтором того же текста."""
 
 
 @dataclass(frozen=True)
@@ -519,7 +545,8 @@ def _call_ollama(prompt: str, *, model: str, keep_alive: str | None = None,
         "stream": False,
         "keep_alive": keep_alive if keep_alive is not None else get_settings().knowledge_semantic_keep_alive,
         "format": response_schema,
-        "options": {"temperature": 0, "seed": DETERMINISTIC_SEED},
+        "options": {"temperature": 0, "seed": DETERMINISTIC_SEED,
+                    "num_predict": MAX_GENERATION_TOKENS},
     }
     request = urllib.request.Request(
         OLLAMA_URL, data=json.dumps(body).encode("utf-8"), method="POST",
@@ -535,6 +562,13 @@ def _call_ollama(prompt: str, *, model: str, keep_alive: str | None = None,
                 payload = json.loads(response.read().decode())
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         raise ExtractionFailed(f"извлекатель недоступен: {exc}") from exc
+    # Ollama говорит `length`, когда упёрлась в `num_predict`. Ответ при
+    # этом оборван на полуслове: разбирать его как JSON бессмысленно, а
+    # чинить повтором того же текста — тем более (temperature=0, тот же
+    # seed, тот же обрыв). Наверх уходит сигнал поделить окно.
+    if payload.get("done_reason") == "length":
+        raise WindowTruncated(
+            f"ответ не уместился в {MAX_GENERATION_TOKENS} токенов")
     answer = (payload.get("response") or "").strip()
     if not answer:
         raise ExtractionFailed("извлекатель вернул пустой ответ")

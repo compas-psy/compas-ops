@@ -263,6 +263,96 @@ def test_call_ollama_requests_deterministic_generation(monkeypatch) -> None:
     assert captured["body"]["options"]["seed"] == module.DETERMINISTIC_SEED
 
 
+def _fake_generate(monkeypatch, module, payload: dict) -> dict:
+    """Подделать ОДИН ответ Ollama, вернув то, что ушло в запросе."""
+    captured: dict = {}
+
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def read(self):
+            return json.dumps(payload).encode()
+
+    def fake_urlopen(request, timeout=None):
+        captured["body"] = json.loads(request.data.decode())
+        return _FakeResponse()
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+    return captured
+
+
+def test_генерация_ограничена_сверху(monkeypatch) -> None:
+    """Без предела зацикливание модели стоит REQUEST_TIMEOUT и не даёт ничего.
+
+    Замер 10.09.2026 (прогоны 523/524): окно в 523 символа заставило
+    модель писать больше 2006 токенов подряд, вызов оборвал наш таймаут
+    ровно на 2m0s, окно провалилось, ревизия осталась degraded.
+    """
+    import helm_core.knowledge.semantic_extract as module
+
+    captured = _fake_generate(monkeypatch, module, {"response": "{}"})
+    module._call_ollama("окно", model="gemma2:2b")
+
+    assert captured["body"]["options"]["num_predict"] == module.MAX_GENERATION_TOKENS
+
+
+def test_упёршаяся_в_предел_генерация_это_обрыв_а_не_сбой(monkeypatch) -> None:
+    """`done_reason="length"` — это «текста больше, чем влезло в ответ».
+
+    Ровно тот же смысл, что у потолка атомов: окно надо ПОДЕЛИТЬ. Если
+    бы это уходило в `ExtractionFailed`, звено выше повторило бы тот же
+    текст — при temperature=0 с тем же исходом, только медленнее.
+    """
+    import helm_core.knowledge.semantic_extract as module
+
+    _fake_generate(monkeypatch, module,
+                   {"response": '{"entities": [', "done_reason": "length"})
+
+    with pytest.raises(module.WindowTruncated):
+        module._call_ollama("окно", model="gemma2:2b")
+
+
+def test_обрыв_по_пределу_не_чинится_повтором_того_же_текста(monkeypatch) -> None:
+    """Обрыв обязан дойти до звена, которое умеет делить окно.
+
+    Проверяется на `extract_nodes_window()` — том самом production-пути
+    (P1): повтора быть не должно, вызов ровно один, наверх уходит
+    `WindowTruncated`.
+    """
+    import helm_core.knowledge.semantic_extract as module
+
+    calls = {"n": 0}
+
+    def truncating(prompt, *, model, keep_alive=None, system=None, response_schema=None):
+        calls["n"] += 1
+        raise module.WindowTruncated("упёрлось в предел генерации")
+
+    monkeypatch.setattr(module, "_call_ollama", truncating)
+
+    with pytest.raises(module.WindowTruncated):
+        module.extract_nodes_window("окно", domain="personal")
+    assert calls["n"] == 1, "обрыв по пределу повторён тем же текстом"
+
+
+def test_предел_ниже_того_что_успевает_таймаут(monkeypatch) -> None:
+    """Предел бесполезен, если недостижим раньше таймаута.
+
+    Замер 524: генерация идёт 18–21 токен/с, значит за REQUEST_TIMEOUT
+    успевает около 2280 токенов. Потолок в 40 атомов с цитатами — заведомо
+    больше, и потому НИ РАЗУ не сработал: время кончалось первым, и
+    штатное деление не запускалось. Предел обязан лежать ниже временного.
+    """
+    import helm_core.knowledge.semantic_extract as module
+
+    slowest_measured_tokens_per_second = 18
+    assert module.MAX_GENERATION_TOKENS < (
+        slowest_measured_tokens_per_second * module.REQUEST_TIMEOUT)
+
+
 class TestNodeOnlyProductionPath:
     """P1/P2 (владелец 2026-09-04, remediation после R4 RCA run 241):
     node-only схема/промпт для `extract_nodes_window()` и timeout→split
