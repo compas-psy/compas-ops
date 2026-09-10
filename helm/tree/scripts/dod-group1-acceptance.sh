@@ -224,10 +224,73 @@ except Exception as exc:  # noqa: BLE001
     record("6", "«Запомни» кладёт микро-память", None, f"сбой проверки: {exc!r}")
 
 # ── 7: временная память ──────────────────────────────────────────────
+# §36: "temporal Micro-Memory expires from current recall without being
+# destroyed". Формулировка задана не в приёмке, а в коде: срок ставит
+# `parse_temporal_expiry` (memory.py:183) ровно по двум словам —
+# «сегодня» и «завтра» — на конец локальных суток владельца.
+#
+# Половина «исчезает из выдачи» наблюдалась бы репликой бота только
+# после полуночи. Ждать её приёмке нечем, поэтому она проверяется ТЕМ
+# ЖЕ предикатом, которым живёт живой путь (`search_memories`,
+# probe.py:799), с подставленным завтрашним временем. Это прямой вызов,
+# и он назван прямым вызовом: за реплику бота не выдаётся.
 print("############ 7. ВРЕМЕННАЯ ПАМЯТЬ ############")
-record("7", "временная память исчезает из выдачи, но жива", None,
-       "формулировка временной памяти в этой приёмке не задана — "
-       "выдумывать её ради галочки не буду, вынесено в группу 2")
+try:
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from helm_core.knowledge.recall import search_memories
+    from helm_core.knowledge.tenancy import bind_knowledge_user
+    from helm_core.models import KnowledgeMemory
+    from helm_core.models.base import utcnow
+
+    temporal_mark = f"{MARK}-курьер"
+    stored = call("remember", {"text": f"Запомни: код курьера на сегодня — {temporal_mark}",
+                               "channel": "telegram", "chat_id": "dod-group1"})
+    print(f"   запись памяти: {stored.get('status')}")
+    recalled = ask(f"какой код курьера {temporal_mark}")
+    answers_today = temporal_mark in (recalled.get("answer_text") or "")
+
+    session = db()
+    tenant = bind_knowledge_user(session, None)
+    now = utcnow()
+    tomorrow = now + timedelta(days=1)
+    row = session.scalars(select(KnowledgeMemory).where(
+        KnowledgeMemory.canonical_text.contains(temporal_mark))).first()
+    later = search_memories(session, query=temporal_mark, knowledge_user_id=tenant,
+                            now=tomorrow)
+    historical = search_memories(session, query=temporal_mark, knowledge_user_id=tenant,
+                                 now=tomorrow, include_historical=True)
+    print(f"   [внутренний слой] срок записи: "
+          f"{row.expires_at.isoformat() if row is not None and row.expires_at else 'не поставлен'}"
+          f"; состояние: {row.status if row is not None else '—'}")
+    print(f"   [прямой вызов search_memories] завтрашним временем в текущей выдаче: "
+          f"{len(later)}; в исторической: {len(historical)}")
+
+    if row is None:
+        record("7", "временная память исчезает из выдачи, но жива", False,
+               "записи в базе нет — «Запомни» не сработало")
+    elif row.expires_at is None:
+        record("7", "временная память исчезает из выдачи, но жива", False,
+               "слово «сегодня» не превратилось в срок")
+    elif not answers_today:
+        record("7", "временная память исчезает из выдачи, но жива", False,
+               "срок стоит, но сегодня же запись не отвечает")
+    elif later:
+        record("7", "временная память исчезает из выдачи, но жива", False,
+               "завтрашним временем запись всё ещё в текущей выдаче")
+    elif not historical:
+        record("7", "временная память исчезает из выдачи, но жива", False,
+               "исчезла и из исторической выдачи — уничтожена, а не истекла")
+    else:
+        record("7", "временная память исчезает из выдачи, но жива", True,
+               "срок поставлен по слову «сегодня», сегодня отвечает, "
+               "завтрашним временем уходит из выдачи, запись цела")
+    session.rollback()
+except Exception as exc:  # noqa: BLE001
+    record("7", "временная память исчезает из выдачи, но жива", None,
+           f"сбой проверки: {exc!r}")
 
 # ── 8: изоляция здоровья ─────────────────────────────────────────────
 print("############ 8. ИЗОЛЯЦИЯ ЗДОРОВЬЯ ############")
