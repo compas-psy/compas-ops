@@ -61,7 +61,8 @@ from .recall import (
 from .rephrase import rephrase_or_none
 from .synthesis import Synthesis, synthesize_or_none
 from .temporal import fact_date
-from .documents import choose_document, detect_document_request, document_reply
+from .documents import (choose_document, detect_document_request, document_reply,
+                        find_sources)
 from ..config import get_settings
 from .tenancy import bind_knowledge_user
 from ..models import (
@@ -723,6 +724,25 @@ def probe(session: Session, *, query: str, domain: str | None = None,
             session, text=query, source_ids=tuple(context.source_ids),
             knowledge_user_id=knowledge_user_id,
             panel_origin=get_settings().panel_origin)
+        if document_answer is None:
+            # НАЗВАН ДОКУМЕНТ ВНЕ СПИСКА. Прогон 534: список кандидатов
+            # стал точнее и состоит из одних анализов крови, а владелец
+            # назвал документ про гликированный гемоглобин — и получил
+            # пересказ вместо файла. Но просьба-то была о файле, и
+            # документ назван точно: искать его надо по всему корпусу, а
+            # не только среди предложенного.
+            #
+            # Правило отбора то же самое: `choose_document` над найденным.
+            # Реплика-вопрос сюда не доходит вовсе, а «спасибо» не наберёт
+            # ни имени файла, ни двух слов из него — и уйдёт обычным путём.
+            named = find_sources(session, query=query,
+                                 knowledge_user_id=knowledge_user_id)
+            if named:
+                document_answer = choose_document(
+                    session, text=query,
+                    source_ids=tuple(candidate.source_id for candidate in named),
+                    knowledge_user_id=knowledge_user_id,
+                    panel_origin=get_settings().panel_origin)
 
     if document_answer is not None:
         run_id = uuid.uuid4()
