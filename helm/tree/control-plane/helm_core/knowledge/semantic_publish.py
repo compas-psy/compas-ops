@@ -375,7 +375,22 @@ def _process(graph, models: _Models, *, window: SemanticWindow, ordinal: int,
                       tenant_id=tenant_id, ordinal=ordinal, parent_id=parent_id)
     graph.add(row)
     graph.flush()
-    next_ordinal = ordinal + 1
+    return _attempt(graph, models, row=row, window=window, next_ordinal=ordinal + 1,
+                    depth=depth, domain=domain, run_id=run_id, source_id=source_id,
+                    tenant_id=tenant_id, extract=extract, model=model, counters=counters)
+
+
+def _attempt(graph, models: _Models, *, row, window: SemanticWindow, next_ordinal: int,
+             depth: int, domain: str, run_id: uuid.UUID, source_id: uuid.UUID,
+             tenant_id: uuid.UUID, extract, model: str, counters: dict) -> int:
+    """Одна попытка разбора В УЖЕ СОЗДАННУЮ строку окна.
+
+    Отделено от `_process()` затем, чтобы повтор провалившегося окна шёл
+    в ТУ ЖЕ строку, а не заводил вторую на тот же участок текста. Вторая
+    строка испортила бы и счёт окон, и покрытие, и определение сноса
+    текста (`_text_unchanged` смотрит на последнее окно по номеру).
+    """
+    ordinal = row.ordinal
 
     try:
         extraction = extract(window.text, domain=domain, heading_path=window.heading_path,
@@ -441,6 +456,76 @@ def _process(graph, models: _Models, *, window: SemanticWindow, ordinal: int,
     counters["covered_chars"] += window.char_end - window.char_start
     graph.flush()
     return next_ordinal
+
+
+def retry_failed_windows(graph, models: _Models, *, run_id: uuid.UUID,
+                         windows: list[SemanticWindow], domain: str,
+                         source_id: uuid.UUID, tenant_id: uuid.UUID, extract,
+                         model: str) -> int:
+    """Второй заход по провалившимся окнам верхнего уровня. Сколько починено.
+
+    ЗАЧЕМ. Решение владельца 10.09.2026. READY требует «ни одного
+    провалившегося окна», а `current_semantic_run_id` переключается
+    только на READY (§14.20). На `MASTER_TZ.md` одно окно из 472
+    (`EXTRACTION_FAILED`, 523 символа, отброшено проверкой ноль) оставило
+    ревизию DEGRADED — и документ, разобранный на 99,7 %, не попал в
+    структурный слой вовсе. Чем крупнее источник, тем вероятнее хотя бы
+    один отказ, то есть слой отказывал ровно на тех документах, ради
+    которых заводился.
+
+    ЧТО ЭТО НЕ МЕНЯЕТ. Контракт §14.20 остаётся прежним: READY по-
+    прежнему значит «ни одного провала». Меняется не порог, а то, что
+    СЛУЧАЙНЫЙ отказ перестаёт быть приговором. Детерминированный отказ
+    (текст окна ломает разбор) остаётся отказом: попытка ровно одна.
+
+    ПОЧЕМУ ОДНА. Повтор стоит вызова модели. Крутить его до успеха на
+    окне, которое падает всегда, значит тратить единственный локальный
+    ресурс на заведомо безнадёжное — и делать это тем дольше, чем хуже
+    документ.
+
+    Попытка идёт в ТУ ЖЕ строку окна: `_attempt()` отделён от
+    `_process()` именно за этим. Номера для окон, которые появятся из
+    деления при повторе, берутся за максимумом — на существующие они не
+    наезжают, а сама строка номер не меняет.
+    """
+    failed = graph.scalars(
+        select(models.window)
+        .where(models.window.semantic_run_id == run_id,
+               models.window.parent_window_id.is_(None),
+               models.window.status == SemanticWindowStatus.FAILED)
+        .order_by(models.window.ordinal)).all()
+    if not failed:
+        return 0
+
+    by_span = {(w.char_start, w.char_end): w for w in windows}
+    next_ordinal = (graph.scalar(
+        select(func.max(models.window.ordinal))
+        .where(models.window.semantic_run_id == run_id)) or 0) + 1
+
+    repaired = 0
+    for row in failed:
+        window = by_span.get((row.char_start, row.char_end))
+        if window is None:
+            # Разбивка не совпала с записанной — значит текст источника
+            # другой. Молча пересобирать по нему нельзя, это тот самый
+            # тихий отказ, который ловит `_text_unchanged`.
+            logger.warning("повтор окна %d прогона %s пропущен: участок не найден "
+                           "в текущей разбивке", row.ordinal, run_id)
+            continue
+        row.status = SemanticWindowStatus.PENDING
+        row.error_code = None
+        graph.flush()
+        # Счётчики попытки здесь не нужны: итоговые числа прогона всё
+        # равно пересчитываются из строк окон (`_counters`).
+        next_ordinal = _attempt(
+            graph, models, row=row, window=window, next_ordinal=next_ordinal, depth=0,
+            domain=domain, run_id=run_id, source_id=source_id, tenant_id=tenant_id,
+            extract=extract, model=model,
+            counters={"processed": 0, "failed": 0, "nodes": 0, "edges": 0,
+                      "covered_chars": 0})
+        if row.status != SemanticWindowStatus.FAILED:
+            repaired += 1
+    return repaired
 
 
 def _progress(graph, models, run_id: uuid.UUID) -> tuple[int, int]:
@@ -595,6 +680,14 @@ def publish_semantic_run(session: Session, *, source: KnowledgeSource, text: str
                 tenant_id=tenant_id, extract=extract, model=model, counters=batch)
         state["done"] = done + len(todo)
         state["advanced"] = len(todo)
+        # Повтор — только когда источник дочитан до конца. На середине он
+        # был бы вреден дважды: тратил бы модель на каждой порции и
+        # ничего не решал, потому что вопрос «READY или DEGRADED» встаёт
+        # ровно один раз, в самом конце.
+        if state["done"] >= len(windows):
+            state["repaired"] = retry_failed_windows(
+                graph, models, run_id=run.id, windows=windows, domain=source.domain,
+                source_id=source.id, tenant_id=tenant_id, extract=extract, model=model)
         state["counters"] = _counters(graph, models, run.id)
 
     if use_health:
@@ -638,6 +731,84 @@ def publish_semantic_run(session: Session, *, source: KnowledgeSource, text: str
             edges_created=run.edges_created, coverage_ratio=float(run.coverage_ratio),
             finished=False)
 
+    return _finalize(session, run=run, source=source, counters=counters)
+
+
+def repair_degraded_run(session: Session, *, source: KnowledgeSource, text: str,
+                        model: str | None = None, extract=extract_nodes_window,
+                        run: KnowledgeSemanticRun | None = None) -> PublishResult | None:
+    """Повторить провалившиеся окна УЖЕ ЗАКОНЧЕННОЙ ревизии и пересудить её.
+
+    Нужна для ревизий, законченных до появления повтора: у них задание
+    уже `done`, воркер его не возьмёт, и окно осталось бы провалившимся
+    навсегда. Пересобирать источник целиком ради одного окна — это
+    часы работы модели на ровном месте.
+
+    Ничего не удаляет и ничего не переписывает мимо контракта: повтор
+    идёт в ту же строку окна, а судьбу ревизии решает тот же
+    `_finalize()`, что и обычный разбор. Ревизия, оставшаяся с
+    провалом, останется DEGRADED и текущей не станет.
+
+    `None` — чинить нечего: ревизии нет или в ней нет провалившихся
+    окон верхнего уровня.
+    """
+    tenant_id = source.knowledge_user_id
+    if tenant_id is None:
+        raise ValueError("источник без владельца не может иметь семантической ревизии")
+    model = model or get_settings().knowledge_semantic_model
+
+    if run is None:
+        run = session.scalars(
+            select(KnowledgeSemanticRun)
+            .where(KnowledgeSemanticRun.source_id == source.id,
+                   KnowledgeSemanticRun.status == SemanticRunStatus.DEGRADED)
+            .order_by(KnowledgeSemanticRun.created_at.desc()).limit(1)).first()
+    if run is None:
+        return None
+
+    windows = build_windows(text)
+    use_health = is_health_domain(source.domain) and health_schema_configured()
+    models = HEALTH_MODELS if use_health else PUBLIC_MODELS
+
+    def work(graph) -> int:
+        return retry_failed_windows(
+            graph, models, run_id=run.id, windows=windows, domain=source.domain,
+            source_id=source.id, tenant_id=tenant_id, extract=extract, model=model)
+
+    if use_health:
+        with health_session(tenant_id) as graph:
+            repaired = work(graph)
+            counters = _counters(graph, models, run.id)
+    else:
+        repaired = work(session)
+        counters = _counters(session, models, run.id)
+    if repaired == 0 and counters["failed"] == run.windows_failed:
+        # Ничего не изменилось — не трогаем ни статус, ни отметку
+        # времени: тихая перезапись «ещё раз то же самое» стирает след
+        # того, когда ревизия на самом деле закончилась.
+        return None
+
+    total_chars = sum(w.char_end - w.char_start for w in windows)
+    run.windows_total = counters["total"]
+    run.windows_processed = counters["processed"]
+    run.windows_failed = counters["failed"]
+    run.nodes_created = counters["nodes"]
+    run.edges_created = counters["edges"]
+    run.coverage_ratio = round(
+        (counters["covered_chars"] / total_chars) if total_chars else 1.0, 3)
+    return _finalize(session, run=run, source=source, counters=counters)
+
+
+def _finalize(session: Session, *, run: KnowledgeSemanticRun, source: KnowledgeSource,
+              counters: dict) -> PublishResult:
+    """Решить судьбу законченной ревизии и, если она годна, сделать текущей.
+
+    Отдельной функцией, потому что решение принимается в ДВУХ местах:
+    в конце обычного разбора и после починки уже законченной ревизии
+    (`repair_degraded_run`). Две копии этого условия однажды разъедутся,
+    и разъедутся молча — а это ровно то условие, которым документ
+    попадает в структурный слой или не попадает.
+    """
     run.finished_at = datetime.now(timezone.utc)
 
     # Единственное условие READY: ни одно окно не провалено. Покрытие
@@ -646,6 +817,7 @@ def publish_semantic_run(session: Session, *, source: KnowledgeSource, text: str
     # §14.19 мог показать владельцу честные 94%, а не только да/нет.
     if counters["failed"] == 0:
         run.status = SemanticRunStatus.READY
+        run.error_code = None
     elif counters["processed"] > 0:
         run.status = SemanticRunStatus.DEGRADED
         run.error_code = "WINDOWS_FAILED"

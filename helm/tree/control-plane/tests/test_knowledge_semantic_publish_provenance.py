@@ -34,7 +34,11 @@ class TestProductionUsesTheAttestedPath:
         assert default is extract_nodes_window
 
     def test_edges_come_from_the_compiler_not_from_the_model(self):
-        source = inspect.getsource(semantic_publish._process)
+        # Смотрим на `_attempt`, а не на `_process`: 10.09.2026 попытка
+        # разбора отделена от создания строки окна, чтобы повтор
+        # провалившегося окна шёл в ту же строку. Свойство не изменилось
+        # — изменилось место, где оно живёт.
+        source = inspect.getsource(semantic_publish._attempt)
         assert "compile_relations(" in source, "рёбра обязан строить компилятор"
 
 

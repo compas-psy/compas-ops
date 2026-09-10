@@ -31,7 +31,9 @@ from helm_core.knowledge.semantic_extract import (
     ExtractedAtom, ExtractedEdge, ExtractedEntity, ExtractionFailed, MAX_ATOMS_PER_WINDOW,
     WindowExtraction, WindowTruncated,
 )
-from helm_core.knowledge.semantic_publish import SEMANTIC_VERSION, publish_semantic_run
+from helm_core.knowledge.semantic_publish import (
+    SEMANTIC_VERSION, publish_semantic_run, repair_degraded_run,
+)
 from helm_core.knowledge.semantic_windows import build_windows
 from helm_core.knowledge.tenancy import bind_knowledge_user
 from helm_core.models import (
@@ -196,16 +198,24 @@ def test_window_at_the_cap_is_split_not_truncated(session, source):
 def test_unrecoverable_window_makes_the_run_degraded(session, source):
     """§14.19: неустранимый сбой одного участка — DEGRADED, а не
     «документ готов» и не «всё пропало»."""
-    calls = {"n": 0}
+    # Отказ ОДНОГО И ТОГО ЖЕ участка, а не одного вызова. Раньше здесь
+    # стояло «упасть на втором вызове», и это был устранимый отказ,
+    # названный неустранимым: повтор окна (10.09.2026) такое окно
+    # чинит. Неустранимый — это когда текст участка ломает разбор
+    # всегда, и именно он обязан оставлять ревизию DEGRADED.
+    state = {"n": 0, "doomed": None}
 
-    def fails_once(window_text, *, domain, heading_path=(), model=""):
-        calls["n"] += 1
-        if calls["n"] == 2:
+    def always_fails_on_one_window(window_text, *, domain, heading_path=(), model=""):
+        state["n"] += 1
+        if state["doomed"] is None and state["n"] == 2:
+            state["doomed"] = window_text
+        if window_text == state["doomed"]:
             raise ExtractionFailed("модель не отвечает")
-        return _extraction(f"w{calls['n']}", window_text=window_text)
+        return _extraction(f"w{state['n']}", window_text=window_text)
 
     result = publish_semantic_run(session, source=source, text=long_source_text(),
-                                  extract=fails_once, semantic_version=SEMANTIC_VERSION)
+                                  extract=always_fails_on_one_window,
+                                  semantic_version=SEMANTIC_VERSION)
 
     assert result.status == SemanticRunStatus.DEGRADED
     assert result.windows_failed == 1
@@ -213,6 +223,127 @@ def test_unrecoverable_window_makes_the_run_degraded(session, source):
     failed = [w for w in _windows(session, result.run_id)
               if w.status == SemanticWindowStatus.FAILED]
     assert [w.error_code for w in failed] == ["EXTRACTION_FAILED"]
+
+
+def test_transient_window_failure_is_retried_and_the_run_becomes_ready(session, source):
+    """Решение владельца 10.09.2026: случайный отказ окна не приговор.
+
+    Найдено на живом корпусе: у `MASTER_TZ.md` одно окно из 472 упало с
+    `EXTRACTION_FAILED`, ревизия вышла DEGRADED, и документ, разобранный
+    на 99,7 %, не попал в структурный слой вовсе — потому что
+    `current_semantic_run_id` переключается только на READY. Чем крупнее
+    источник, тем вероятнее хоть один отказ.
+
+    Контракт §14.20 при этом НЕ меняется: READY по-прежнему значит «ни
+    одного провала». Проверяется именно это — что провалов не осталось,
+    а не что порог опустили.
+    """
+    calls = {"n": 0}
+
+    def fails_once(window_text, *, domain, heading_path=(), model=""):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ExtractionFailed("модель не ответила один раз")
+        return _extraction(f"w{calls['n']}", window_text=window_text)
+
+    result = publish_semantic_run(session, source=source, text=long_source_text(),
+                                  extract=fails_once, semantic_version=SEMANTIC_VERSION)
+
+    assert result.status == SemanticRunStatus.READY
+    assert result.windows_failed == 0
+    assert result.switched is True
+    assert result.coverage_ratio == 1.0
+
+
+def test_retry_reuses_the_window_row_instead_of_adding_a_second(session, source):
+    """Повтор идёт в ту же строку окна.
+
+    Вторая строка на тот же участок испортила бы всё, что считается по
+    строкам: число окон, покрытие и определение подмены текста
+    (`_text_unchanged` смотрит на последнее окно верхнего уровня по
+    номеру). Поэтому проверяется не только исход, но и то, что участки
+    не задвоились.
+    """
+    calls = {"n": 0}
+
+    def fails_once(window_text, *, domain, heading_path=(), model=""):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ExtractionFailed("модель не ответила один раз")
+        return _extraction(f"w{calls['n']}", window_text=window_text)
+
+    result = publish_semantic_run(session, source=source, text=long_source_text(),
+                                  extract=fails_once, semantic_version=SEMANTIC_VERSION)
+
+    spans = [(w.char_start, w.char_end) for w in _windows(session, result.run_id)
+             if w.parent_window_id is None]
+    assert len(spans) == len(set(spans))
+    assert result.windows_total == len(spans)
+
+
+def test_degraded_run_is_repairable_without_reparsing_the_source(session, source):
+    """Ревизия, законченная до повтора, чинится отдельно.
+
+    У таких ревизий задание уже `done`: воркер его не возьмёт, окно
+    осталось бы провалившимся навсегда, а пересобирать источник целиком
+    ради одного окна — часы работы модели. Проверяется и то, что
+    починка не разбирает заново всё: заново зовут ровно одно окно.
+    """
+    state = {"n": 0, "doomed": None, "healed": False}
+
+    def fails_until_healed(window_text, *, domain, heading_path=(), model=""):
+        state["n"] += 1
+        if state["doomed"] is None and state["n"] == 2:
+            state["doomed"] = window_text
+        if window_text == state["doomed"] and not state["healed"]:
+            raise ExtractionFailed("модель не отвечает")
+        return _extraction(f"w{state['n']}", window_text=window_text)
+
+    broken = publish_semantic_run(session, source=source, text=long_source_text(),
+                                  extract=fails_until_healed,
+                                  semantic_version=SEMANTIC_VERSION)
+    assert broken.status == SemanticRunStatus.DEGRADED
+    assert broken.switched is False
+
+    state["healed"] = True
+    before = state["n"]
+    repaired = repair_degraded_run(session, source=source, text=long_source_text(),
+                                   extract=fails_until_healed)
+
+    assert repaired is not None
+    assert repaired.run_id == broken.run_id
+    assert repaired.status == SemanticRunStatus.READY
+    assert repaired.switched is True
+    assert repaired.windows_failed == 0
+    # Заново разобрано ровно одно окно, а не весь источник.
+    assert state["n"] - before == 1
+
+
+def test_repair_returns_nothing_when_the_failure_is_permanent(session, source):
+    """Починка не выдаёт неудачу за успех.
+
+    Если окно падает всегда, ревизия остаётся DEGRADED и текущей не
+    становится — `None` здесь значит «чинить нечем», а не «починено».
+    """
+    state = {"n": 0, "doomed": None}
+
+    def always_fails_on_one_window(window_text, *, domain, heading_path=(), model=""):
+        state["n"] += 1
+        if state["doomed"] is None and state["n"] == 2:
+            state["doomed"] = window_text
+        if window_text == state["doomed"]:
+            raise ExtractionFailed("модель не отвечает")
+        return _extraction(f"w{state['n']}", window_text=window_text)
+
+    broken = publish_semantic_run(session, source=source, text=long_source_text(),
+                                  extract=always_fails_on_one_window,
+                                  semantic_version=SEMANTIC_VERSION)
+    assert broken.status == SemanticRunStatus.DEGRADED
+
+    assert repair_degraded_run(session, source=source, text=long_source_text(),
+                               extract=always_fails_on_one_window) is None
+    assert session.scalar(select(KnowledgeSource.current_semantic_run_id).where(
+        KnowledgeSource.id == source.id)) is None
 
 
 def test_l1_stays_searchable_when_l2_degraded(session, source):
@@ -267,16 +398,20 @@ def test_degraded_run_does_not_replace_a_good_one(session, source):
                                 extract=marker_aware_extractor, semantic_version=SEMANTIC_VERSION)
     assert good.switched is True
 
-    calls = {"n": 0}
+    # Тот же довод, что выше: отказ привязан к участку, а не к номеру
+    # вызова, иначе повтор окна почини́л бы его и ревизия вышла бы READY.
+    state = {"n": 0, "doomed": None}
 
-    def fails_once(window_text, *, domain, heading_path=(), model=""):
-        calls["n"] += 1
-        if calls["n"] == 1:
+    def always_fails_on_one_window(window_text, *, domain, heading_path=(), model=""):
+        state["n"] += 1
+        if state["doomed"] is None:
+            state["doomed"] = window_text
+        if window_text == state["doomed"]:
             raise ExtractionFailed("модель не отвечает")
-        return _extraction(f"r{calls['n']}", window_text=window_text)
+        return _extraction(f"r{state['n']}", window_text=window_text)
 
     worse = publish_semantic_run(session, source=source, text=long_source_text(),
-                                 extract=fails_once, semantic_version=3)
+                                 extract=always_fails_on_one_window, semantic_version=3)
 
     assert worse.status == SemanticRunStatus.DEGRADED
     assert worse.switched is False
