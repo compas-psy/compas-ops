@@ -144,6 +144,31 @@ def _health_candidates_by_content(session: Session, *, tenant_id: uuid.UUID, que
     return [_as_candidate(by_id[sid]) for sid in source_ids if sid in by_id]
 
 
+#: Сколько имён просматривается, прежде чем выбрать лучшие. Не то же, что
+#: `MAX_CANDIDATES`: тот ограничивает ОТВЕТ, а этот — выборку, из которой
+#: ответ считается. Возьми здесь пять — лучшее имя могло бы не попасть в
+#: выборку вовсе, и правило считало бы победителем не того.
+_NAME_SCAN = 50
+
+
+def _best_by_name(sources: list[KnowledgeSource], words: list[str]) -> list[SourceCandidate]:
+    """Имена, совпавшие с запросом наибольшим числом слов.
+
+    Считается по отображаемому имени (`_as_candidate`), а не по колонке:
+    у health-документов `public.original_filename` пуст по ADR-005/P12,
+    и счёт по колонке дал бы им ноль независимо от названия.
+    """
+    scored = []
+    for source in sources:
+        candidate = _as_candidate(source)
+        name = (candidate.original_filename or "").casefold()
+        scored.append((sum(word.casefold() in name for word in words), candidate))
+    best = max((score for score, _ in scored), default=0)
+    if best == 0:
+        return []
+    return [candidate for score, candidate in scored if score == best]
+
+
 def find_sources(session: Session, *, query: str, knowledge_user_id: uuid.UUID | None = None,
                  limit: int = MAX_CANDIDATES) -> list[SourceCandidate]:
     """Найти свои документы по имени файла или по содержимому.
@@ -177,12 +202,33 @@ def find_sources(session: Session, *, query: str, knowledge_user_id: uuid.UUID |
     # имени — по началу слова, чтобы «анализа» нашло «анализ».
     words = [word[:5] for word in re.findall(r"\w{3,}", query, re.UNICODE)]
     if words:
-        by_words = list(session.scalars(
-            base.where(*[KnowledgeSource.original_filename.ilike(f"%{word}%")
-                         for word in words])
-            .order_by(KnowledgeSource.created_at.desc()).limit(limit)).all())
-        if by_words:
-            return [_as_candidate(source) for source in by_words[:limit]]
+        # ПО ЧИСЛУ СОВПАВШИХ СЛОВ, А НЕ ПО ВСЕМ СРАЗУ. Требование «все
+        # слова в имени» выглядит строгим, но на живом запросе оно
+        # оборачивается своей противоположностью: «последнего
+        # клинического анализа крови» не находит НИЧЕГО (слова
+        # «последнего» нет ни в одном имени), запрос проваливается в
+        # полнотекстовый поиск по отдельным словам — и владелец получает
+        # книгу по психологическому консультированию вместо анализов
+        # (скриншот 10.09.2026).
+        #
+        # Побеждают имена с наибольшим числом совпавших слов. Три слова
+        # из четырёх — это «Клинический анализ крови.pdf»; книга, где
+        # совпало одно, до ответа не доходит.
+        matched = list(session.scalars(
+            base.where(or_(*[KnowledgeSource.original_filename.ilike(f"%{word}%")
+                             for word in words]))
+            .order_by(KnowledgeSource.created_at.desc()).limit(_NAME_SCAN)).all())
+        seen = {source.id for source in matched}
+        for word in words:
+            for source in _health_candidates_by_name(session, tenant_id=tenant_id,
+                                                     pattern=f"%{word}%",
+                                                     limit=_NAME_SCAN):
+                if source.id not in seen:
+                    seen.add(source.id)
+                    matched.append(source)
+        best = _best_by_name(matched, words)
+        if best:
+            return best[:limit]
 
     tsquery = build_or_tsquery(query)
     rank = func.max(func.ts_rank(KnowledgeChunk.tsv, tsquery, 2)).label("rank")

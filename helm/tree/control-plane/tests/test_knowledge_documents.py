@@ -167,3 +167,33 @@ def test_client_content_is_marked_sensitive(session, tmp_path):
     session.flush()
 
     assert is_sensitive(session, source.id) is True
+
+
+def test_подбор_кандидатов_не_приносит_постороннее(session):
+    """«Последний клинический анализ крови» — это анализы, а не книга.
+
+    Скриншот владельца 10.09.2026: под этот запрос бот предложил книгу по
+    психологическому консультированию, два queue-recovery и MASTER_TZ.md.
+    Причина в `find_sources`: поиск по имени требует, чтобы совпали ВСЕ
+    слова запроса, слова «последнего» нет ни в одном имени — и запрос
+    проваливается в полнотекстовый поиск по отдельным словам, где книга
+    выигрывает объёмом.
+    """
+    from helm_core.knowledge.documents import find_sources
+
+    bind_knowledge_user(session, None)
+    ingest_text(session, domain="health", text="Гемоглобин 167 г/л",
+                original_filename="94574021_Клинический анализ крови.pdf")
+    ingest_text(session, domain="health", text="HbA1c 5.4 %",
+                original_filename="148990953_Исследования гликированного гемоглобина.pdf")
+    ingest_text(session, domain="personal",
+                text="Клинический анализ случая. Последний раз консультирование "
+                     "рассматривало анализ переноса и крови как метафоры.",
+                original_filename="Психологическое_консультирование_Теория_и практика.fb2")
+    session.flush()
+
+    found = find_sources(session, query="последнего клинического анализа крови")
+    names = [candidate.original_filename for candidate in found]
+
+    assert names, "хоть один кандидат обязан найтись"
+    assert all("Клинический анализ крови" in (name or "") for name in names), names
