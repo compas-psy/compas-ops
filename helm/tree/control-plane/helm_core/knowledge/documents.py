@@ -326,6 +326,15 @@ class DocumentAnswer:
     candidates: tuple[SourceCandidate, ...] = ()
 
 
+#: Слова, с которых начинается вопрос о содержании, а не название
+#: документа. Список короткий намеренно: он отделяет «какой у меня был
+#: гемоглобин» от «гликированный гемоглобин», и расширять его под каждый
+#: случай значило бы гадать вместо правила.
+_QUESTION_WORD = re.compile(
+    r"\b(что|чего|чем|какой|какая|какое|какие|каков|когда|где|куда|откуда|"
+    r"сколько|почему|зачем|как|кто|кому)\b", re.IGNORECASE | re.UNICODE)
+
+
 def choose_document(session: Session, *, text: str, source_ids: tuple[str, ...],
                     knowledge_user_id: uuid.UUID | None,
                     panel_origin: str) -> DocumentAnswer | None:
@@ -354,6 +363,15 @@ def choose_document(session: Session, *, text: str, source_ids: tuple[str, ...],
     # `find_sources`: владелец называет документ словами («Исследование
     # гликированного гемоглобина — последний»), а файл называется
     # «148990953_Исследования гликированного гемоглобина.pdf».
+    # ВОПРОС — НЕ ВЫБОР. Прогон 530: «а какой у меня был гемоглобин» после
+    # уточнения выдал файл вместо ответа, потому что слово «гемоглобин»
+    # есть в имени документа. Человек, называющий документ, не начинает
+    # с «какой» и не спрашивает; человек, спрашивающий о содержании, —
+    # спрашивает. Этого различия хватает, и оно не зависит от того, как
+    # назван файл.
+    if "?" in text or _QUESTION_WORD.search(text):
+        return None
+
     words = [word[:5].casefold() for word in re.findall(r"\w{4,}", text, re.UNICODE)]
     if not words:
         return None
@@ -366,7 +384,13 @@ def choose_document(session: Session, *, text: str, source_ids: tuple[str, ...],
     scored = [(sum(word in (candidate.original_filename or "").casefold()
                    for word in words), candidate) for candidate in listed]
     best = max((score for score, _ in scored), default=0)
-    if best == 0:
+    # ОДНОГО СОВПАВШЕГО СЛОВА МАЛО. Тот же прогон 530: одно слово из
+    # имени файла ещё не значит, что документ назвали, — оно может просто
+    # быть темой разговора. Названием считается либо имя файла целиком,
+    # либо два и больше слов из него.
+    named_outright = any((candidate.original_filename or "").casefold() in text.casefold()
+                         for candidate in listed)
+    if best == 0 or (best < 2 and not named_outright):
         return None
     named = [candidate for score, candidate in scored if score == best]
     if len(named) > 1:

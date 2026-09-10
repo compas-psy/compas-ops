@@ -194,3 +194,68 @@ def test_новый_вопрос_после_уточнения_не_считае
     other = probe(session, query="а какой у меня был гемоглобин", context=context)
 
     assert "ключом доступа" not in (other.answer_text or "")
+
+
+def _context_of(*sources) -> DialogueContext:
+    """Контекст ровно той формы, что шлёт плагин после «Какой из них?».
+
+    Строится из источников напрямую, а не из первого хода: проверяется
+    ВЫБОР, и он не должен зависеть от того, как сработал поиск кандидатов.
+    Пропуск теста здесь был бы худшим исходом — он выглядит как
+    прохождение, ничего не проверив.
+    """
+    return DialogueContext(
+        question="Отдай мне файл последнего клинического анализа крови",
+        source_ids=tuple(str(source.id) for source in sources),
+        filenames=tuple(source.original_filename or "" for source in sources),
+        memory=True)
+
+def test_вопрос_о_содержании_не_считается_выбором_на_настоящих_именах(session):
+    """Прогон 530 на живом сервере: выбор захватил обычный вопрос.
+
+    Мой прежний тест этого не поймал, потому что файлы в нём назывались
+    «анализ-крови-2023.pdf» — выдуманно удобно, слова «гемоглобин» в имени
+    не было. У владельца файл называется «148990953_Исследования
+    гликированного гемоглобина.pdf», и вопрос «а какой у меня был
+    гемоглобин» совпал с ним одним словом — документ выдался вместо
+    ответа.
+
+    Здесь имена настоящие, из его корпуса. Проверка не может пройти
+    из-за удачной выдумки.
+    """
+    bind_knowledge_user(session, None)
+    hba1c = ingest_text(
+        session, domain="health", text="HbA1c 5.4 %",
+        original_filename="148990953_Исследования гликированного гемоглобина.pdf")
+    blood = ingest_text(
+        session, domain="health", text="Гемоглобин 148 г/л",
+        original_filename="94574021_Клинический анализ крови.pdf")
+    session.flush()
+
+    context = _context_of(hba1c, blood)
+
+    answer = probe(session, query="а какой у меня был гемоглобин", context=context)
+
+    assert "ключом доступа" not in (answer.answer_text or ""), (
+        "вопрос о содержании обязан остаться вопросом, даже когда слово из "
+        "него есть в имени документа")
+
+
+def test_название_документа_словами_по_прежнему_доводит_до_выдачи(session):
+    """Та же правка не должна убить то, ради чего всё делалось."""
+    bind_knowledge_user(session, None)
+    hba1c = ingest_text(
+        session, domain="health", text="HbA1c 5.4 %",
+        original_filename="148990953_Исследования гликированного гемоглобина.pdf")
+    blood = ingest_text(
+        session, domain="health", text="Гемоглобин 148 г/л",
+        original_filename="94574021_Клинический анализ крови.pdf")
+    session.flush()
+
+    context = _context_of(hba1c, blood)
+
+    for reply in ("Вот этот: 148990953_Исследования гликированного гемоглобина.pdf",
+                  "Исследование гликированного гемоглобина - последний"):
+        answer = probe(session, query=reply, context=context)
+        assert "гликированного гемоглобина" in (answer.answer_text or ""), reply
+        assert "ключом доступа" in (answer.answer_text or ""), reply
