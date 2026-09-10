@@ -99,3 +99,98 @@ def test_nothing_matching_is_an_honest_ask_not_a_retelling(session):
 
     assert result.outcome == "LOCAL_ANSWER"
     assert "Назовите документ" in result.answer_text
+
+
+def test_выбор_из_нескольких_документов_доводится_до_выдачи(session):
+    """Уточняющий вопрос обязан уметь услышать ответ на себя.
+
+    ДЕФЕКТ (скриншот владельца 10.09.2026). На «отдай исходный файл
+    последнего клинического анализа крови» бот перечислил пять
+    документов и спросил «Какой из них?». Владелец назвал нужный — и
+    получил ПЕРЕСКАЗ содержимого: следующая реплика не содержит слов
+    «отдай файл», `detect_document_request` её не узнаёт, и она уходит
+    обычным путём вопроса к памяти.
+
+    То есть бот задавал вопрос, ответ на который заведомо не мог
+    обработать. Тупик по построению, а не редкий сбой.
+    """
+    bind_knowledge_user(session, None)
+    ingest_text(session, domain="health", text="Гемоглобин 148 г/л",
+                original_filename="анализ-крови-2023.pdf")
+    ingest_text(session, domain="health", text="Гемоглобин 151 г/л",
+                original_filename="анализ-крови-2024.pdf")
+    session.flush()
+
+    asked = probe(session, query="отдай исходный файл анализа крови")
+    assert "Какой из них?" in (asked.answer_text or "")
+    assert asked.sources, (
+        "перечисленные документы обязаны дойти до следующего хода: плагин "
+        "строит context.source_ids именно из sources прошлого ответа")
+
+    context = DialogueContext(
+        question="отдай исходный файл анализа крови",
+        source_ids=tuple(s["source_id"] for s in asked.sources),
+        filenames=tuple(s["original_filename"] for s in asked.sources),
+        memory=True)
+    chosen = probe(session, query="анализ-крови-2024.pdf", context=context)
+
+    assert "анализ-крови-2024.pdf" in (chosen.answer_text or "")
+    assert "ключом доступа" in (chosen.answer_text or ""), (
+        "выбранный документ выдаётся так же, как единственный (§14.15)")
+    assert "анализ-крови-2023.pdf" not in (chosen.answer_text or "")
+
+
+def test_выбор_узнаётся_и_по_части_названия(session):
+    """Владелец называет документ словами, а не именем файла.
+
+    В его диалоге это было «Исследование гликированного гемоглобина —
+    последний», а файл называется «148990953_Исследования гликированного
+    гемоглобина.pdf». Требовать точного имени значило бы починить только
+    тот случай, которого не бывает.
+    """
+    bind_knowledge_user(session, None)
+    ingest_text(session, domain="health", text="HbA1c 5.4 %",
+                original_filename="148990953_Исследования гликированного гемоглобина.pdf")
+    ingest_text(session, domain="health", text="Гемоглобин 148 г/л",
+                original_filename="гемоглобин-крови-2023.pdf")
+    session.flush()
+
+    asked = probe(session, query="отдай исходный файл гемоглобин")
+    assert "Какой из них?" in (asked.answer_text or "")
+    context = DialogueContext(
+        question="отдай исходный файл гемоглобин",
+        source_ids=tuple(s["source_id"] for s in asked.sources),
+        filenames=tuple(s["original_filename"] for s in asked.sources),
+        memory=True)
+
+    chosen = probe(session, query="Исследование гликированного гемоглобина - последний",
+                   context=context)
+
+    assert "гликированного гемоглобина" in (chosen.answer_text or "")
+    assert "ключом доступа" in (chosen.answer_text or "")
+
+
+def test_новый_вопрос_после_уточнения_не_считается_выбором(session):
+    """Не всякая реплика после «Какой из них?» — выбор документа.
+
+    Если следующий вопрос не называет ни одного из перечисленных, он
+    обязан остаться вопросом к памяти. Иначе починка тупика превратилась
+    бы в захват разговора.
+    """
+    bind_knowledge_user(session, None)
+    ingest_text(session, domain="health", text="Гемоглобин 148 г/л",
+                original_filename="анализ-крови-2023.pdf")
+    ingest_text(session, domain="health", text="Гемоглобин 151 г/л",
+                original_filename="анализ-крови-2024.pdf")
+    session.flush()
+
+    asked = probe(session, query="отдай исходный файл анализа крови")
+    context = DialogueContext(
+        question="отдай исходный файл анализа крови",
+        source_ids=tuple(s["source_id"] for s in asked.sources),
+        filenames=tuple(s["original_filename"] for s in asked.sources),
+        memory=True)
+
+    other = probe(session, query="а какой у меня был гемоглобин", context=context)
+
+    assert "ключом доступа" not in (other.answer_text or "")

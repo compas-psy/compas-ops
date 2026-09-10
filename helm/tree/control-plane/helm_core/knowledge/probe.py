@@ -61,7 +61,7 @@ from .recall import (
 from .rephrase import rephrase_or_none
 from .synthesis import Synthesis, synthesize_or_none
 from .temporal import fact_date
-from .documents import detect_document_request, document_reply
+from .documents import choose_document, detect_document_request, document_reply
 from ..config import get_settings
 from .tenancy import bind_knowledge_user
 from ..models import (
@@ -701,7 +701,30 @@ def probe(session: Session, *, query: str, domain: str | None = None,
     # предмет — файл. Документ, не названный прямо, берётся из прошлого
     # хода разговора — ровно так владелец и спрашивал, следом за ответом.
     document_subject = detect_document_request(query)
+    document_answer = None
     if document_subject is not None:
+        document_answer = document_reply(
+            session, subject=document_subject,
+            knowledge_user_id=knowledge_user_id,
+            panel_origin=get_settings().panel_origin,
+            fallback_source_ids=tuple(context.source_ids) if context else ())
+    elif (context is not None and context.source_ids
+          and detect_document_request(context.question or "") is not None):
+        # ВЫБОР ИЗ ПЕРЕЧИСЛЕННОГО. Прошлый ход был просьбой отдать файл;
+        # если подошло несколько, бот спросил «Какой из них?». Эта реплика
+        # — ответ на тот вопрос, и слов «отдай файл» в ней нет: люди так
+        # не отвечают. Без этой ветки бот задавал вопрос, услышать ответ
+        # на который не мог, и вместо файла присылал пересказ
+        # (скриншот владельца 10.09.2026).
+        #
+        # `None` — реплика не называет ни одного из перечисленных, значит
+        # это новый вопрос, и он идёт дальше обычным путём.
+        document_answer = choose_document(
+            session, text=query, source_ids=tuple(context.source_ids),
+            knowledge_user_id=knowledge_user_id,
+            panel_origin=get_settings().panel_origin)
+
+    if document_answer is not None:
         run_id = uuid.uuid4()
         session.add(KnowledgeAnswerRun(
             id=run_id, knowledge_user_id=knowledge_user_id,
@@ -710,11 +733,12 @@ def probe(session: Session, *, query: str, domain: str | None = None,
         ))
         return ProbeResult(
             outcome="LOCAL_ANSWER", mode=KnowledgeAnswerMode.Z2,
-            answer_text=document_reply(
-                session, subject=document_subject,
-                knowledge_user_id=knowledge_user_id,
-                panel_origin=get_settings().panel_origin,
-                fallback_source_ids=tuple(context.source_ids) if context else ()),
+            answer_text=document_answer.text,
+            # Названные документы обязаны дожить до следующего хода:
+            # плагин строит из `sources` контекст следующего вопроса.
+            sources=[{"kind": "document", "source_id": candidate.source_id,
+                      "original_filename": candidate.original_filename}
+                     for candidate in document_answer.candidates],
             answer_run_id=str(run_id))
 
     # Уточнение — не ошибка и не пустой ответ, а третий исход. «Что там

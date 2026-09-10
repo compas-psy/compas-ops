@@ -310,10 +310,90 @@ def detect_document_request(text: str) -> str | None:
     return _SUBJECT_CUT_RE.split(tail, maxsplit=1)[0].strip(" \t.!?—–-")
 
 
+@dataclass(frozen=True)
+class DocumentAnswer:
+    """Ответ о документе и то, о каких документах шла речь.
+
+    Второе поле — не украшение. Вызывающий кладёт его в `sources`, плагин
+    из `sources` строит контекст следующего хода, и только поэтому
+    уточняющий вопрос «Какой из них?» получает возможность услышать
+    ответ на себя. Без этого поля список кандидатов умирает вместе с
+    сообщением, а разговор упирается в тупик — ровно то, что владелец и
+    получил 10.09.2026.
+    """
+
+    text: str
+    candidates: tuple[SourceCandidate, ...] = ()
+
+
+def choose_document(session: Session, *, text: str, source_ids: tuple[str, ...],
+                    knowledge_user_id: uuid.UUID | None,
+                    panel_origin: str) -> DocumentAnswer | None:
+    """Выбор одного из УЖЕ ПЕРЕЧИСЛЕННЫХ документов.
+
+    Зовётся, когда прошлый ход был просьбой отдать файл и закончился
+    вопросом «Какой из них?». Ищет только среди названных тогда
+    кандидатов — не по всему корпусу: разговор идёт о них, и расширять
+    поиск значило бы отвечать не на то, что спросили.
+
+    `None` — реплика не называет ни одного из них. Тогда это новый
+    вопрос, а не выбор, и он обязан уйти обычным путём: починка тупика
+    не должна превращаться в захват разговора.
+    """
+    if not source_ids:
+        return None
+    tenant = bind_knowledge_user(session, knowledge_user_id)
+    listed = [
+        _as_candidate(source) for source in session.scalars(
+            select(KnowledgeSource).where(
+                KnowledgeSource.knowledge_user_id == tenant,
+                KnowledgeSource.id.in_([uuid.UUID(sid) for sid in source_ids]))
+        ).all()]
+
+    # По словам, а не по целой фразе, и по той же причине, что в
+    # `find_sources`: владелец называет документ словами («Исследование
+    # гликированного гемоглобина — последний»), а файл называется
+    # «148990953_Исследования гликированного гемоглобина.pdf».
+    words = [word[:5].casefold() for word in re.findall(r"\w{4,}", text, re.UNICODE)]
+    if not words:
+        return None
+
+    # ПО ЧИСЛУ СОВПАВШИХ СЛОВ, А НЕ ПО ЛЮБОМУ. «Анализ крови 2024» и
+    # «анализ крови 2023» отличаются одним словом из трёх: правило
+    # «совпало хоть что-нибудь» оставило бы обоих и снова спросило бы
+    # «какой из них?» — тот же тупик, только вежливее. Побеждает
+    # названный точнее; равенство — честное повторное уточнение.
+    scored = [(sum(word in (candidate.original_filename or "").casefold()
+                   for word in words), candidate) for candidate in listed]
+    best = max((score for score, _ in scored), default=0)
+    if best == 0:
+        return None
+    named = [candidate for score, candidate in scored if score == best]
+    if len(named) > 1:
+        return _clarification(named)
+    return _delivery(named[0], panel_origin=panel_origin)
+
+
+def _clarification(candidates: list[SourceCandidate]) -> DocumentAnswer:
+    listed = "; ".join(
+        candidate.original_filename or "без имени" for candidate in candidates[:5])
+    return DocumentAnswer(f"Подходит несколько документов: {listed}. Какой из них?",
+                          tuple(candidates[:5]))
+
+
+def _delivery(only: SourceCandidate, *, panel_origin: str) -> DocumentAnswer:
+    name = only.original_filename or "без имени"
+    return DocumentAnswer(
+        f"Оригинал: {name}\n"
+        f"{panel_origin}/knowledge/sources/{only.source_id}\n"
+        "Исходный файл выдаётся только с ключом доступа — он спросится на странице.",
+        (only,))
+
+
 def document_reply(session: Session, *, subject: str,
                    knowledge_user_id: uuid.UUID | None,
                    panel_origin: str,
-                   fallback_source_ids: tuple[str, ...] = ()) -> str:
+                   fallback_source_ids: tuple[str, ...] = ()) -> DocumentAnswer:
     """Ответ на просьбу отдать файл: имя документа и как его получить.
 
     ССЫЛКА, А НЕ БАЙТЫ, И ЭТО НЕ ПОЛУМЕРА. §14.15 требует passkey на
@@ -341,15 +421,9 @@ def document_reply(session: Session, *, subject: str,
             ).all()]
 
     if not candidates:
-        return ("Не нашёл, какой файл отдать. Назовите документ — по имени файла "
-                "или по тому, что в нём написано.")
+        return DocumentAnswer(
+            "Не нашёл, какой файл отдать. Назовите документ — по имени файла "
+            "или по тому, что в нём написано.")
     if len(candidates) > 1:
-        listed = "; ".join(
-            candidate.original_filename or "без имени" for candidate in candidates[:5])
-        return f"Подходит несколько документов: {listed}. Какой из них?"
-
-    only = candidates[0]
-    name = only.original_filename or "без имени"
-    return (f"Оригинал: {name}\n"
-            f"{panel_origin}/knowledge/sources/{only.source_id}\n"
-            "Исходный файл выдаётся только с ключом доступа — он спросится на странице.")
+        return _clarification(candidates)
+    return _delivery(candidates[0], panel_origin=panel_origin)
