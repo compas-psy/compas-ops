@@ -92,43 +92,67 @@ def db():
     return session
 
 
-# ── 2.1: стиль владельца и страж достоверности ───────────────────────
+# ── 2.1 и 2.6: страж достоверности и повторяемость ответа ───────────
 # §36: "local textual knowledge answers are rendered in owner style by
 # local Ollama and pass fidelity guard". Что ответ локальный — видно по
 # исходу; что страж РАБОТАЕТ — нет, поэтому он проверяется на паре,
-# собранной здесь же: настоящий ответ бота как фрагмент и подделанное
+# собранной здесь же: настоящий ответ бота как фрагмент и подменённое
 # число вместо настоящего. Страж, который ничего не ловит, — не страж.
-print("############ 2.1. СТИЛЬ И СТРАЖ ДОСТОВЕРНОСТИ ############")
+#
+# Вопрос задаётся ДВАЖДЫ. Прогон 541 показал, зачем: один и тот же
+# вопрос с интервалом в полминуты дал сначала LOCAL_NOT_FOUND (режим
+# N0), потом LOCAL_ANSWER «Гемоглобин 167 г/л». Пара вызовов служит
+# сразу двум проверкам — стражу нужен ответ, а повторяемости нужны два
+# исхода; лишних обращений к живому серверу это не добавляет.
+print("############ 2.1 и 2.6. СТРАЖ ДОСТОВЕРНОСТИ И ПОВТОРЯЕМОСТЬ ############")
 try:
     import re
 
     from helm_core.knowledge.synthesis import ungrounded_numbers
     from helm_core.models import KnowledgeAnswerRun
 
-    answer = ask("какой у меня был гемоглобин")
-    text = answer.get("answer_text") or ""
-    run_id = answer.get("answer_run_id")
+    question = "какой у меня был гемоглобин"
+    first = ask(question)
+    second = ask(question)
+
     session = db()
-    row = session.get(KnowledgeAnswerRun, uuid.UUID(run_id)) if run_id else None
-    print(f"   [внутренний слой] режим ответа: {row.mode if row else '—'}")
+    for label, attempt in (("первый", first), ("второй", second)):
+        run_id = attempt.get("answer_run_id")
+        row = session.get(KnowledgeAnswerRun, uuid.UUID(run_id)) if run_id else None
+        print(f"   [внутренний слой] {label} заход: исход {attempt.get('outcome')}, "
+              f"режим {row.mode if row else '—'}")
 
-    # Число берётся из живого ответа, а не вписывается сюда: показатель
-    # здоровья владельца в тексте скрипта — это он же в репозитории.
-    found = re.findall(r"\d+", text)
-    value = found[0] if found else ""
-    honest = ungrounded_numbers(f"Показатель: {value}", [text])
-    forged = ungrounded_numbers(f"Показатель: {value}0000", [text])
-    print(f"   [прямой вызов ungrounded_numbers] на пересказе с тем же числом: "
-          f"{len(honest)} претензий; на подменённом числе: {len(forged)}")
+    record("2.6", "одинаковый вопрос даёт одинаковый исход",
+           first.get("outcome") == second.get("outcome"),
+           f"оба захода {first.get('outcome')}"
+           if first.get("outcome") == second.get("outcome")
+           else f"исходы разошлись: {first.get('outcome')} и {second.get('outcome')} "
+                f"на одном вопросе и одном корпусе")
 
-    passed = (answer.get("outcome") == "LOCAL_ANSWER" and bool(value)
-              and not honest and bool(forged))
-    record("2.1", "ответ локальный, страж достоверности ловит выдумку", passed,
-           "пересказ с настоящим числом страж пропускает, подменённое ловит"
-           if passed else "страж не отличил подменённое число от настоящего")
+    answered = next((a for a in (first, second)
+                     if a.get("outcome") == "LOCAL_ANSWER"), None)
+    if answered is None:
+        record("2.1", "страж достоверности ловит подменённое число", None,
+               "бот не ответил ни разу — стражу нечего проверять на живом ответе")
+    else:
+        # Число берётся из живого ответа, а не вписывается сюда:
+        # показатель здоровья в тексте скрипта — это он же в репозитории.
+        answer_text = answered.get("answer_text") or ""
+        found = re.findall(r"\d+", answer_text)
+        value = found[0] if found else ""
+        honest = ungrounded_numbers(f"Показатель: {value}", [answer_text])
+        forged = ungrounded_numbers(f"Показатель: {value}0000", [answer_text])
+        print(f"   [прямой вызов ungrounded_numbers] на пересказе с тем же числом: "
+              f"{len(honest)} претензий; на подменённом: {len(forged)}")
+        record("2.1", "страж достоверности ловит подменённое число",
+               bool(value) and not honest and bool(forged),
+               "пересказ с настоящим числом проходит, подменённое ловится"
+               if value and not honest and forged
+               else f"числа в ответе: {bool(value)}; претензий к настоящему: "
+                    f"{len(honest)}; к подменённому: {len(forged)}")
     session.rollback()
 except Exception as exc:  # noqa: BLE001
-    record("2.1", "ответ локальный, страж достоверности ловит выдумку", None,
+    record("2.1", "страж достоверности ловит подменённое число", None,
            f"сбой проверки: {exc!r}")
 
 # ── 2.2: оплата не открывается мимо режима чата ──────────────────────
